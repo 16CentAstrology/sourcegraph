@@ -5,7 +5,7 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/cmd/worker/job"
 	workerdb "github.com/sourcegraph/sourcegraph/cmd/worker/shared/init/db"
-	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/basestore"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
@@ -27,30 +27,38 @@ func (j *recordEncrypterJob) Config() []env.Config {
 	}
 }
 
-func (j *recordEncrypterJob) Routines(startupCtx context.Context, observationCtx *observation.Context) ([]goroutine.BackgroundRoutine, error) {
+func (j *recordEncrypterJob) Routines(_ context.Context, observationCtx *observation.Context) ([]goroutine.BackgroundRoutine, error) {
 	metrics := newMetrics(observationCtx)
 
 	db, err := workerdb.InitDB(observationCtx)
 	if err != nil {
 		return nil, err
 	}
-	store := database.NewRecordEncrypter(db)
+	store := newRecordEncrypter(basestore.NewWithHandle(db.Handle()))
 
 	return []goroutine.BackgroundRoutine{
-		goroutine.NewPeriodicGoroutine(context.Background(), "encryption.record-encrypter", "encrypts/decrypts existing data when a key is provided/removed",
-			ConfigInst.EncryptionInterval, &recordEncrypter{
+		goroutine.NewPeriodicGoroutine(
+			context.Background(),
+			&recordEncrypterRoutine{
 				store:   store,
 				decrypt: ConfigInst.Decrypt,
 				metrics: metrics,
 				logger:  observationCtx.Logger,
 			},
+			goroutine.WithName("encryption.record-encrypter"),
+			goroutine.WithDescription("encrypts/decrypts existing data when a key is provided/removed"),
+			goroutine.WithInterval(ConfigInst.EncryptionInterval),
 		),
-		goroutine.NewPeriodicGoroutine(context.Background(), "encryption.operation-metrics", "tracks number of encrypted vs unencrypted records",
-			ConfigInst.MetricsInterval, &recordCounter{
+		goroutine.NewPeriodicGoroutine(
+			context.Background(),
+			&recordCounter{
 				store:   store,
 				metrics: metrics,
 				logger:  observationCtx.Logger,
 			},
+			goroutine.WithName("encryption.operation-metrics"),
+			goroutine.WithDescription("tracks number of encrypted vs unencrypted records"),
+			goroutine.WithInterval(ConfigInst.MetricsInterval),
 		),
 	}, nil
 }

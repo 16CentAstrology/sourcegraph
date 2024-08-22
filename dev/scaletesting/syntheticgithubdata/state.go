@@ -6,7 +6,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/google/go-github/v41/github"
+	"github.com/google/go-github/v55/github"
 )
 
 type state struct {
@@ -72,23 +72,11 @@ func newState(path string) (*state, error) {
 	}, nil
 }
 
-type failable interface {
-	setFailedAndSave(e error) error
-}
-
 type user struct {
 	Login   string
 	Email   string
 	Failed  string
 	Created bool
-}
-
-func (u *user) setFailedAndSave(e error) error {
-	u.Failed = e.Error()
-	if err := store.saveUser(u); err != nil {
-		return err
-	}
-	return nil
 }
 
 type team struct {
@@ -112,14 +100,6 @@ type org struct {
 	Admin   string
 	Failed  string
 	Created bool
-}
-
-func (o *org) setFailedAndSave(e error) error {
-	o.Failed = e.Error()
-	if err := store.saveOrg(o); err != nil {
-		return err
-	}
-	return nil
 }
 
 type repo struct {
@@ -150,27 +130,6 @@ func (s *state) loadUsers() ([]*user, error) {
 		users = append(users, &u)
 	}
 	return users, nil
-}
-
-func (s *state) getRandomUsers(limit int) ([]string, error) {
-	s.Lock()
-	defer s.Unlock()
-	rows, err := s.db.Query(fmt.Sprintf("SELECT login FROM users ORDER BY RANDOM() LIMIT %d", limit))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var userLogins []string
-	for rows.Next() {
-		var uLogin string
-		err = rows.Scan(&uLogin)
-		if err != nil {
-			return nil, err
-		}
-		userLogins = append(userLogins, uLogin)
-	}
-	return userLogins, nil
 }
 
 func (s *state) loadTeams() ([]*team, error) {
@@ -238,7 +197,7 @@ func (s *state) loadRepos() ([]*repo, error) {
 
 func generateNames(prefix string, count int) []string {
 	names := make([]string, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		names[i] = fmt.Sprintf("%s-%09d", prefix, i)
 	}
 	return names
@@ -354,7 +313,6 @@ func (s *state) saveOrg(o *org) error {
 		o.Failed,
 		o.Created,
 		o.Login)
-
 	if err != nil {
 		return err
 	}
@@ -381,7 +339,6 @@ func (s *state) saveRepo(r *repo) error {
 		r.AssignedOrgs,
 		r.Complete,
 		r.Name)
-
 	if err != nil {
 		return err
 	}
@@ -478,64 +435,4 @@ func (s *state) deleteTeam(t *team) error {
 		return err
 	}
 	return nil
-}
-
-func (s *state) countCompletedUsers() (int, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	row := s.db.QueryRow(`SELECT COUNT(login) FROM users WHERE created = TRUE AND failed == ""`)
-	var count int
-	err := row.Scan(&count)
-	return count, err
-}
-
-func (s *state) countAllUsers() (int, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	row := s.db.QueryRow(`SELECT COUNT(login) FROM users`)
-	var count int
-	err := row.Scan(&count)
-	return count, err
-}
-
-func (s *state) countCompletedTeams() (int, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	row := s.db.QueryRow(`SELECT COUNT(name) FROM teams WHERE created = TRUE AND totalMembers >= 50 AND failed == ""`)
-	var count int
-	err := row.Scan(&count)
-	return count, err
-}
-
-func (s *state) countAllTeams() (int, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	row := s.db.QueryRow(`SELECT COUNT(name) FROM teams`)
-	var count int
-	err := row.Scan(&count)
-	return count, err
-}
-
-func (s *state) countCompletedOrgs() (int, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	row := s.db.QueryRow(`SELECT COUNT(login) FROM orgs WHERE created = TRUE AND failed == ""`)
-	var count int
-	err := row.Scan(&count)
-	return count, err
-}
-
-func (s *state) countAllOrgs() (int, error) {
-	s.Lock()
-	defer s.Unlock()
-
-	row := s.db.QueryRow(`SELECT COUNT(login) FROM orgs`)
-	var count int
-	err := row.Scan(&count)
-	return count, err
 }

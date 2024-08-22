@@ -1,12 +1,11 @@
 import {
-    LineChartSearchInsightDataSeriesInput,
-    LineChartSearchInsightInput,
-    PieChartSearchInsightInput,
+    type LineChartSearchInsightDataSeriesInput,
+    type LineChartSearchInsightInput,
+    type PieChartSearchInsightInput,
     TimeIntervalStepUnit,
 } from '../../../../../../../graphql-operations'
-import { parseSeriesDisplayOptions } from '../../../../../components/insights-view-grid/components/backend-insight/components/drill-down-filters-panel/drill-down-filters/utils'
 import { InsightType } from '../../../../types'
-import {
+import type {
     CreationInsightInput,
     MinimalCaptureGroupInsightData,
     MinimalComputeInsightData,
@@ -25,14 +24,18 @@ export function getInsightCreateGqlInput(
     dashboardId: string | null
 ): CreateInsightInput {
     switch (insight.type) {
-        case InsightType.SearchBased:
+        case InsightType.SearchBased: {
             return getSearchInsightCreateInput(insight, dashboardId)
-        case InsightType.CaptureGroup:
+        }
+        case InsightType.CaptureGroup: {
             return getCaptureGroupInsightCreateInput(insight, dashboardId)
-        case InsightType.Compute:
+        }
+        case InsightType.Compute: {
             return getComputeInsightCreateInput(insight, dashboardId)
-        case InsightType.LangStats:
+        }
+        case InsightType.LangStats: {
             return getLangStatsInsightCreateInput(insight, dashboardId)
+        }
     }
 }
 
@@ -40,26 +43,29 @@ export function getCaptureGroupInsightCreateInput(
     insight: MinimalCaptureGroupInsightData,
     dashboardId: string | null
 ): LineChartSearchInsightInput {
-    const [unit, value] = getStepInterval(insight.step)
+    const { step, repoQuery, filters, title } = insight
+    const [unit, value] = getStepInterval(step)
 
     const input: LineChartSearchInsightInput = {
+        repositoryScope: {
+            repositories: insight.repositories,
+            repositoryCriteria: repoQuery || null,
+        },
         dataSeries: [
             {
                 query: insight.query,
                 options: {},
-                repositoryScope: { repositories: insight.repositories },
                 timeScope: { stepInterval: { unit, value } },
                 generatedFromCaptureGroups: true,
             },
         ],
-        options: { title: insight.title },
+        options: { title },
         viewControls: {
-            seriesDisplayOptions:
-                insight.seriesDisplayOptions || parseSeriesDisplayOptions(insight.appliedSeriesDisplayOptions),
+            seriesDisplayOptions: filters.seriesDisplayOptions,
             filters: {
-                searchContexts: [insight.filters.context],
-                excludeRepoRegex: insight.filters.excludeRepoRegexp,
-                includeRepoRegex: insight.filters.includeRepoRegexp,
+                searchContexts: [filters.context],
+                excludeRepoRegex: filters.excludeRepoRegexp,
+                includeRepoRegex: filters.includeRepoRegexp,
             },
         },
     }
@@ -75,27 +81,29 @@ export function getSearchInsightCreateInput(
     insight: MinimalSearchBasedInsightData,
     dashboardId: string | null
 ): LineChartSearchInsightInput {
-    const repositories = insight.repositories
+    const { step, repositories, repoQuery, filters, title } = insight
+    const [unit, value] = getStepInterval(step)
 
-    const [unit, value] = getStepInterval(insight.step)
     const input: LineChartSearchInsightInput = {
+        repositoryScope: {
+            repositories,
+            repositoryCriteria: repoQuery || null,
+        },
         dataSeries: insight.series.map<LineChartSearchInsightDataSeriesInput>(series => ({
             query: series.query,
             options: {
                 label: series.name,
                 lineColor: series.stroke,
             },
-            repositoryScope: { repositories },
             timeScope: { stepInterval: { unit, value } },
         })),
-        options: { title: insight.title },
+        options: { title },
         viewControls: {
-            seriesDisplayOptions:
-                insight.seriesDisplayOptions || parseSeriesDisplayOptions(insight.appliedSeriesDisplayOptions),
+            seriesDisplayOptions: filters.seriesDisplayOptions,
             filters: {
-                searchContexts: [insight.filters.context],
-                excludeRepoRegex: insight.filters.excludeRepoRegexp,
-                includeRepoRegex: insight.filters.includeRepoRegexp,
+                searchContexts: [filters.context],
+                excludeRepoRegex: filters.excludeRepoRegexp,
+                includeRepoRegex: filters.includeRepoRegexp,
             },
         },
     }
@@ -134,26 +142,26 @@ export function getComputeInsightCreateInput(
     insight: MinimalComputeInsightData,
     dashboardId: string | null
 ): LineChartSearchInsightInput {
+    const { repositories, filters, groupBy, title, series } = insight
     const input: LineChartSearchInsightInput = {
-        dataSeries: insight.series.map<LineChartSearchInsightDataSeriesInput>(series => ({
+        repositoryScope: { repositories },
+        dataSeries: series.map<LineChartSearchInsightDataSeriesInput>(series => ({
             query: series.query,
             options: {
                 label: series.name,
                 lineColor: series.stroke,
             },
-            repositoryScope: { repositories: insight.repositories },
+            groupBy,
             timeScope: { stepInterval: { unit: TimeIntervalStepUnit.WEEK, value: 2 } },
-            groupBy: insight.groupBy,
             generatedFromCaptureGroups: true,
         })),
-        options: { title: insight.title },
+        options: { title },
         viewControls: {
-            seriesDisplayOptions:
-                insight.seriesDisplayOptions || parseSeriesDisplayOptions(insight.appliedSeriesDisplayOptions),
+            seriesDisplayOptions: filters.seriesDisplayOptions,
             filters: {
-                searchContexts: [insight.filters.context],
-                excludeRepoRegex: insight.filters.excludeRepoRegexp,
-                includeRepoRegex: insight.filters.includeRepoRegexp,
+                searchContexts: [filters.context],
+                excludeRepoRegex: filters.excludeRepoRegexp,
+                includeRepoRegex: filters.includeRepoRegexp,
             },
         },
     }

@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	mockrequire "github.com/derision-test/go-mockgen/v2/testutil/require"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/backend"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
-	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
 	"github.com/sourcegraph/sourcegraph/internal/txemail"
-	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 func TestHandleSetPasswordEmail(t *testing.T) {
@@ -22,10 +22,12 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 
 	defer func() { backend.MockMakePasswordResetURL = nil }()
 
-	backend.MockMakePasswordResetURL = func(context.Context, int32) (*url.URL, error) {
+	backend.MockMakePasswordResetURL = func(context.Context, int32, string) (*url.URL, error) {
 		query := url.Values{}
 		query.Set("userID", "1")
 		query.Set("code", "foo")
+		query.Set("email", "a@example.com")
+
 		return &url.URL{Path: "/password-reset", RawQuery: query.Encode()}, nil
 	}
 
@@ -44,7 +46,7 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 			id:            1,
 			emailVerified: true,
 			ctx:           ctx,
-			wantURL:       "http://example.com/password-reset?code=foo&userID=1",
+			wantURL:       "http://example.com/password-reset?code=foo&email=a%40example.com&userID=1",
 			wantErr:       false,
 			email:         "a@example.com",
 		},
@@ -53,7 +55,7 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 			id:            1,
 			emailVerified: false,
 			ctx:           ctx,
-			wantURL:       "http://example.com/password-reset?code=foo&userID=1",
+			wantURL:       "http://example.com/password-reset?code=foo&email=a%40example.com&userID=1",
 			wantEmailURL:  "http://example.com/password-reset?code=foo&userID=1&email=a%40example.com&emailVerifyCode=",
 			wantErr:       false,
 			email:         "a@example.com",
@@ -62,15 +64,9 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 
 	for _, tst := range tests {
 		t.Run(tst.name, func(t *testing.T) {
-			userEmails := database.NewMockUserEmailsStore()
-			userEmails.GetPrimaryEmailFunc.SetDefaultReturn("a@example.com", tst.emailVerified, nil)
-
-			users := database.NewMockUserStore()
-			users.GetByIDFunc.SetDefaultReturn(&types.User{ID: 1, Username: "test"}, nil)
-
-			db := database.NewMockDB()
+			db := dbmocks.NewMockDB()
+			userEmails := dbmocks.NewMockUserEmailsStore()
 			db.UserEmailsFunc.SetDefaultReturn(userEmails)
-			db.UsersFunc.SetDefaultReturn(users)
 
 			var gotEmail txemail.Message
 			txemail.MockSend = func(ctx context.Context, message txemail.Message) error {
@@ -79,7 +75,7 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 			}
 			t.Cleanup(func() { txemail.MockSend = nil })
 
-			got, err := HandleSetPasswordEmail(tst.ctx, db, tst.id)
+			got, err := HandleSetPasswordEmail(tst.ctx, db, tst.id, "test", "a@example.com", tst.emailVerified)
 			if diff := cmp.Diff(tst.wantURL, got); diff != "" {
 				t.Errorf("Message mismatch (-want +got):\n%s", diff)
 			}
@@ -91,10 +87,14 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 				}
 			}
 
+			if !tst.emailVerified {
+				mockrequire.Called(t, userEmails.SetLastVerificationFunc)
+			}
+
 			want := &txemail.Message{
 				To:       []string{tst.email},
 				Template: defaultSetPasswordEmailTemplate,
-				Data: passwordEmailTemplateData{
+				Data: SetPasswordEmailTemplateData{
 					Username: "test",
 					URL: func() string {
 						if tst.wantEmailURL != "" {
@@ -108,7 +108,7 @@ func TestHandleSetPasswordEmail(t *testing.T) {
 
 			assert.Equal(t, []string{tst.email}, gotEmail.To)
 			assert.Equal(t, defaultSetPasswordEmailTemplate, gotEmail.Template)
-			gotEmailData := want.Data.(passwordEmailTemplateData)
+			gotEmailData := want.Data.(SetPasswordEmailTemplateData)
 			assert.Equal(t, "test", gotEmailData.Username)
 			assert.Equal(t, "example.com", gotEmailData.Host)
 			if tst.wantEmailURL != "" {

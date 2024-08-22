@@ -1,31 +1,24 @@
 import { action } from '@storybook/addon-actions'
-import { DecoratorFn, Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 import { subDays } from 'date-fns'
-import { EMPTY, NEVER, Observable, of } from 'rxjs'
+import { EMPTY, NEVER, type Observable, of } from 'rxjs'
 
 import { subtypeOf } from '@sourcegraph/common'
-import { ActionItemComponentProps } from '@sourcegraph/shared/src/actions/ActionItem'
-import { SearchContextFields } from '@sourcegraph/shared/src/graphql-operations'
+import type { SearchContextFields } from '@sourcegraph/shared/src/graphql-operations'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 import {
     mockFetchSearchContexts,
     mockGetUserSearchContextNamespaces,
 } from '@sourcegraph/shared/src/testing/searchContexts/testHelpers'
 import { NOOP_SETTINGS_CASCADE } from '@sourcegraph/shared/src/testing/searchTestHelpers'
 
-import { AuthenticatedUser } from '../auth'
+import type { AuthenticatedUser } from '../auth'
 import { WebStory } from '../components/WebStory'
 import { SearchPatternType } from '../graphql-operations'
-import { useExperimentalFeatures } from '../stores'
-import { ThemePreference } from '../theme'
 
 import { cncf } from './cncf'
-import { CommunitySearchContextPage, CommunitySearchContextPageProps } from './CommunitySearchContextPage'
+import { CommunitySearchContextPage, type CommunitySearchContextPageProps } from './CommunitySearchContextPage'
 import { temporal } from './Temporal'
-
-const decorator: DecoratorFn = Story => {
-    useExperimentalFeatures.setState({ showSearchContext: true })
-    return <Story />
-}
 
 const config: Meta = {
     title: 'web/CommunitySearchContextPage',
@@ -34,21 +27,16 @@ const config: Meta = {
             type: 'figma',
             url: 'https://www.figma.com/file/Xc4M24VTQq8itU0Lgb1Wwm/RFC-159-Visual-Design?node-id=66%3A611',
         },
-        chromatic: { viewports: [769, 1200] },
     },
-    decorators: [decorator],
 }
 
 export default config
-
-const EXTENSIONS_CONTROLLER: ActionItemComponentProps['extensionsController'] = {
-    executeCommand: () => new Promise(resolve => setTimeout(resolve, 750)),
-}
 
 const PLATFORM_CONTEXT: CommunitySearchContextPageProps['platformContext'] = {
     settings: NEVER,
     sourcegraphURL: '',
     requestGraphQL: () => EMPTY,
+    telemetryRecorder: noOpTelemetryRecorder,
 }
 
 const authUser: AuthenticatedUser = {
@@ -63,17 +51,17 @@ const authUser: AuthenticatedUser = {
     siteAdmin: true,
     organizations: {
         nodes: [
-            { id: '0', settingsURL: '#', displayName: 'Acme Corp' },
-            { id: '1', settingsURL: '#', displayName: 'Beta Inc' },
+            { id: '0', settingsURL: '#' },
+            { id: '1', settingsURL: '#' },
         ] as AuthenticatedUser['organizations']['nodes'],
     },
-    tags: [],
     viewerCanAdminister: true,
+    hasVerifiedEmail: true,
     databaseID: 0,
     tosAccepted: true,
-    searchable: true,
     emails: [{ email: 'alice@sourcegraph.com', isPrimary: true, verified: true }],
     latestSettings: null,
+    permissions: { nodes: [] },
 }
 
 const repositories: SearchContextFields['repositories'] = [
@@ -121,7 +109,6 @@ const commonProps = () =>
         patternType: SearchPatternType.standard,
         setPatternType: action('setPatternType'),
         caseSensitive: false,
-        extensionsController: { ...EXTENSIONS_CONTROLLER },
         platformContext: PLATFORM_CONTEXT,
         setCaseSensitivity: action('setCaseSensitivity'),
         activation: undefined,
@@ -133,33 +120,19 @@ const commonProps = () =>
         batchChangesEnabled: false,
         authenticatedUser: authUser,
         communitySearchContextMetadata: temporal,
-        globbing: false,
         fetchSearchContexts: mockFetchSearchContexts,
         getUserSearchContextNamespaces: mockGetUserSearchContextNamespaces,
         fetchSearchContextBySpec: fetchCommunitySearchContext,
     })
 
-export const Temporal: Story = () => (
-    <WebStory>
-        {webProps => (
-            <CommunitySearchContextPage
-                {...webProps}
-                {...commonProps()}
-                themePreference={webProps.isLightTheme ? ThemePreference.Light : ThemePreference.Dark}
-            />
-        )}
-    </WebStory>
+export const Temporal: StoryFn = () => (
+    <WebStory>{webProps => <CommunitySearchContextPage {...webProps} {...commonProps()} />}</WebStory>
 )
 
-export const CNCFStory: Story = () => (
+export const CNCFStory: StoryFn = () => (
     <WebStory>
         {webProps => (
-            <CommunitySearchContextPage
-                {...webProps}
-                {...commonProps()}
-                communitySearchContextMetadata={cncf}
-                themePreference={webProps.isLightTheme ? ThemePreference.Light : ThemePreference.Dark}
-            />
+            <CommunitySearchContextPage {...webProps} {...commonProps()} communitySearchContextMetadata={cncf} />
         )}
     </WebStory>
 )

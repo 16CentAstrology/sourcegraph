@@ -5,7 +5,7 @@ import type { UIPositionSpec } from '@sourcegraph/shared/src/util/url'
 import { ExternalServiceKind } from '../graphql-operations'
 
 import type { EditorReplacements, EditorSettings } from './editor-settings'
-import { Editor, getEditor, supportedEditors } from './editors'
+import { type Editor, getEditor, supportedEditors } from './editors'
 
 // Just lowercasing these for now, it's a bit of a gamble because it's only a coincidence that ExternalServiceKind
 // and ExternalServiceType only differs in casing. But it works for now.
@@ -62,7 +62,7 @@ export function getEditorSettingsErrorMessage(
     editorSettings: EditorSettings | undefined,
     sourcegraphBaseUrl: string
 ): string | undefined {
-    const learnMoreURL = 'https://docs.sourcegraph.com/integration/open_in_editor'
+    const learnMoreURL = 'https://sourcegraph.com/docs/integration/open_in_editor'
 
     if (!editorSettings) {
         return `Add \`openInEditor\` to your user settings to open files in the editor. [Learn more](${learnMoreURL})`
@@ -81,7 +81,7 @@ export function getEditorSettingsErrorMessage(
         }).`
     }
 
-    if (!editorSettings.editorIds || !editorSettings.editorIds.length) {
+    if (!editorSettings.editorIds?.length) {
         return `Add \`editorIds\` to your user settings to open files. [Learn more](${learnMoreURL})`
     }
     const validEditorCount = editorSettings.editorIds.map(id => getEditor(id)).filter(editor => editor).length
@@ -108,7 +108,7 @@ export function isProjectPathValid(projectPath: string | undefined): boolean {
     return !!projectPath && (isWindowsPath(projectPath) || path.isAbsolute(projectPath))
 }
 
-function getProjectPath(editorSettings: EditorSettings): string | undefined {
+export function getProjectPath(editorSettings: EditorSettings): string | undefined {
     if (navigator.userAgent.includes('Win') && editorSettings['projectPaths.windows']) {
         return editorSettings['projectPaths.windows']
     }
@@ -125,7 +125,7 @@ function isWindowsPath(path: string): boolean {
     return /^[A-Za-z]:\\/.test(path)
 }
 
-function getUrlPattern(editor: Editor, editorSettings: EditorSettings): string {
+export function getUrlPattern(editor: Editor, editorSettings: EditorSettings): string {
     if (editor.urlPattern) {
         return editor.urlPattern
     }

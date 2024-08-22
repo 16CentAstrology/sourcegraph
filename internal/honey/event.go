@@ -1,10 +1,15 @@
 package honey
 
 import (
+	"fmt"
+	"os"
+	"slices"
+	"strings"
+
 	"github.com/honeycombio/libhoney-go"
-	"github.com/opentracing/opentracing-go/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Event represents a mockable/noop-able single event in Honeycomb terms, as per
@@ -14,11 +19,8 @@ type Event interface {
 	Dataset() string
 	// AddField adds a single key-value pair to this event.
 	AddField(key string, val any)
-	// AddLogFields adds each opentracing-go/log key-value field to this event.
-	AddLogFields(fields []log.Field)
-	// Add adds a complex type to the event. For structs, it adds each exported field.
-	// For maps, it adds each key/value. Add will error on all other types.
-	Add(data any) error
+	// AddAttributes adds each otel/attribute key-value field to this event.
+	AddAttributes([]attribute.KeyValue)
 	// Fields returns all the added fields of the event. The returned map is not safe to
 	// be modified concurrently with calls Add/AddField/AddLogFields.
 	Fields() map[string]any
@@ -58,9 +60,9 @@ func (w eventWrapper) AddField(name string, val any) {
 	w.event.AddField(name, data)
 }
 
-func (w eventWrapper) AddLogFields(fields []log.Field) {
-	for _, field := range fields {
-		w.AddField(field.Key(), field.Value())
+func (w eventWrapper) AddAttributes(attrs []attribute.KeyValue) {
+	for _, attr := range attrs {
+		w.AddField(string(attr.Key), attr.Value.AsInterface())
 	}
 }
 
@@ -77,6 +79,15 @@ func (w eventWrapper) SetSampleRate(rate uint) {
 }
 
 func (w eventWrapper) Send() error {
+	if local {
+		var fields []string
+		for k, v := range w.event.Fields() {
+			fields = append(fields, fmt.Sprintf("  %s: %v", k, v))
+		}
+		slices.Sort(fields)
+		_, _ = fmt.Fprintf(os.Stderr, "EVENT %s\n%s\n", w.event.Dataset, strings.Join(fields, "\n"))
+		return nil
+	}
 	return w.event.Send()
 }
 
@@ -105,7 +116,7 @@ func NewEventWithFields(dataset string, fields map[string]any) Event {
 func newEvent(dataset string) (Event, bool) {
 	if !Enabled() {
 		metricNewEvent.WithLabelValues("false", dataset).Inc()
-		return noopEvent{}, false
+		return NonSendingEvent(), false
 	}
 	metricNewEvent.WithLabelValues("true", dataset).Inc()
 

@@ -26,13 +26,8 @@ func TestSearch(t *testing.T) {
 	esID, err := client.AddExternalService(gqltestutil.AddExternalServiceInput{
 		Kind:        extsvc.KindGitHub,
 		DisplayName: "gqltest-github-search",
-		Config: mustMarshalJSONString(struct {
-			URL                   string   `json:"url"`
-			Token                 string   `json:"token"`
-			Repos                 []string `json:"repos"`
-			RepositoryPathPattern string   `json:"repositoryPathPattern"`
-		}{
-			URL:   "https://ghe.sgdev.org/",
+		Config: mustMarshalJSONString(&schema.GitHubConnection{
+			Url:   "https://ghe.sgdev.org/",
 			Token: *githubToken,
 			Repos: []string{
 				"sgtest/java-langserver",
@@ -103,9 +98,6 @@ type searchClient interface {
 	SearchFiles(query string) (*gqltestutil.SearchFileResults, error)
 	SearchAll(query string) ([]*gqltestutil.AnyResult, error)
 
-	UpdateSiteConfiguration(config *schema.SiteConfiguration, lastID int32) error
-	SiteConfiguration() (*schema.SiteConfiguration, int32, error)
-
 	OverwriteSettings(subjectID, contents string) error
 	AuthenticatedUserID() string
 
@@ -129,23 +121,22 @@ func addKVPs(t *testing.T, client *gqltestutil.Client) {
 		t.Fatal(err)
 	}
 
-	err = client.SetFeatureFlag("repository-metadata", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	testVal := "testval"
-	err = client.AddRepoKVP(repo1.ID, "testkey", &testVal)
+	err = client.AddRepoMetadata(repo1.ID, "testkey", &testVal)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = client.AddRepoKVP(repo2.ID, "testkey", &testVal)
+	err = client.AddRepoMetadata(repo2.ID, "testkey", &testVal)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = client.AddRepoKVP(repo2.ID, "testtag", nil)
+	err = client.AddRepoMetadata(repo2.ID, "testtag", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +206,57 @@ func testSearchClient(t *testing.T, client searchClient) {
 		}
 	})
 
+	t.Run("path match ranges are returned", func(t *testing.T) {
+		results, err := client.SearchFiles("repo:^github.com/sgtest/go-diff$@f935979 type:path file:^\\.travis")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(results.Results) != 1 {
+			t.Fatal("expected 1 result")
+		}
+		pathMatches := results.Results[0].PathMatches
+		if len(pathMatches) != 1 {
+			t.Fatal("expected 1 path match")
+		}
+		pathMatch := pathMatches[0]
+		if pathMatch.Start.Character != 0 || pathMatch.End.Character != 7 {
+			t.Fatal("expected path match to cover range [0, 7)")
+		}
+	})
+
+	t.Run("repo at time", func(t *testing.T) {
+		// Surprisingly, our repo GraphQL resolver for a search result is just
+		// a repo, which does not expose its rev, so GraphQL does not work for this test.
+		doSkip(t, skipGraphQL)
+
+		t.Run("HEAD", func(t *testing.T) {
+			results, err := client.SearchRepositories("repo:^github.com/sgtest/go-diff$ rev:at.time(2018-01-01)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("expected exactly one result, got %#v", results)
+			}
+			if !strings.Contains(results[0].URL, "3f415a1") {
+				t.Fatalf("expected repository to be at commit 3f415a1, got %q", results[0].URL)
+			}
+		})
+
+		t.Run("branch", func(t *testing.T) {
+			results, err := client.SearchRepositories("repo:^github.com/sgtest/go-diff$ rev:at.time(2019-11-09, test-already-exist-pr)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("expected exactly one result, got %#v", results)
+			}
+			if !strings.Contains(results[0].URL, "3637c60") {
+				t.Fatalf("expected repository to be at commit 3637c60 got %q", results[0].URL)
+			}
+		})
+	})
+
 	t.Run("lang: filter", func(t *testing.T) {
 		// On our test repositories, `function` has results for go, ts, python, html
 		results, err := client.SearchFiles("function lang:go")
@@ -223,7 +265,7 @@ func testSearchClient(t *testing.T, client searchClient) {
 		}
 		// Make sure we only got .go files
 		for _, r := range results.Results {
-			if !strings.Contains(r.File.Name, ".go") {
+			if !strings.Contains(strings.ToLower(r.File.Name), ".go") {
 				t.Fatalf("Found file name does not end with .go: %s", r.File.Name)
 			}
 		}
@@ -319,12 +361,8 @@ func testSearchClient(t *testing.T, client searchClient) {
 		require.NoError(t, err)
 
 		wantRepos := []string{"github.com/sgtest/java-langserver", "github.com/sgtest/jsonrpc2"}
-		if missingRepos := results.Exists(wantRepos...); len(missingRepos) != 0 {
-			t.Fatalf("Missing repositories: %v", missingRepos)
-		}
-
-		if len(wantRepos) != len(results) {
-			t.Fatalf("want %d repositories, got %d", len(wantRepos), len(results))
+		if d := cmp.Diff(wantRepos, results.Names()); d != "" {
+			t.Fatalf("unexpected repositories (-want +got):\n%s", d)
 		}
 	})
 
@@ -357,12 +395,8 @@ func testSearchClient(t *testing.T, client searchClient) {
 		require.NoError(t, err)
 
 		wantRepos := []string{"github.com/sgtest/java-langserver"}
-		if missingRepos := results.Exists(wantRepos...); len(missingRepos) != 0 {
-			t.Fatalf("Missing repositories: %v", missingRepos)
-		}
-
-		if len(wantRepos) != len(results) {
-			t.Fatalf("want %d repositories, got %d", len(wantRepos), len(results))
+		if d := cmp.Diff(wantRepos, results.Names()); d != "" {
+			t.Fatalf("unexpected repositories (-want +got):\n%s", d)
 		}
 	})
 
@@ -424,10 +458,6 @@ func testSearchClient(t *testing.T, client searchClient) {
 					"github.com/sgtest/archived",
 					"github.com/sgtest/mux",
 				},
-			},
-			{
-				name:  `Structural search returns repo results if patterntype set but pattern is empty`,
-				query: `repo:^github\.com/sgtest/sourcegraph-typescript$ patterntype:structural`,
 			},
 			{
 				name:       `case sensitive`,
@@ -528,13 +558,26 @@ func testSearchClient(t *testing.T, client searchClient) {
 			// 	skip:          skipStream,
 			// },
 			{
-				name:  "regular expression without indexed search",
+				name:  "regular expression with unindexed search",
 				query: "index:no patterntype:regexp ^func.*$",
 			},
 			{
-				name:  "fork:only",
-				query: "fork:only router",
+				name:  "empty query with unindexed search",
+				query: "index:no file:\\.go",
 			},
+			{
+				name:  "boolean query with unindexed search",
+				query: "index:no func OR NOT default",
+			},
+			{
+				name:  "lang filters with unindexed search",
+				query: "index:no func OR NOT default lang:Go",
+			},
+			// Failing test: https://github.com/sourcegraph/sourcegraph/issues/48109
+			// {
+			//	name:  "fork:only",
+			//	query: "fork:only router",
+			// },
 			{
 				name:  "double-quoted pattern, nonzero result",
 				query: `"func main() {\n" patterntype:regexp type:file`,
@@ -612,16 +655,6 @@ func testSearchClient(t *testing.T, client searchClient) {
 			{
 				name:       "search for a non-existent file",
 				query:      "file:asdfasdf.go",
-				zeroResult: true,
-			},
-			// Symbol search
-			{
-				name:  "search for a known symbol",
-				query: "type:symbol count:100 patterntype:regexp ^newroute",
-			},
-			{
-				name:       "search for a non-existent symbol",
-				query:      "type:symbol asdfasdf",
 				zeroResult: true,
 			},
 			// Commit search
@@ -717,6 +750,8 @@ func testSearchClient(t *testing.T, client searchClient) {
 	})
 
 	t.Run("structural search", func(t *testing.T) {
+		enableStructuralSearch(t)
+
 		tests := []struct {
 			name       string
 			query      string
@@ -740,6 +775,18 @@ func testSearchClient(t *testing.T, client searchClient) {
 			{
 				name:  `Structural search quotes are interpreted literally`,
 				query: `repo:^github\.com/sgtest/sourcegraph-typescript$ file:^README\.md "basic :[_] access :[_]" patterntype:structural`,
+			},
+			{
+				name:  `Structural search returns repo results if patterntype set but pattern is empty`,
+				query: `repo:^github\.com/sgtest/sourcegraph-typescript$ patterntype:structural`,
+			},
+			{
+				name:  `Dedupe union operation`,
+				query: `file:diff.go|print.go|parse.go repo:^github\.com/sgtest/go-diff _, :[[x]] := range :[src.] { :[_] } or if :[s1] == :[s2] patterntype:structural`,
+			},
+			{
+				name:  `Dedupe union operation`,
+				query: `file:diff.go|print.go|parse.go repo:^github\.com/sgtest/go-diff _, :[[x]] := range :[src.] { :[_] } or if :[s1] == :[s2] patterntype:structural`,
 			},
 		}
 		for _, test := range tests {
@@ -922,10 +969,6 @@ func testSearchClient(t *testing.T, client searchClient) {
 				query: `repo:^github\.com/sgtest/go-diff$ file:^diff/print\.go t := or ts Time patterntype:regexp type:file`,
 			},
 			{
-				name:  `Structural search uses literal search parser`,
-				query: `repo:^github\.com/sgtest/go-diff$ file:^diff/print\.go :[[v]] := ts and printFileHeader(:[_]) patterntype:structural`,
-			},
-			{
 				name:  `Union file matches per file and accurate counts`,
 				query: `repo:^github\.com/sgtest/go-diff file:^diff/print\.go func or package`,
 			},
@@ -949,10 +992,6 @@ func testSearchClient(t *testing.T, client searchClient) {
 				name:       `Intersect file matches per file against an empty result set`,
 				query:      `repo:^github\.com/sgtest/go-diff file:^diff/print\.go func and doesnotexist838338`,
 				zeroResult: true,
-			},
-			{
-				name:  `Dedupe union operation`,
-				query: `file:diff.go|print.go|parse.go repo:^github\.com/sgtest/go-diff _, :[[x]] := range :[src.] { :[_] } or if :[s1] == :[s2] patterntype:structural`,
 			},
 		}
 		for _, test := range tests {
@@ -1076,6 +1115,52 @@ func testSearchClient(t *testing.T, client searchClient) {
 		}
 	})
 
+	t.Run("Cody context search", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			query      string
+			zeroResult bool
+		}{
+			{
+				name:       "Cody context, simple query, results",
+				query:      `repo:^github\.com/sgtest/go-diff$ patterntype:codycontext PrintMultiFileDiff unified `,
+				zeroResult: false,
+			},
+			{
+				name:       "Cody context, simple query, no results",
+				query:      `repo:^github\.com/sgtest/go-diff$ patterntype:codycontext DOES_NOT_EXIST ALSO_DOES_NOT_EXIST `,
+				zeroResult: true,
+			},
+			{
+				name:       "Cody context, all stopwords in query",
+				query:      `repo:^github\.com/sgtest/go-diff$ patterntype:codycontext tell me again!`,
+				zeroResult: true,
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				results, err := client.SearchFiles(test.query)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if results.Alert != nil {
+					t.Fatalf("Unexpected alert %v", results.Alert)
+				}
+
+				if test.zeroResult {
+					if len(results.Results) > 0 {
+						t.Fatalf("Want zero result but got %d", len(results.Results))
+					}
+				} else {
+					if len(results.Results) == 0 {
+						t.Fatal("Want non-zero results but got 0")
+					}
+				}
+			})
+		}
+	})
+
 	type counts struct {
 		Repo    int
 		Commit  int
@@ -1114,6 +1199,11 @@ func testSearchClient(t *testing.T, client searchClient) {
 			{
 				name:   `repo contains file`,
 				query:  `repo:contains.file(path:go\.mod)`,
+				counts: counts{Repo: 2},
+			},
+			{
+				name:   `repo contains file using deprecated syntax`,
+				query:  `repo:contains.file(go\.mod)`,
 				counts: counts{Repo: 2},
 			},
 			{
@@ -1221,6 +1311,16 @@ func testSearchClient(t *testing.T, client searchClient) {
 				counts: counts{Commit: 2},
 			},
 			{
+				name:   `repo contains file using deprecated syntax`,
+				query:  `repo:contains(file:go\.mod)`,
+				counts: counts{Repo: 2},
+			},
+			{
+				name:   `repo contains content using deprecated syntax`,
+				query:  `repo:contains(content:nextFileFirstLine)`,
+				counts: counts{Repo: 1},
+			},
+			{
 				name:   `predicate logic does not conflict with unrecognized patterns`,
 				query:  `repo:sg(test)`,
 				counts: counts{Repo: 6},
@@ -1276,9 +1376,29 @@ func testSearchClient(t *testing.T, client searchClient) {
 				counts: counts{Repo: 2},
 			},
 			{
+				name:   `repo has meta`,
+				query:  `repo:has.meta(/[test]{4}key$/:/^testval$/)`,
+				counts: counts{Repo: 2},
+			},
+			{
 				name:   `repo has kvp and not nonexistent kvp`,
 				query:  `repo:has(testkey:testval) -repo:has(noexist:false)`,
 				counts: counts{Repo: 2},
+			},
+			{
+				name:   `repo has topic`,
+				query:  `repo:has.topic(go)`, // jsonrpc2 and go-diff
+				counts: counts{Repo: 2},
+			},
+			{
+				name:   `repo has topic plus exclusion`,
+				query:  `repo:has.topic(go) -repo:has.topic(json)`, // go-diff (not jsonrpc2)
+				counts: counts{Repo: 1},
+			},
+			{
+				name:   `nonexistent topic`,
+				query:  `repo:has.topic(noexist)`,
+				counts: counts{Repo: 0},
 			},
 		}
 
@@ -1319,11 +1439,11 @@ func testSearchClient(t *testing.T, client searchClient) {
 				counts: counts{Repo: 1},
 			},
 			// Temporarily disabled as it can be flaky
-			//{
+			// {
 			//	name:   `select file`,
 			//	query:  `repo:go-diff patterntype:literal HunkNoChunksize select:file`,
 			//	counts: counts{File: 1},
-			//},
+			// },
 			{
 				name:   `or statement merges file`,
 				query:  `repo:go-diff HunkNoChunksize or ParseHunksAndPrintHunks select:file`,
@@ -1532,7 +1652,7 @@ func testSearchContextsCRUD(t *testing.T, client *gqltestutil.Client) {
 func testListingSearchContexts(t *testing.T, client *gqltestutil.Client) {
 	numSearchContexts := 10
 	searchContextIDs := make([]string, 0, numSearchContexts)
-	for i := 0; i < numSearchContexts; i++ {
+	for i := range numSearchContexts {
 		scID, err := client.CreateSearchContext(
 			gqltestutil.CreateSearchContextInput{Name: fmt.Sprintf("SearchContext%d", i), Public: true},
 			[]gqltestutil.SearchContextRepositoryRevisionsInput{},
@@ -1541,7 +1661,7 @@ func testListingSearchContexts(t *testing.T, client *gqltestutil.Client) {
 		searchContextIDs = append(searchContextIDs, scID)
 	}
 	defer func() {
-		for i := 0; i < numSearchContexts; i++ {
+		for i := range numSearchContexts {
 			err := client.DeleteSearchContext(searchContextIDs[i])
 			require.NoError(t, err)
 		}

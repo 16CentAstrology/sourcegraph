@@ -1,29 +1,33 @@
-import React, { useCallback, KeyboardEvent, MouseEvent } from 'react'
+import React, { useCallback, type KeyboardEvent, type MouseEvent, useState, useEffect } from 'react'
 
 import classNames from 'classnames'
-import { useHistory } from 'react-router'
-import { Observable } from 'rxjs'
-import { map } from 'rxjs/operators'
+import { useNavigate } from 'react-router-dom'
+import VisibilitySensor from 'react-visibility-sensor'
+import type { Observable, Subscription } from 'rxjs'
+import { catchError } from 'rxjs/operators'
 
-import { FetchFileParameters } from '@sourcegraph/shared/src/backend/file'
-import { HighlightLineRange, HighlightResponseFormat } from '@sourcegraph/shared/src/graphql-operations'
-import { getFileMatchUrl, getRepositoryUrl, getRevision, SymbolMatch } from '@sourcegraph/shared/src/search/stream'
-import { isSettingsValid, SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import { asError, isErrorLike } from '@sourcegraph/common'
+import type { FetchFileParameters } from '@sourcegraph/shared/src/backend/file'
+import { HighlightResponseFormat } from '@sourcegraph/shared/src/graphql-operations'
+import { getFileMatchUrl, getRepositoryUrl, getRevision, type SymbolMatch } from '@sourcegraph/shared/src/search/stream'
+import { isSettingsValid, type SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
 import { SymbolKind } from '@sourcegraph/shared/src/symbols/SymbolKind'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { codeCopiedEvent } from '@sourcegraph/shared/src/tracking/event-log-creators'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { codeCopiedEvent, V2CodyCopyPageTypes } from '@sourcegraph/shared/src/tracking/event-log-creators'
 
 import { CodeExcerpt } from './CodeExcerpt'
 import { navigateToCodeExcerpt, navigateToFileOnMiddleMouseButtonClick } from './codeLinkNavigation'
 import { CopyPathAction } from './CopyPathAction'
-import { LastSyncedIcon } from './LastSyncedIcon'
 import { RepoFileLink } from './RepoFileLink'
 import { ResultContainer } from './ResultContainer'
 
-import searchResultStyles from './SearchResult.module.scss'
+import resultStyles from './ResultContainer.module.scss'
 import styles from './SymbolSearchResult.module.scss'
 
-export interface SymbolSearchResultProps extends TelemetryProps, SettingsCascadeProps {
+const DEFAULT_VISIBILITY_OFFSET = { bottom: -500 }
+
+export interface SymbolSearchResultProps extends TelemetryProps, TelemetryV2Props, SettingsCascadeProps {
     result: SymbolMatch
     openInNewTab?: boolean
     repoDisplayName: string
@@ -41,13 +45,10 @@ export const SymbolSearchResult: React.FunctionComponent<SymbolSearchResultProps
     containerClassName,
     index,
     telemetryService,
+    telemetryRecorder,
     settingsCascade,
     fetchHighlightedFileLineRanges,
 }) => {
-    const enableLazyFileResultSyntaxHighlighting =
-        isSettingsValid(settingsCascade) &&
-        settingsCascade.final.experimentalFeatures?.enableLazyFileResultSyntaxHighlighting
-
     const repoAtRevisionURL = getRepositoryUrl(result.repository, result.branches)
     const revisionDisplayName = getRevision(result.branches, result.commit)
 
@@ -63,70 +64,69 @@ export const SymbolSearchResult: React.FunctionComponent<SymbolSearchResultProps
                         ? `${repoDisplayName}${revisionDisplayName ? `@${revisionDisplayName}` : ''}`
                         : undefined
                 }
-                className={classNames(searchResultStyles.titleInner, searchResultStyles.mutedRepoFileLink)}
+                className={resultStyles.titleInner}
             />
             <CopyPathAction
                 filePath={result.path}
-                className={searchResultStyles.copyButton}
+                className={resultStyles.copyButton}
                 telemetryService={telemetryService}
+                telemetryRecorder={telemetryRecorder}
             />
         </span>
     )
 
-    const history = useHistory()
+    const navigate = useNavigate()
     const navigateToFile = useCallback(
         (event: KeyboardEvent<HTMLElement> | MouseEvent<HTMLElement>): void =>
-            navigateToCodeExcerpt(event, openInNewTab ?? false, history),
-        [openInNewTab, history]
+            navigateToCodeExcerpt(event, openInNewTab ?? false, navigate),
+        [openInNewTab, navigate]
     )
 
     const logEventOnCopy = useCallback(() => {
-        telemetryService.log(...codeCopiedEvent('file-match'))
-    }, [telemetryService])
+        telemetryService.log(...codeCopiedEvent('search-result'))
+        telemetryRecorder.recordEvent('search.result.code', 'copy', {
+            metadata: { page: V2CodyCopyPageTypes['search-result'] },
+        })
+    }, [telemetryService, telemetryRecorder])
 
-    const fetchSymbolMatchLineRanges = useCallback(
-        (startLine: number, endLine: number, format: HighlightResponseFormat) => {
+    const [hasBeenVisible, setHasBeenVisible] = useState(false)
+    const [highlightedLines, setHighlightedLines] = useState<string[] | undefined>(undefined)
+    useEffect(() => {
+        let subscription: Subscription | undefined
+        if (hasBeenVisible) {
             const startTime = Date.now()
-            return fetchHighlightedFileLineRanges({
-                repoName: result.repository,
-                commitID: result.commit || '',
-                filePath: result.path,
-                disableTimeout: false,
-                format,
-                ranges: result.symbols.map(
-                    (symbol): HighlightLineRange => ({
+            subscription = fetchHighlightedFileLineRanges(
+                {
+                    repoName: result.repository,
+                    commitID: result.commit || '',
+                    filePath: result.path,
+                    disableTimeout: false,
+                    format: HighlightResponseFormat.HTML_HIGHLIGHT,
+                    ranges: result.symbols.map(symbol => ({
                         startLine: symbol.line - 1,
                         endLine: symbol.line,
-                    })
-                ),
-            }).pipe(
-                map(lines => {
+                    })),
+                },
+                false
+            )
+                .pipe(catchError(error => [asError(error)]))
+                .subscribe(res => {
                     const endTime = Date.now()
                     telemetryService.log(
                         'search.latencies.frontend.code-load',
                         { durationMs: endTime - startTime },
                         { durationMs: endTime - startTime }
                     )
-                    return lines[
-                        result.symbols.findIndex(symbol => symbol.line - 1 === startLine && symbol.line === endLine)
-                    ]
+                    telemetryRecorder.recordEvent('search.frontendLatency', 'codeLoad', {
+                        metadata: { durationMs: endTime - startTime },
+                    })
+                    if (!isErrorLike(res)) {
+                        setHighlightedLines(res.map(arr => arr[0]))
+                    }
                 })
-            )
-        },
-        [result, fetchHighlightedFileLineRanges, telemetryService]
-    )
-
-    const fetchHighlightedSymbolMatchLineRanges = useCallback(
-        (startLine: number, endLine: number) =>
-            fetchSymbolMatchLineRanges(startLine, endLine, HighlightResponseFormat.HTML_HIGHLIGHT),
-        [fetchSymbolMatchLineRanges]
-    )
-
-    const fetchPlainTextSymbolMatchLineRanges = useCallback(
-        (startLine: number, endLine: number) =>
-            fetchSymbolMatchLineRanges(startLine, endLine, HighlightResponseFormat.HTML_PLAINTEXT),
-        [fetchSymbolMatchLineRanges]
-    )
+        }
+        return () => subscription?.unsubscribe()
+    }, [result, hasBeenVisible, fetchHighlightedFileLineRanges, telemetryService, telemetryRecorder])
 
     return (
         <ResultContainer
@@ -136,54 +136,60 @@ export const SymbolSearchResult: React.FunctionComponent<SymbolSearchResultProps
             onResultClicked={onSelect}
             repoName={result.repository}
             repoStars={result.repoStars}
-            className={classNames(searchResultStyles.copyButtonContainer, containerClassName)}
-            resultClassName={styles.symbolsOverride}
+            className={classNames(resultStyles.copyButtonContainer, containerClassName)}
+            repoLastFetched={result.repoLastFetched}
         >
-            <div className={styles.symbols}>
-                {result.repoLastFetched && <LastSyncedIcon lastSyncedTime={result.repoLastFetched} />}
-                {result.symbols.map(symbol => (
-                    <div
-                        key={`symbol:${symbol.name}${String(symbol.containerName)}${symbol.url}`}
-                        className={styles.symbol}
-                        data-href={symbol.url}
-                        role="link"
-                        data-testid="symbol-search-result"
-                        tabIndex={0}
-                        onClick={navigateToFile}
-                        onMouseUp={navigateToFileOnMiddleMouseButtonClick}
-                        onKeyDown={navigateToFile}
-                        data-selectable-search-result="true"
-                    >
-                        <div className="mr-2 flex-shrink-0">
-                            <SymbolKind
-                                kind={symbol.kind}
-                                symbolKindTags={
-                                    isSettingsValid(settingsCascade) &&
-                                    settingsCascade.final.experimentalFeatures?.symbolKindTags
-                                }
-                            />
+            <VisibilitySensor
+                onChange={(visible: boolean) => setHasBeenVisible(visible || hasBeenVisible)}
+                partialVisibility={true}
+                offset={DEFAULT_VISIBILITY_OFFSET}
+            >
+                <div className={styles.symbols}>
+                    {result.symbols.map((symbol, i) => (
+                        <div
+                            key={`symbol:${symbol.name}${String(symbol.containerName)}${symbol.url}`}
+                            className={classNames(
+                                styles.symbol,
+                                resultStyles.clickable,
+                                resultStyles.focusableBlock,
+                                resultStyles.horizontalDividerBetween
+                            )}
+                            data-href={symbol.url}
+                            role="link"
+                            data-testid="symbol-search-result"
+                            tabIndex={0}
+                            onClick={navigateToFile}
+                            onMouseUp={navigateToFileOnMiddleMouseButtonClick}
+                            onKeyDown={navigateToFile}
+                            data-selectable-search-result="true"
+                        >
+                            <div className="mr-2 flex-shrink-0">
+                                <SymbolKind
+                                    kind={symbol.kind}
+                                    symbolKindTags={
+                                        isSettingsValid(settingsCascade) &&
+                                        settingsCascade.final.experimentalFeatures?.symbolKindTags
+                                    }
+                                />
+                            </div>
+                            <div className={styles.symbolCodeExcerpt}>
+                                <CodeExcerpt
+                                    className="a11y-ignore"
+                                    plaintextLines={['']}
+                                    highlightedLines={highlightedLines && [highlightedLines[i]]}
+                                    repoName={result.repository}
+                                    commitID={result.commit || ''}
+                                    filePath={result.path}
+                                    startLine={symbol.line - 1}
+                                    endLine={symbol.line}
+                                    onCopy={logEventOnCopy}
+                                    highlightRanges={[]}
+                                />
+                            </div>
                         </div>
-                        <div className={styles.symbolCodeExcerpt}>
-                            <CodeExcerpt
-                                className="a11y-ignore"
-                                repoName={result.repository}
-                                commitID={result.commit || ''}
-                                filePath={result.path}
-                                startLine={symbol.line - 1}
-                                endLine={symbol.line}
-                                fetchHighlightedFileRangeLines={fetchHighlightedSymbolMatchLineRanges}
-                                fetchPlainTextFileRangeLines={
-                                    enableLazyFileResultSyntaxHighlighting
-                                        ? fetchPlainTextSymbolMatchLineRanges
-                                        : undefined
-                                }
-                                onCopy={logEventOnCopy}
-                                highlightRanges={[]}
-                            />
-                        </div>
-                    </div>
-                ))}
-            </div>
+                    ))}
+                </div>
+            </VisibilitySensor>
         </ResultContainer>
     )
 }

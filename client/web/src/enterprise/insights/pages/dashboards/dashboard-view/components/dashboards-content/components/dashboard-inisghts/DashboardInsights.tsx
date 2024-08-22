@@ -1,24 +1,27 @@
-import { FC, useContext, useMemo } from 'react'
+import { type FC, useContext, useMemo } from 'react'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { useExperimentalFeatures } from '@sourcegraph/shared/src/settings/settings'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { LoadingSpinner, useObservable } from '@sourcegraph/wildcard'
 
-import { useExperimentalFeatures } from '../../../../../../../../../stores'
-import { SmartInsightsViewGrid, InsightContext } from '../../../../../../../components'
-import { CodeInsightsBackendContext, CustomInsightDashboard } from '../../../../../../../core'
+import { SmartInsightsViewGrid, InsightContext, type GridApi } from '../../../../../../../components'
+import { CodeInsightsBackendContext, type CustomInsightDashboard } from '../../../../../../../core'
 import { EmptyCustomDashboard } from '../empty-insight-dashboard/EmptyInsightDashboard'
 
-interface DashboardInsightsProps extends TelemetryProps {
+interface DashboardInsightsProps extends TelemetryProps, TelemetryV2Props {
     currentDashboard: CustomInsightDashboard
     className?: string
     onAddInsightRequest?: () => void
+    onDashboardCreate?: (dashboardApi: GridApi) => void
 }
 
 export const DashboardInsights: FC<DashboardInsightsProps> = props => {
-    const { telemetryService, currentDashboard, className, onAddInsightRequest } = props
+    const { currentDashboard, telemetryService, telemetryRecorder, className, onAddInsightRequest, onDashboardCreate } =
+        props
 
     const { getInsights } = useContext(CodeInsightsBackendContext)
-    const { codeInsightsCompute = false } = useExperimentalFeatures()
+    const codeInsightsCompute = useExperimentalFeatures(settings => settings.codeInsightsCompute ?? false)
 
     const insights = useObservable(
         useMemo(
@@ -40,7 +43,14 @@ export const DashboardInsights: FC<DashboardInsightsProps> = props => {
     return (
         <InsightContext.Provider value={insightContextValue}>
             {insights.length > 0 ? (
-                <SmartInsightsViewGrid insights={insights} telemetryService={telemetryService} className={className} />
+                <SmartInsightsViewGrid
+                    id={currentDashboard.id}
+                    insights={insights}
+                    telemetryService={telemetryService}
+                    telemetryRecorder={telemetryRecorder}
+                    className={className}
+                    onGridCreate={onDashboardCreate}
+                />
             ) : (
                 <EmptyCustomDashboard dashboard={currentDashboard} onAddInsightRequest={onAddInsightRequest} />
             )}

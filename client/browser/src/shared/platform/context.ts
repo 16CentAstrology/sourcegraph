@@ -1,20 +1,19 @@
-import { combineLatest, ReplaySubject, of } from 'rxjs'
-import { map, switchMap } from 'rxjs/operators'
+import { combineLatest, lastValueFrom, ReplaySubject } from 'rxjs'
+import { map } from 'rxjs/operators'
 
 import { asError } from '@sourcegraph/common'
 import { isHTTPAuthError } from '@sourcegraph/http-client'
-import { PlatformContext } from '@sourcegraph/shared/src/platform/context'
+import type { PlatformContext } from '@sourcegraph/shared/src/platform/context'
 import { mutateSettings, updateSettings } from '@sourcegraph/shared/src/settings/edit'
-import { EMPTY_SETTINGS_CASCADE, gqlToCascade, SettingsSubject } from '@sourcegraph/shared/src/settings/settings'
+import { EMPTY_SETTINGS_CASCADE, gqlToCascade, type SettingsSubject } from '@sourcegraph/shared/src/settings/settings'
 import { toPrettyBlobURL } from '@sourcegraph/shared/src/util/url'
 
-import { background } from '../../browser-extension/web-extension-api/runtime'
 import { createGraphQLHelpers } from '../backend/requestGraphQl'
-import { CodeHost } from '../code-hosts/shared/codeHost'
-import { isInPage } from '../context'
+import type { CodeHost } from '../code-hosts/shared/codeHost'
+import { noOpTelemetryRecorder } from '../telemetry'
 
 import { createExtensionHost } from './extensionHost'
-import { getInlineExtensions, shouldUseInlineExtensions } from './inlineExtensionsService'
+import { getInlineExtensions } from './inlineExtensionsService'
 import { editClientSettings, fetchViewerSettings, mergeCascades, storageSettingsCascade } from './settings'
 
 export interface SourcegraphIntegrationURLs {
@@ -57,8 +56,6 @@ export function createPlatformContext(
     }>(1)
     const { requestGraphQL, getBrowserGraphQLClient } = createGraphQLHelpers(sourcegraphURL, isExtension)
 
-    const shouldUseInlineExtensionsObservable = shouldUseInlineExtensions(requestGraphQL)
-
     const context: BrowserPlatformContext = {
         /**
          * The active settings cascade.
@@ -80,7 +77,7 @@ export function createPlatformContext(
         ),
         refreshSettings: async () => {
             try {
-                const settings = await fetchViewerSettings(requestGraphQL).toPromise()
+                const settings = await lastValueFrom(fetchViewerSettings(requestGraphQL))
                 updatedViewerSettings.next(settings)
             } catch (error) {
                 if (isHTTPAuthError(error)) {
@@ -120,31 +117,6 @@ export function createPlatformContext(
         requestGraphQL,
         getGraphQLClient: getBrowserGraphQLClient,
         createExtensionHost: () => createExtensionHost({ assetsURL }),
-        getScriptURLForExtension: () => {
-            if (isInPage) {
-                return undefined
-            }
-
-            return bundleURLs =>
-                shouldUseInlineExtensionsObservable.toPromise().then(shouldUseInlineExtensions => {
-                    if (shouldUseInlineExtensions) {
-                        // inline extensions have fixed scriptURLs
-                        return bundleURLs
-                    }
-
-                    // We need to import the extension's JavaScript file (in importScripts in the Web Worker) from a blob:
-                    // URI, not its original http:/https: URL, because Chrome extensions are not allowed to be published
-                    // with a CSP that allowlists https://* in script-src (see
-                    // https://developer.chrome.com/extensions/contentSecurityPolicy#relaxing-remote-script). (Firefox
-                    // add-ons have an even stricter restriction.)
-                    return Promise.allSettled(bundleURLs.map(bundleURL => background.createBlobURL(bundleURL))).then(
-                        results =>
-                            results.map(result =>
-                                result.status === 'rejected' ? asError(result.reason) : result.value
-                            )
-                    )
-                })
-        },
         urlToFile: ({ rawRepoName, ...target }, context) => {
             // We don't always resolve the rawRepoName, e.g. if there are multiple definitions.
             // Construct URL to file on code host, if possible.
@@ -156,10 +128,11 @@ export function createPlatformContext(
         },
         sourcegraphURL,
         clientApplication: 'other',
-        getStaticExtensions: () =>
-            shouldUseInlineExtensionsObservable.pipe(
-                switchMap(shouldUseInline => (shouldUseInline ? getInlineExtensions() : of(undefined)))
-            ),
+        getStaticExtensions: () => getInlineExtensions(assetsURL),
+        /**
+         * This will be replaced by a real telemetry recorder in codeHost.tsx.
+         */
+        telemetryRecorder: noOpTelemetryRecorder,
     }
     return context
 }

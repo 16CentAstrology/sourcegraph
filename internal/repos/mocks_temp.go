@@ -13,7 +13,6 @@ import (
 	api "github.com/sourcegraph/sourcegraph/internal/api"
 	database "github.com/sourcegraph/sourcegraph/internal/database"
 	basestore "github.com/sourcegraph/sourcegraph/internal/database/basestore"
-	trace "github.com/sourcegraph/sourcegraph/internal/trace"
 	types "github.com/sourcegraph/sourcegraph/internal/types"
 )
 
@@ -60,9 +59,6 @@ type MockStore struct {
 	// SetMetricsFunc is an instance of a mock function object controlling
 	// the behavior of the method SetMetrics.
 	SetMetricsFunc *StoreSetMetricsFunc
-	// SetTracerFunc is an instance of a mock function object controlling
-	// the behavior of the method SetTracer.
-	SetTracerFunc *StoreSetTracerFunc
 	// TransactFunc is an instance of a mock function object controlling the
 	// behavior of the method Transact.
 	TransactFunc *StoreTransactFunc
@@ -108,7 +104,7 @@ func NewMockStore() *MockStore {
 			},
 		},
 		EnqueueSyncJobsFunc: &StoreEnqueueSyncJobsFunc{
-			defaultHook: func(context.Context, bool) (r0 error) {
+			defaultHook: func(context.Context) (r0 error) {
 				return
 			},
 		},
@@ -139,11 +135,6 @@ func NewMockStore() *MockStore {
 		},
 		SetMetricsFunc: &StoreSetMetricsFunc{
 			defaultHook: func(StoreMetrics) {
-				return
-			},
-		},
-		SetTracerFunc: &StoreSetTracerFunc{
-			defaultHook: func(trace.Tracer) {
 				return
 			},
 		},
@@ -200,7 +191,7 @@ func NewStrictMockStore() *MockStore {
 			},
 		},
 		EnqueueSyncJobsFunc: &StoreEnqueueSyncJobsFunc{
-			defaultHook: func(context.Context, bool) error {
+			defaultHook: func(context.Context) error {
 				panic("unexpected invocation of MockStore.EnqueueSyncJobs")
 			},
 		},
@@ -232,11 +223,6 @@ func NewStrictMockStore() *MockStore {
 		SetMetricsFunc: &StoreSetMetricsFunc{
 			defaultHook: func(StoreMetrics) {
 				panic("unexpected invocation of MockStore.SetMetrics")
-			},
-		},
-		SetTracerFunc: &StoreSetTracerFunc{
-			defaultHook: func(trace.Tracer) {
-				panic("unexpected invocation of MockStore.SetTracer")
 			},
 		},
 		TransactFunc: &StoreTransactFunc{
@@ -301,9 +287,6 @@ func NewMockStoreFrom(i Store) *MockStore {
 		},
 		SetMetricsFunc: &StoreSetMetricsFunc{
 			defaultHook: i.SetMetrics,
-		},
-		SetTracerFunc: &StoreSetTracerFunc{
-			defaultHook: i.SetTracer,
 		},
 		TransactFunc: &StoreTransactFunc{
 			defaultHook: i.Transact,
@@ -864,24 +847,24 @@ func (c StoreEnqueueSingleSyncJobFuncCall) Results() []interface{} {
 // StoreEnqueueSyncJobsFunc describes the behavior when the EnqueueSyncJobs
 // method of the parent MockStore instance is invoked.
 type StoreEnqueueSyncJobsFunc struct {
-	defaultHook func(context.Context, bool) error
-	hooks       []func(context.Context, bool) error
+	defaultHook func(context.Context) error
+	hooks       []func(context.Context) error
 	history     []StoreEnqueueSyncJobsFuncCall
 	mutex       sync.Mutex
 }
 
 // EnqueueSyncJobs delegates to the next hook function in the queue and
 // stores the parameter and result values of this invocation.
-func (m *MockStore) EnqueueSyncJobs(v0 context.Context, v1 bool) error {
-	r0 := m.EnqueueSyncJobsFunc.nextHook()(v0, v1)
-	m.EnqueueSyncJobsFunc.appendCall(StoreEnqueueSyncJobsFuncCall{v0, v1, r0})
+func (m *MockStore) EnqueueSyncJobs(v0 context.Context) error {
+	r0 := m.EnqueueSyncJobsFunc.nextHook()(v0)
+	m.EnqueueSyncJobsFunc.appendCall(StoreEnqueueSyncJobsFuncCall{v0, r0})
 	return r0
 }
 
 // SetDefaultHook sets function that is called when the EnqueueSyncJobs
 // method of the parent MockStore instance is invoked and the hook queue is
 // empty.
-func (f *StoreEnqueueSyncJobsFunc) SetDefaultHook(hook func(context.Context, bool) error) {
+func (f *StoreEnqueueSyncJobsFunc) SetDefaultHook(hook func(context.Context) error) {
 	f.defaultHook = hook
 }
 
@@ -889,7 +872,7 @@ func (f *StoreEnqueueSyncJobsFunc) SetDefaultHook(hook func(context.Context, boo
 // EnqueueSyncJobs method of the parent MockStore instance invokes the hook
 // at the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
-func (f *StoreEnqueueSyncJobsFunc) PushHook(hook func(context.Context, bool) error) {
+func (f *StoreEnqueueSyncJobsFunc) PushHook(hook func(context.Context) error) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -898,19 +881,19 @@ func (f *StoreEnqueueSyncJobsFunc) PushHook(hook func(context.Context, bool) err
 // SetDefaultReturn calls SetDefaultHook with a function that returns the
 // given values.
 func (f *StoreEnqueueSyncJobsFunc) SetDefaultReturn(r0 error) {
-	f.SetDefaultHook(func(context.Context, bool) error {
+	f.SetDefaultHook(func(context.Context) error {
 		return r0
 	})
 }
 
 // PushReturn calls PushHook with a function that returns the given values.
 func (f *StoreEnqueueSyncJobsFunc) PushReturn(r0 error) {
-	f.PushHook(func(context.Context, bool) error {
+	f.PushHook(func(context.Context) error {
 		return r0
 	})
 }
 
-func (f *StoreEnqueueSyncJobsFunc) nextHook() func(context.Context, bool) error {
+func (f *StoreEnqueueSyncJobsFunc) nextHook() func(context.Context) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -946,9 +929,6 @@ type StoreEnqueueSyncJobsFuncCall struct {
 	// Arg0 is the value of the 1st argument passed to this method
 	// invocation.
 	Arg0 context.Context
-	// Arg1 is the value of the 2nd argument passed to this method
-	// invocation.
-	Arg1 bool
 	// Result0 is the value of the 1st result returned from this method
 	// invocation.
 	Result0 error
@@ -957,7 +937,7 @@ type StoreEnqueueSyncJobsFuncCall struct {
 // Args returns an interface slice containing the arguments of this
 // invocation.
 func (c StoreEnqueueSyncJobsFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0, c.Arg1}
+	return []interface{}{c.Arg0}
 }
 
 // Results returns an interface slice containing the results of this
@@ -1559,104 +1539,6 @@ func (c StoreSetMetricsFuncCall) Args() []interface{} {
 // Results returns an interface slice containing the results of this
 // invocation.
 func (c StoreSetMetricsFuncCall) Results() []interface{} {
-	return []interface{}{}
-}
-
-// StoreSetTracerFunc describes the behavior when the SetTracer method of
-// the parent MockStore instance is invoked.
-type StoreSetTracerFunc struct {
-	defaultHook func(trace.Tracer)
-	hooks       []func(trace.Tracer)
-	history     []StoreSetTracerFuncCall
-	mutex       sync.Mutex
-}
-
-// SetTracer delegates to the next hook function in the queue and stores the
-// parameter and result values of this invocation.
-func (m *MockStore) SetTracer(v0 trace.Tracer) {
-	m.SetTracerFunc.nextHook()(v0)
-	m.SetTracerFunc.appendCall(StoreSetTracerFuncCall{v0})
-	return
-}
-
-// SetDefaultHook sets function that is called when the SetTracer method of
-// the parent MockStore instance is invoked and the hook queue is empty.
-func (f *StoreSetTracerFunc) SetDefaultHook(hook func(trace.Tracer)) {
-	f.defaultHook = hook
-}
-
-// PushHook adds a function to the end of hook queue. Each invocation of the
-// SetTracer method of the parent MockStore instance invokes the hook at the
-// front of the queue and discards it. After the queue is empty, the default
-// hook function is invoked for any future action.
-func (f *StoreSetTracerFunc) PushHook(hook func(trace.Tracer)) {
-	f.mutex.Lock()
-	f.hooks = append(f.hooks, hook)
-	f.mutex.Unlock()
-}
-
-// SetDefaultReturn calls SetDefaultHook with a function that returns the
-// given values.
-func (f *StoreSetTracerFunc) SetDefaultReturn() {
-	f.SetDefaultHook(func(trace.Tracer) {
-		return
-	})
-}
-
-// PushReturn calls PushHook with a function that returns the given values.
-func (f *StoreSetTracerFunc) PushReturn() {
-	f.PushHook(func(trace.Tracer) {
-		return
-	})
-}
-
-func (f *StoreSetTracerFunc) nextHook() func(trace.Tracer) {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-
-	if len(f.hooks) == 0 {
-		return f.defaultHook
-	}
-
-	hook := f.hooks[0]
-	f.hooks = f.hooks[1:]
-	return hook
-}
-
-func (f *StoreSetTracerFunc) appendCall(r0 StoreSetTracerFuncCall) {
-	f.mutex.Lock()
-	f.history = append(f.history, r0)
-	f.mutex.Unlock()
-}
-
-// History returns a sequence of StoreSetTracerFuncCall objects describing
-// the invocations of this function.
-func (f *StoreSetTracerFunc) History() []StoreSetTracerFuncCall {
-	f.mutex.Lock()
-	history := make([]StoreSetTracerFuncCall, len(f.history))
-	copy(history, f.history)
-	f.mutex.Unlock()
-
-	return history
-}
-
-// StoreSetTracerFuncCall is an object that describes an invocation of
-// method SetTracer on an instance of MockStore.
-type StoreSetTracerFuncCall struct {
-	// Arg0 is the value of the 1st argument passed to this method
-	// invocation.
-	Arg0 trace.Tracer
-}
-
-// Args returns an interface slice containing the arguments of this
-// invocation.
-func (c StoreSetTracerFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0}
-}
-
-// Results returns an interface slice containing the results of this
-// invocation.
-func (c StoreSetTracerFuncCall) Results() []interface{} {
 	return []interface{}{}
 }
 

@@ -2,7 +2,6 @@ package repos_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/keegancsmith/sqlf"
-	"go.opentelemetry.io/otel"
 
 	"github.com/sourcegraph/log"
 	"github.com/sourcegraph/log/logtest"
@@ -21,70 +19,11 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/database/dbtest"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
-	"github.com/sourcegraph/sourcegraph/internal/ratelimit"
 	"github.com/sourcegraph/sourcegraph/internal/repos"
 	"github.com/sourcegraph/sourcegraph/internal/timeutil"
-	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
-	"github.com/sourcegraph/sourcegraph/schema"
 )
-
-func TestSyncRateLimiters(t *testing.T) {
-	t.Parallel()
-	store := getTestRepoStore(t)
-
-	clock := timeutil.NewFakeClock(time.Now(), 0)
-	now := clock.Now()
-	ctx := context.Background()
-	transact(ctx, store, func(t testing.TB, tx repos.Store) {
-		toCreate := 501 // Larger than default page size in order to test pagination
-		services := make([]*types.ExternalService, 0, toCreate)
-		for i := 0; i < toCreate; i++ {
-			svc := &types.ExternalService{
-				ID:          int64(i) + 1,
-				Kind:        "GITLAB",
-				DisplayName: "GitLab",
-				CreatedAt:   now,
-				UpdatedAt:   now,
-				DeletedAt:   time.Time{},
-				Config:      extsvc.NewEmptyConfig(),
-			}
-			config := schema.GitLabConnection{
-				Token: "abc",
-				Url:   fmt.Sprintf("http://example%d.com/", i),
-				RateLimit: &schema.GitLabRateLimit{
-					RequestsPerHour: 3600,
-					Enabled:         true,
-				},
-				ProjectQuery: []string{
-					"None",
-				},
-			}
-			data, err := json.Marshal(config)
-			if err != nil {
-				t.Fatal(err)
-			}
-			svc.Config.Set(string(data))
-			services = append(services, svc)
-		}
-
-		if err := tx.ExternalServiceStore().Upsert(ctx, services...); err != nil {
-			t.Fatalf("failed to setup store: %v", err)
-		}
-
-		registry := ratelimit.NewRegistry()
-		syncer := repos.NewRateLimitSyncer(registry, tx.ExternalServiceStore(), repos.RateLimitSyncerOpts{})
-		err := syncer.SyncRateLimiters(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		have := registry.Count()
-		if have != toCreate {
-			t.Fatalf("Want %d, got %d", toCreate, have)
-		}
-	})(t)
-}
 
 func TestStoreEnqueueSyncJobs(t *testing.T) {
 	t.Parallel()
@@ -97,11 +36,10 @@ func TestStoreEnqueueSyncJobs(t *testing.T) {
 	services := generateExternalServices(10, mkExternalServices(now)...)
 
 	type testCase struct {
-		name            string
-		stored          types.ExternalServices
-		queued          func(types.ExternalServices) []int64
-		ignoreSiteAdmin bool
-		err             error
+		name   string
+		stored types.ExternalServices
+		queued func(types.ExternalServices) []int64
+		err    error
 	}
 
 	var testCases []testCase
@@ -120,15 +58,6 @@ func TestStoreEnqueueSyncJobs(t *testing.T) {
 			s.NextSyncAt = now.Add(10 * time.Second)
 		}),
 		queued: func(svcs types.ExternalServices) []int64 { return []int64{} },
-	})
-
-	testCases = append(testCases, testCase{
-		name: "ignore siteadmin repos",
-		stored: services.With(func(s *types.ExternalService) {
-			s.NextSyncAt = now.Add(10 * time.Second)
-		}),
-		ignoreSiteAdmin: true,
-		queued:          func(svcs types.ExternalServices) []int64 { return []int64{} },
 	})
 
 	{
@@ -171,7 +100,7 @@ func TestStoreEnqueueSyncJobs(t *testing.T) {
 				t.Fatalf("failed to setup store: %v", err)
 			}
 
-			err := store.EnqueueSyncJobs(ctx, tc.ignoreSiteAdmin)
+			err := store.EnqueueSyncJobs(ctx)
 			if have, want := fmt.Sprint(err), fmt.Sprint(tc.err); have != want {
 				t.Errorf("error:\nhave: %v\nwant: %v", have, want)
 			}
@@ -267,36 +196,6 @@ func TestStoreEnqueueSingleSyncJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSyncJobCount(t, store, 2)
-
-	// Test that cloud default external services don't get jobs enqueued (no-ops instead of errors)
-	q = sqlf.Sprintf("UPDATE external_service_sync_jobs SET state='completed'")
-	if _, err = store.Handle().ExecContext(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...); err != nil {
-		t.Fatal(err)
-	}
-
-	service.CloudDefault = true
-	err = store.ExternalServiceStore().Upsert(ctx, &service)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.EnqueueSingleSyncJob(ctx, service.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSyncJobCount(t, store, 2)
-
-	// Test that cloud default external services don't get jobs enqueued also when there are no job rows.
-	q = sqlf.Sprintf("DELETE FROM external_service_sync_jobs")
-	if _, err = store.Handle().ExecContext(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...); err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.EnqueueSingleSyncJob(ctx, service.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSyncJobCount(t, store, 0)
 }
 
 func assertSyncJobCount(t *testing.T, store repos.Store, want int) {
@@ -336,7 +235,7 @@ func TestStoreEnqueuingSyncJobsWhileExtSvcBeingDeleted(t *testing.T) {
 		},
 		"EnqueueSyncJobs": func(t *testing.T, ctx context.Context, store repos.Store, _ *types.ExternalService) {
 			t.Helper()
-			if err := store.EnqueueSyncJobs(ctx, false); err != nil {
+			if err := store.EnqueueSyncJobs(ctx); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -426,7 +325,7 @@ func mkRepos(n int, base ...*types.Repo) types.Repos {
 	}
 
 	rs := make(types.Repos, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := strconv.Itoa(i)
 		r := base[i%len(base)].Clone()
 		r.Name += api.RepoName(id)
@@ -441,7 +340,7 @@ func generateExternalServices(n int, base ...*types.ExternalService) types.Exter
 		return nil
 	}
 	es := make(types.ExternalServices, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := strconv.Itoa(i)
 		r := base[i%len(base)].Clone()
 		r.DisplayName += id
@@ -581,8 +480,7 @@ func getTestRepoStore(t *testing.T) repos.Store {
 	}
 
 	logger := logtest.Scoped(t)
-	store := repos.NewStore(logtest.Scoped(t), database.NewDB(logger, dbtest.NewDB(logger, t)))
+	store := repos.NewStore(logtest.Scoped(t), database.NewDB(logger, dbtest.NewDB(t)))
 	store.SetMetrics(repos.NewStoreMetrics())
-	store.SetTracer(trace.Tracer{TracerProvider: otel.GetTracerProvider()})
 	return store
 }

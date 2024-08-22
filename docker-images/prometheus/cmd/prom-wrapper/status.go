@@ -15,12 +15,12 @@ import (
 // AlertsStatusReporter summarizes alert activity from Alertmanager
 type AlertsStatusReporter struct {
 	log          log.Logger
-	alertmanager *amclient.Alertmanager
+	alertmanager *amclient.AlertmanagerAPI
 }
 
-func NewAlertsStatusReporter(logger log.Logger, alertmanager *amclient.Alertmanager) *AlertsStatusReporter {
+func NewAlertsStatusReporter(logger log.Logger, alertmanager *amclient.AlertmanagerAPI) *AlertsStatusReporter {
 	return &AlertsStatusReporter{
-		log:          logger.Scoped("alerts-status", "alerts status reporter"),
+		log:          logger.Scoped("alerts-status"),
 		alertmanager: alertmanager,
 	}
 }

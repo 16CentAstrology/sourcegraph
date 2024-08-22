@@ -3,20 +3,20 @@ import React, { useCallback } from 'react'
 import classNames from 'classnames'
 
 import { SyntaxHighlightedSearchQuery } from '@sourcegraph/branded'
-import { QueryState } from '@sourcegraph/shared/src/search'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { QueryState } from '@sourcegraph/shared/src/search'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { Card, Text } from '@sourcegraph/wildcard'
 
 import { ModalVideo } from '../alias/ModalVideo'
 
-import { SearchExample, exampleQueries } from './SearchExamples'
+import { type SearchExample, exampleQueries } from './SearchExamples'
 
 import styles from './HomeFooter.module.scss'
 
-export interface HomeFooterProps extends TelemetryProps, ThemeProps {
+export interface HomeFooterProps extends TelemetryProps {
     setQuery: (newState: QueryState) => void
 }
+
 interface SearchExamplesProps extends TelemetryProps {
     title: string
     subtitle: string

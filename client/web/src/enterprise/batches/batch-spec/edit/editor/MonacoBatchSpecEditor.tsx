@@ -1,10 +1,10 @@
 import React from 'react'
 
-import { JSONSchemaType } from 'ajv'
+import type { JSONSchemaType } from 'ajv'
 import classNames from 'classnames'
 import { cloneDeep } from 'lodash'
-// eslint-disable-next-line import/order
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import type * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+
 import 'monaco-yaml'
 
 import { Subject, Subscription } from 'rxjs'
@@ -12,14 +12,13 @@ import { distinctUntilChanged, filter, map, startWith, switchMap } from 'rxjs/op
 
 import { dataOrThrowErrors } from '@sourcegraph/http-client'
 import { MonacoEditor } from '@sourcegraph/shared/src/components/MonacoEditor'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
 
 import batchSpecSchemaJSON from '../../../../../../../../schema/batch_spec.schema.json'
 import { requestGraphQL } from '../../../../../backend/graphql'
-import {
-    Scalars,
+import type {
     BatchSpecExecutionAvailableSecretKeysResult,
     BatchSpecExecutionAvailableSecretKeysVariables,
+    Scalars,
 } from '../../../../../graphql-operations'
 
 import { BATCH_SPEC_EXECUTION_AVAILABLE_SECRET_KEYS } from './backend'
@@ -34,11 +33,12 @@ interface JSONSchema {
     $id: string
 }
 
-export interface Props extends ThemeProps {
+export interface Props {
     className?: string
     batchChangeNamespace?: { id: Scalars['ID']; __typename: 'User' | 'Org' }
     batchChangeName: string
     value: string | undefined
+    isLightTheme: boolean
     onChange?: (newValue: string) => void
     readOnly?: boolean | undefined
     autoFocus?: boolean
@@ -125,7 +125,7 @@ export class MonacoBatchSpecEditor extends React.PureComponent<Props, State> {
     public render(): JSX.Element | null {
         return (
             <MonacoEditor
-                className={classNames('percy-hide chromatic-ignore', styles.editor, this.props.className)}
+                className={classNames(styles.editor, this.props.className)}
                 language="yaml"
                 height="auto"
                 isLightTheme={this.props.isLightTheme}
@@ -196,7 +196,7 @@ function setDiagnosticsOptions(editor: typeof monaco, batchChangeName: string, a
     const schema = cloneDeep(batchSpecSchemaJSON)
 
     // Temporarily remove the mount field from the schema, so it does not show up in the auto-suggestion.
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+
     // @ts-ignore
     delete schema.properties.steps.items.properties.mount
 

@@ -1,27 +1,24 @@
-import { FC, ReactNode } from 'react'
+import type { FC, ReactNode } from 'react'
 
 import { noop } from 'rxjs'
 
 import {
-    CreationUiLayout,
-    CreationUIForm,
-    CreationUIPreview,
-    useField,
-    FormChangeEvent,
-    SubmissionErrors,
     useForm,
-    insightTitleValidator,
+    useField,
+    type FormChangeEvent,
+    type SubmissionErrors,
     createRequiredValidator,
-    insightRepositoriesValidator,
-    insightRepositoriesAsyncValidator,
-} from '../../../../../components'
-import { LangStatsCreationFormFields } from '../types'
+} from '@sourcegraph/wildcard'
+
+import { CreationUiLayout, CreationUIForm, CreationUIPreview, insightTitleValidator } from '../../../../../components'
+import type { LangStatsCreationFormFields } from '../types'
 
 import {
     LangStatsInsightCreationForm,
-    RenderPropertyInputs,
+    type RenderPropertyInputs,
 } from './lang-stats-insight-creation-form/LangStatsInsightCreationForm'
 import { LangStatsInsightLivePreview } from './live-preview-chart/LangStatsInsightLivePreview'
+import { repositoryValidator, useRepositoryExistsValidator } from './validators'
 
 export const THRESHOLD_VALIDATOR = createRequiredValidator('Threshold is a required field for code insight.')
 
@@ -61,8 +58,8 @@ export const LangStatsInsightCreationContent: FC<LangStatsInsightCreationContent
         name: 'repository',
         formApi: formAPI,
         validators: {
-            sync: insightRepositoriesValidator,
-            async: insightRepositoriesAsyncValidator,
+            sync: repositoryValidator,
+            async: useRepositoryExistsValidator(),
         },
     })
 

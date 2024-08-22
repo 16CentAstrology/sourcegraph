@@ -5,92 +5,33 @@ package shared
 import (
 	"context"
 	"io"
-	stdlog "log"
-	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strconv"
-	"syscall"
-	"time"
 
-	"golang.org/x/sync/errgroup"
-
-	"github.com/getsentry/sentry-go"
 	"github.com/keegancsmith/tmpfriend"
 	"github.com/sourcegraph/log"
+	"google.golang.org/grpc"
 
 	"github.com/sourcegraph/sourcegraph/cmd/searcher/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/conf"
-	"github.com/sourcegraph/sourcegraph/internal/conf/conftypes"
-	"github.com/sourcegraph/sourcegraph/internal/database"
-	connections "github.com/sourcegraph/sourcegraph/internal/database/connections/live"
-	"github.com/sourcegraph/sourcegraph/internal/debugserver"
-	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
-	"github.com/sourcegraph/sourcegraph/internal/gitserver/gitdomain"
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
-	"github.com/sourcegraph/sourcegraph/internal/hostname"
+	internalgrpc "github.com/sourcegraph/sourcegraph/internal/grpc"
+	"github.com/sourcegraph/sourcegraph/internal/grpc/defaults"
+	"github.com/sourcegraph/sourcegraph/internal/httpserver"
 	"github.com/sourcegraph/sourcegraph/internal/instrumentation"
-	"github.com/sourcegraph/sourcegraph/internal/logging"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
-	"github.com/sourcegraph/sourcegraph/internal/profiler"
+	"github.com/sourcegraph/sourcegraph/internal/requestclient"
+	"github.com/sourcegraph/sourcegraph/internal/requestinteraction"
 	sharedsearch "github.com/sourcegraph/sourcegraph/internal/search"
+	proto "github.com/sourcegraph/sourcegraph/internal/searcher/v1"
+	"github.com/sourcegraph/sourcegraph/internal/service"
+	"github.com/sourcegraph/sourcegraph/internal/tenant"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
-	"github.com/sourcegraph/sourcegraph/internal/tracer"
-	"github.com/sourcegraph/sourcegraph/internal/version"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
-
-var (
-	cacheDir    = env.Get("CACHE_DIR", "/tmp", "directory to store cached archives.")
-	cacheSizeMB = env.Get("SEARCHER_CACHE_SIZE_MB", "100000", "maximum size of the on disk cache in megabytes")
-
-	maxTotalPathsLengthRaw = env.Get("MAX_TOTAL_PATHS_LENGTH", "100000", "maximum sum of lengths of all paths in a single call to git archive")
-)
-
-const port = "3181"
-
-func frontendDB(observationCtx *observation.Context) (database.DB, error) {
-	logger := log.Scoped("frontendDB", "")
-	dsn := conf.GetServiceConnectionValueAndRestartOnChange(func(serviceConnections conftypes.ServiceConnections) string {
-		return serviceConnections.PostgresDSN
-	})
-	sqlDB, err := connections.EnsureNewFrontendDB(observationCtx, dsn, "searcher")
-	if err != nil {
-		return nil, err
-	}
-	return database.NewDB(logger, sqlDB), nil
-}
-
-func shutdownOnSignal(ctx context.Context, server *http.Server) error {
-	// Listen for shutdown signals. When we receive one attempt to clean up,
-	// but do an insta-shutdown if we receive more than one signal.
-	c := make(chan os.Signal, 2)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
-
-	// Once we receive one of the signals from above, continues with the shutdown
-	// process.
-	select {
-	case <-c:
-	case <-ctx.Done(): // still call shutdown below
-	}
-
-	go func() {
-		// If a second signal is received, exit immediately.
-		<-c
-		os.Exit(1)
-	}()
-
-	// Wait for at most for the configured shutdown timeout.
-	ctx, cancel := context.WithTimeout(ctx, goroutine.GracefulShutdownTimeout)
-	defer cancel()
-	// Stop accepting requests.
-	return server.Shutdown(ctx)
-}
 
 // setupTmpDir sets up a temporary directory on the same volume as the
 // cacheDir.
@@ -104,7 +45,7 @@ func shutdownOnSignal(ctx context.Context, server *http.Server) error {
 // they are zip files. In the case of comby the files are temporary so them
 // being deleted while read by comby is fine since it will maintain an open
 // FD.
-func setupTmpDir() error {
+func setupTmpDir(cacheDir string) error {
 	tmpRoot := filepath.Join(cacheDir, ".searcher.tmp")
 	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
 		return err
@@ -116,155 +57,83 @@ func setupTmpDir() error {
 	return nil
 }
 
-func run(logger log.Logger) error {
-	// Ready immediately
-	ready := make(chan struct{})
-	close(ready)
-	go debugserver.NewServerRoutine(ready).Start()
+func Start(ctx context.Context, observationCtx *observation.Context, ready service.ReadyFunc, cfg *Config) error {
+	logger := observationCtx.Logger
 
-	var cacheSizeBytes int64
-	if i, err := strconv.ParseInt(cacheSizeMB, 10, 64); err != nil {
-		return errors.Wrapf(err, "invalid int %q for SEARCHER_CACHE_SIZE_MB", cacheSizeMB)
-	} else {
-		cacheSizeBytes = i * 1000 * 1000
+	// Load and validate configuration.
+	if err := cfg.Validate(); err != nil {
+		return errors.Wrap(err, "failed to validate configuration")
 	}
 
-	maxTotalPathsLength, err := strconv.Atoi(maxTotalPathsLengthRaw)
-	if err != nil {
-		return errors.Wrapf(err, "invalid int %q for MAX_TOTAL_PATHS_LENGTH", maxTotalPathsLengthRaw)
-	}
-
-	if err := setupTmpDir(); err != nil {
+	if err := setupTmpDir(cfg.CacheDir); err != nil {
 		return errors.Wrap(err, "failed to setup TMPDIR")
 	}
 
+	git := gitserver.NewClient("searcher")
+
 	// Explicitly don't scope Store logger under the parent logger
-	storeObservationCtx := observation.NewContext(log.Scoped("Store", "searcher archives store"))
-
-	db, err := frontendDB(observation.NewContext(log.Scoped("db", "server frontend db")))
-	if err != nil {
-		return errors.Wrap(err, "failed to connect to frontend database")
-	}
-	git := gitserver.NewClient(db)
-
-	service := &search.Service{
-		Store: &search.Store{
-			FetchTar: func(ctx context.Context, repo api.RepoName, commit api.CommitID) (io.ReadCloser, error) {
-				// We pass in a nil sub-repo permissions checker and an internal actor here since
-				// searcher needs access to all data in the archive.
-				ctx = actor.WithInternalActor(ctx)
-				return git.ArchiveReader(ctx, nil, repo, gitserver.ArchiveOptions{
-					Treeish: string(commit),
-					Format:  gitserver.ArchiveFormatTar,
-				})
-			},
-			FetchTarPaths: func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
-				pathspecs := make([]gitdomain.Pathspec, len(paths))
-				for i, p := range paths {
-					pathspecs[i] = gitdomain.PathspecLiteral(p)
-				}
-				// We pass in a nil sub-repo permissions checker and an internal actor here since
-				// searcher needs access to all data in the archive.
-				ctx = actor.WithInternalActor(ctx)
-				return git.ArchiveReader(ctx, nil, repo, gitserver.ArchiveOptions{
-					Treeish:   string(commit),
-					Format:    gitserver.ArchiveFormatTar,
-					Pathspecs: pathspecs,
-				})
-			},
-			FilterTar:         search.NewFilter,
-			Path:              filepath.Join(cacheDir, "searcher-archives"),
-			MaxCacheSizeBytes: cacheSizeBytes,
-			Log:               storeObservationCtx.Logger,
-			ObservationCtx:    storeObservationCtx,
-			DB:                db,
+	storeObservationCtx := observation.NewContext(log.Scoped("Store"))
+	store := &search.Store{
+		FetchTar: func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
+			return git.ArchiveReader(ctx, repo, gitserver.ArchiveOptions{
+				Treeish: string(commit),
+				Format:  gitserver.ArchiveFormatTar,
+				Paths:   paths,
+			})
 		},
+		FilterTar:         search.NewFilterFactory(git),
+		Path:              filepath.Join(cfg.CacheDir, "searcher-archives"),
+		MaxCacheSizeBytes: int64(cfg.CacheSizeMB * 1000 * 1000),
+		BackgroundTimeout: cfg.BackgroundTimeout,
+		Logger:            storeObservationCtx.Logger,
+		ObservationCtx:    storeObservationCtx,
+	}
+	store.Start()
 
+	sService := &search.Service{
+		Store:   store,
 		Indexed: sharedsearch.Indexed(),
-
-		GitDiffSymbols: func(ctx context.Context, repo api.RepoName, commitA, commitB api.CommitID) ([]byte, error) {
-			// As this is an internal service call, we need an internal actor.
-			ctx = actor.WithInternalActor(ctx)
-			return git.DiffSymbols(ctx, repo, commitA, commitB)
+		GitChangedFiles: func(ctx context.Context, repo api.RepoName, commitA, commitB api.CommitID) (gitserver.ChangedFilesIterator, error) {
+			return git.ChangedFiles(ctx, repo, string(commitA), string(commitB))
 		},
-		MaxTotalPathsLength: maxTotalPathsLength,
-
-		Log: logger,
-	}
-	service.Store.Start()
-
-	// Set up handler middleware
-	handler := actor.HTTPMiddleware(logger, service)
-	handler = trace.HTTPMiddleware(logger, handler, conf.DefaultClient())
-	handler = instrumentation.HTTPMiddleware("", handler)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	g, ctx := errgroup.WithContext(ctx)
-
-	host := ""
-	if env.InsecureDev {
-		host = "127.0.0.1"
-	}
-	addr := net.JoinHostPort(host, port)
-	server := &http.Server{
-		ReadTimeout:  75 * time.Second,
-		WriteTimeout: 10 * time.Minute,
-		Addr:         addr,
-		BaseContext: func(_ net.Listener) context.Context {
-			return ctx
-		},
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// For cluster liveness and readiness probes
-			if r.URL.Path == "/healthz" {
-				w.WriteHeader(200)
-				_, _ = w.Write([]byte("ok"))
-				return
-			}
-			handler.ServeHTTP(w, r)
-		}),
+		MaxTotalPathsLength: cfg.MaxTotalGitArchivePathsLength,
+		Logger:              logger,
+		DisableHybridSearch: cfg.DisableHybridSearch,
 	}
 
-	// Listen
-	g.Go(func() error {
-		logger.Info("listening", log.String("addr", server.Addr))
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	})
+	grpcServer := defaults.NewServer(logger)
+	proto.RegisterSearcherServiceServer(grpcServer, search.NewGRPCServer(sService, cfg.ExhaustiveRequestLoggingEnabled))
 
-	// Shutdown
-	g.Go(func() error {
-		return shutdownOnSignal(ctx, server)
-	})
+	ready()
 
-	return g.Wait()
+	logger.Info("searcher: listening", log.String("addr", cfg.ListenAddress))
+
+	return goroutine.MonitorBackgroundRoutines(ctx, makeHTTPServer(logger, grpcServer, cfg.ListenAddress))
 }
 
-func Main() {
-	stdlog.SetFlags(0)
-	logging.Init() //nolint:staticcheck // Deprecated, but logs unmigrated to sourcegraph/log look really bad without this.
-	liblog := log.Init(log.Resource{
-		Name:       env.MyName,
-		Version:    version.Version(),
-		InstanceID: hostname.Get(),
-	}, log.NewSentrySinkWith(
-		log.SentrySink{
-			ClientOptions: sentry.ClientOptions{SampleRate: 0.2},
-		},
-	)) // Experimental: DevX is observing how sampling affects the errors signal
-	defer liblog.Sync()
+// makeHTTPServer creates a new *http.Server for the searcher endpoints and registers
+// it with methods on the given server. It multiplexes HTTP requests and gRPC requests
+// from a single port.
+func makeHTTPServer(logger log.Logger, grpcServer *grpc.Server, listenAddress string) goroutine.BackgroundRoutine {
+	// TODO: This should be removed, and gRPC only should be served instead.
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// For cluster liveness and readiness probes
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("ok"))
+			return
+		}
+		http.NotFoundHandler().ServeHTTP(w, r)
+	})
+	handler = actor.HTTPMiddleware(logger, handler)
+	handler = tenant.InternalHTTPMiddleware(logger, handler)
+	handler = requestclient.InternalHTTPMiddleware(handler)
+	handler = requestinteraction.HTTPMiddleware(handler)
+	handler = trace.HTTPMiddleware(logger, handler)
+	handler = instrumentation.HTTPMiddleware("", handler)
+	handler = internalgrpc.MultiplexHandlers(grpcServer, handler)
 
-	conf.Init()
-	go conf.Watch(liblog.Update(conf.GetLogSinks))
-	tracer.Init(log.Scoped("tracer", "internal tracer package"), conf.DefaultClient())
-	profiler.Init()
-
-	logger := log.Scoped("server", "the searcher service")
-
-	err := run(logger)
-	if err != nil {
-		logger.Fatal("searcher failed", log.Error(err))
-	}
+	return httpserver.NewFromAddr(listenAddress, &http.Server{
+		Handler: handler,
+	})
 }

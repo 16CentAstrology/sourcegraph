@@ -2,10 +2,10 @@ package search
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"hash"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/bmatcuk/doublestar"
@@ -13,39 +13,42 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
-	"github.com/sourcegraph/sourcegraph/schema"
 )
 
-// NewFilter calls gitserver to retrieve the ignore-file. If the file doesn't
-// exist we return an empty ignore.Matcher.
-func NewFilter(ctx context.Context, client gitserver.Client, repo api.RepoName, commit api.CommitID) (FilterFunc, error) {
-	ignoreFile, err := client.ReadFile(ctx, nil, repo, commit, ignore.IgnoreFile)
-	if err != nil {
-		// We do not ignore anything if the ignore file does not exist.
-		if strings.Contains(err.Error(), "file does not exist") {
-			return func(*tar.Header) bool {
-				return false
-			}, nil
-		}
-		return nil, err
-	}
+// NewFilterFactory creates a filter function that calls gitserver to retrieve the
+// ignore-file. If the file doesn't exist we return an empty ignore.Matcher.
+func NewFilterFactory(client gitserver.Client) func(ctx context.Context, repo api.RepoName, commit api.CommitID) (FilterFunc, error) {
+	return func(ctx context.Context, repo api.RepoName, commit api.CommitID) (FilterFunc, error) {
+		r, err := client.NewFileReader(ctx, repo, commit, ignore.IgnoreFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// We do not ignore anything if the ignore file does not exist.
+				return func(*tar.Header) bool {
+					return false
+				}, nil
+			}
 
-	ig, err := ignore.ParseIgnoreFile(bytes.NewReader(ignoreFile))
-	if err != nil {
-		return nil, err
-	}
-
-	return func(header *tar.Header) bool {
-		if header.Size > maxFileSize {
-			return true
+			return nil, err
 		}
-		return ig.Match(header.Name)
-	}, nil
+		defer r.Close()
+
+		ig, err := ignore.ParseIgnoreFile(r)
+		if err != nil {
+			return nil, err
+		}
+
+		return func(header *tar.Header) bool {
+			if header.Size > maxFileSize {
+				return true
+			}
+			return ig.Match(header.Name)
+		}, nil
+	}
 }
 
-func newSearchableFilter(c *schema.SiteConfiguration) *searchableFilter {
+func newSearchableFilter(searchLargeFiles []string) *searchableFilter {
 	return &searchableFilter{
-		SearchLargeFiles: c.SearchLargeFiles,
+		SearchLargeFiles: searchLargeFiles,
 	}
 }
 

@@ -1,13 +1,14 @@
-import React from 'react'
+import React, { type ReactElement } from 'react'
 
 import classNames from 'classnames'
 
-import { SearchMatch } from '@sourcegraph/shared/src/search/stream'
-import { ForwardReferenceExoticComponent } from '@sourcegraph/wildcard'
+import type { SearchMatch } from '@sourcegraph/shared/src/search/stream'
+import type { ForwardReferenceExoticComponent } from '@sourcegraph/wildcard'
 
-import { formatRepositoryStarCount } from '../util/stars'
+import { formatRepositoryStarCount } from '../util'
 
 import { CodeHostIcon } from './CodeHostIcon'
+import { LastSyncedIcon } from './LastSyncedIcon'
 import { SearchResultStar } from './SearchResultStar'
 
 import styles from './ResultContainer.module.scss'
@@ -18,10 +19,12 @@ export interface ResultContainerProps {
     titleClassName?: string
     resultClassName?: string
     repoStars?: number
+    repoLastFetched?: string
     resultType?: SearchMatch['type']
-    repoName: string
+    repoName?: string
     className?: string
     rankingDebug?: string
+    actions?: ReactElement | boolean
     onResultClicked?: () => void
 }
 
@@ -31,6 +34,8 @@ const accessibleResultType: Record<SearchMatch['type'], string> = {
     repo: 'repository',
     path: 'file path',
     commit: 'commit',
+    person: 'person',
+    team: 'team',
 }
 
 /**
@@ -51,6 +56,8 @@ export const ResultContainer: ForwardReferenceExoticComponent<
         repoName,
         className,
         rankingDebug,
+        actions,
+        repoLastFetched,
         as: Component = 'div',
         onResultClicked,
     } = props
@@ -61,33 +68,36 @@ export const ResultContainer: ForwardReferenceExoticComponent<
 
     return (
         <Component
-            className={classNames('test-search-result', styles.resultContainer, className)}
+            className={classNames('test-search-result', className, styles.resultContainer)}
             data-testid="result-container"
             data-result-type={resultType}
             onClick={trackReferencePanelClick}
             ref={reference}
         >
             <article aria-labelledby={`result-container-${index}`}>
-                <div className={styles.header} id={`result-container-${index}`}>
+                <header className={styles.header} id={`result-container-${index}`} data-result-header={true}>
                     {/* Add a result type to be read out to screen readers only, so that screen reader users can
                     easily scan the search results list (for example, by navigating by landmarks). */}
                     <span className="sr-only">{resultType ? accessibleResultType[resultType] : 'search'} result,</span>
-                    <CodeHostIcon repoName={repoName} className="text-muted flex-shrink-0 mr-1" />
+                    {repoName && <CodeHostIcon repoName={repoName} className="flex-shrink-0 mr-1" />}
                     <div
                         className={classNames(styles.headerTitle, titleClassName)}
                         data-testid="result-container-header"
                     >
                         {title}
                     </div>
+
+                    {actions}
                     {formattedRepositoryStarCount && (
                         <span className="d-flex align-items-center">
                             <SearchResultStar aria-label={`${repoStars} stars`} />
                             <span aria-hidden={true}>{formattedRepositoryStarCount}</span>
                         </span>
                     )}
-                </div>
+                    {repoLastFetched && <LastSyncedIcon lastSyncedTime={repoLastFetched} className="ml-2" />}
+                </header>
                 {rankingDebug && <div>{rankingDebug}</div>}
-                <div className={classNames(styles.result, resultClassName)}>{children}</div>
+                {children && <div className={classNames(styles.result, resultClassName)}>{children}</div>}
             </article>
         </Component>
     )

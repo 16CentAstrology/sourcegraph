@@ -1,21 +1,38 @@
 import { gql, useQuery } from '@sourcegraph/http-client'
 
-import { OrgFeatureFlagOverridesResult, OrgFeatureFlagOverridesVariables } from '../graphql-operations'
+import type { OrgFeatureFlagOverridesResult, OrgFeatureFlagOverridesVariables } from '../graphql-operations'
 
 // A union of all feature flags we currently have.
-// If there are no feature flags at the moment, this should be `never`.
-export type FeatureFlagName =
-    | 'quick-start-tour-for-authenticated-users'
-    | 'insight-polling-enabled'
-    | 'ab-visitor-tour-with-notebooks'
-    | 'ab-email-verification-alert'
-    | 'contrast-compliant-syntax-highlighting'
-    | 'admin-analytics-cache-disabled'
-    | 'search-input-show-history'
-    | 'search-results-keyboard-navigation'
-    | 'enable-streaming-git-blame'
-    | 'plg-enable-add-codehost-widget'
-    | 'enable-rbac'
+export const FEATURE_FLAGS = [
+    'admin-analytics-cache-disabled',
+    'admin-onboarding',
+    'auditlog-expansion',
+    'blob-page-switch-areas-shortcuts',
+    'cody-chat-mock-test',
+    'contrast-compliant-syntax-highlighting',
+    'enable-ownership-panels',
+    'enable-simple-search',
+    'web-next',
+    'web-next-rollout',
+    'web-next-toggle',
+    'end-user-onboarding',
+    'insight-polling-enabled',
+    'opencodegraph',
+    'own-analytics',
+    'own-promote',
+    'plg-enable-add-codehost-widget',
+    'quick-start-tour-for-authenticated-users',
+    'repository-metadata',
+    'search-content-based-lang-detection',
+    'search-debug',
+    'signup-survey-enabled',
+    'sourcegraph-operator-site-admin-hide-maintenance',
+    'sourcegraph-cloud-managed-feature-flags-warning-shown',
+    'ab-shortened-install-first-signup-flow-cody-2024-04',
+    'batches-github-app-integration',
+] as const
+
+export type FeatureFlagName = typeof FEATURE_FLAGS[number]
 
 interface OrgFlagOverride {
     orgID: string

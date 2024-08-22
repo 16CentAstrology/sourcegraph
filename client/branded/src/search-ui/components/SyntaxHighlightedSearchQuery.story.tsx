@@ -1,4 +1,4 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 
 import { SearchPatternType } from '@sourcegraph/shared/src/graphql-operations'
 import { Text } from '@sourcegraph/wildcard'
@@ -8,14 +8,12 @@ import { SyntaxHighlightedSearchQuery } from './SyntaxHighlightedSearchQuery'
 
 const config: Meta = {
     title: 'branded/search-ui/SyntaxHighlightedSearchQuery',
-    parameters: {
-        chromatic: { viewports: [480] },
-    },
+    parameters: {},
 }
 
 export default config
 
-export const SyntaxHighlightedSearchQueryStory: Story = () => (
+export const SyntaxHighlightedSearchQueryStory: StoryFn = () => (
     <BrandedStory>
         {() => (
             <Text>

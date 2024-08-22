@@ -1,19 +1,22 @@
-import React, { useEffect, useCallback, useState, useMemo } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import classNames from 'classnames'
-import { RouteComponentProps } from 'react-router'
+import { useLocation } from 'react-router-dom'
 
 import { pluralize } from '@sourcegraph/common'
 import { dataOrThrowErrors, useQuery } from '@sourcegraph/http-client'
-import { Settings } from '@sourcegraph/shared/src/schema/settings.schema'
-import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { buildCloudTrialURL } from '@sourcegraph/shared/src/util/url'
-import { Button, PageHeader, Link, Container, H3, Text, screenReaderAnnounce } from '@sourcegraph/wildcard'
+import type { Settings } from '@sourcegraph/shared/src/schema/settings.schema'
+import type { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { Button, Container, H3, Link, PageHeader, screenReaderAnnounce, Text } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../../auth'
+import type { AuthenticatedUser } from '../../../auth'
 import { isBatchChangesExecutionEnabled } from '../../../batches'
 import { BatchChangesIcon } from '../../../batches/icons'
+import { canWriteBatchChanges, NO_ACCESS_BATCH_CHANGES_WRITE, NO_ACCESS_NAMESPACE } from '../../../batches/utils'
+import { useUrlSearchParamsForConnectionState } from '../../../components/FilteredConnection/hooks/connectionState'
 import { useShowMorePagination } from '../../../components/FilteredConnection/hooks/useShowMorePagination'
 import {
     ConnectionContainer,
@@ -25,17 +28,16 @@ import {
     SummaryContainer,
 } from '../../../components/FilteredConnection/ui'
 import { Page } from '../../../components/Page'
-import {
-    ListBatchChange,
-    Scalars,
-    BatchChangesVariables,
-    BatchChangesResult,
+import type {
     BatchChangesByNamespaceResult,
     BatchChangesByNamespaceVariables,
+    BatchChangesResult,
+    BatchChangesVariables,
     GetLicenseAndUsageInfoResult,
     GetLicenseAndUsageInfoVariables,
+    ListBatchChange,
+    Scalars,
 } from '../../../graphql-operations'
-import { eventLogger } from '../../../tracking/eventLogger'
 
 import { BATCH_CHANGES, BATCH_CHANGES_BY_NAMESPACE, GET_LICENSE_AND_USAGE_INFO } from './backend'
 import { BatchChangeListFilters } from './BatchChangeListFilters'
@@ -48,14 +50,13 @@ import { useBatchChangeListFilters } from './useBatchChangeListFilters'
 
 import styles from './BatchChangeListPage.module.scss'
 
-export interface BatchChangeListPageProps
-    extends TelemetryProps,
-        Pick<RouteComponentProps, 'location'>,
-        SettingsCascadeProps<Settings> {
-    canCreate: boolean
+export interface BatchChangeListPageProps extends TelemetryProps, TelemetryV2Props, SettingsCascadeProps<Settings> {
+    // canCreate indicates whether or not the currently-authenticated user has sufficient
+    // permissions to create a batch change in whatever context this list page is being
+    // presented. If not, canCreate will be a string reason why the user cannot create.
+    canCreate: true | string
     headingElement: 'h1' | 'h2'
     namespaceID?: Scalars['ID']
-    isSourcegraphDotCom: boolean
     authenticatedUser: AuthenticatedUser | null
     /** For testing only. */
     openTab?: SelectedTab
@@ -72,20 +73,26 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
     canCreate,
     namespaceID,
     headingElement,
-    location,
     openTab,
     settingsCascade,
     telemetryService,
-    isSourcegraphDotCom,
+    telemetryRecorder,
     authenticatedUser,
 }) => {
-    useEffect(() => telemetryService.logViewEvent('BatchChangesListPage'), [telemetryService])
+    const location = useLocation()
+    useEffect(() => {
+        telemetryService.logViewEvent('BatchChangesListPage')
+        telemetryRecorder.recordEvent('batchChanges.list', 'view')
+    }, [telemetryService, telemetryRecorder])
 
     const isExecutionEnabled = isBatchChangesExecutionEnabled(settingsCascade)
+    const isBatchChangesLicensed = !!window.context.licenseInfo?.batchChanges?.unrestricted
+    const canUseBatchChanges = !!window.context.licenseInfo?.batchChanges
 
-    const { selectedFilters, setSelectedFilters, selectedStates } = useBatchChangeListFilters()
+    const { selectedFilters, setSelectedFilters, availableFilters } = useBatchChangeListFilters({ isExecutionEnabled })
+    const isSourcegraphDotCom = Boolean(window.context?.sourcegraphDotComMode)
     const [selectedTab, setSelectedTab] = useState<SelectedTab>(
-        openTab ?? (isSourcegraphDotCom ? 'gettingStarted' : 'batchChanges')
+        openTab ?? (isSourcegraphDotCom || !canUseBatchChanges ? 'gettingStarted' : 'batchChanges')
     )
 
     // We keep state to track to the last total count of batch changes in the connection
@@ -110,6 +117,7 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
         { onCompleted: onUsageCheckCompleted }
     )
 
+    const connectionState = useUrlSearchParamsForConnectionState()
     const { connection, error, loading, fetchMore, hasNextPage } = useShowMorePagination<
         BatchChangesByNamespaceResult | BatchChangesResult,
         BatchChangesByNamespaceVariables | BatchChangesVariables,
@@ -117,13 +125,11 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
     >({
         query: namespaceID ? BATCH_CHANGES_BY_NAMESPACE : BATCH_CHANGES,
         variables: {
-            namespaceID,
-            states: selectedStates,
-            first: BATCH_CHANGES_PER_PAGE_COUNT,
-            after: null,
+            ...(namespaceID ? { namespaceID } : undefined),
+            states: selectedFilters,
             viewerCanAdminister: null,
         },
-        options: { useURL: true },
+        options: { pageSize: BATCH_CHANGES_PER_PAGE_COUNT },
         getConnection: result => {
             const data = dataOrThrowErrors(result)
             if (!namespaceID) {
@@ -138,6 +144,7 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
 
             return data.node.batchChanges
         },
+        state: connectionState,
     })
 
     useEffect(() => {
@@ -155,44 +162,54 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
             <PageHeader
                 className="test-batches-list-page mb-3"
                 actions={
-                    canCreate ? (
-                        <NewBatchChangeButton to={`${location.pathname}/create`} />
-                    ) : (
+                    isSourcegraphDotCom ? (
                         <Button
                             as={Link}
-                            to={buildCloudTrialURL(authenticatedUser, 'batch')}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            to="https://sourcegraph.com"
                             variant="primary"
-                            onClick={() => eventLogger.log('ClickedOnCloudCTA', { cloudCtaType: 'TryBatchChanges' })}
+                            onClick={() => {
+                                EVENT_LOGGER.log('ClickedOnEnterpriseCTA', { location: 'TryBatchChanges' })
+                                telemetryRecorder.recordEvent('batchChanges.enterpriseCTA', 'click', {
+                                    metadata: { location: 0 },
+                                })
+                            }}
                         >
-                            Try Batch Changes
+                            Get Sourcegraph Enterprise
                         </Button>
+                    ) : (
+                        <NewBatchChangeButton
+                            to={`${location.pathname}/create`}
+                            canCreate={canCreate}
+                            telemetryRecorder={telemetryRecorder}
+                        />
                     )
                 }
                 headingElement={headingElement}
-                description="Run custom code over hundreds of repositories and manage the resulting changesets."
+                description="Run and manage large-scale changes across many repositories."
             >
                 <PageHeader.Heading as="h2" styleAs="h1">
                     <PageHeader.Breadcrumb icon={BatchChangesIcon}>Batch Changes</PageHeader.Breadcrumb>
                 </PageHeader.Heading>
             </PageHeader>
-            <BatchChangesListIntro isLicensed={licenseAndUsageInfo?.batchChanges || licenseAndUsageInfo?.campaigns} />
-            <BatchChangeListTabHeader
-                selectedTab={selectedTab}
-                setSelectedTab={setSelectedTab}
-                isSourcegraphDotCom={isSourcegraphDotCom}
-            />
+            <BatchChangesListIntro isLicensed={isBatchChangesLicensed} viewerIsAdmin={!!authenticatedUser?.siteAdmin} />
+            {!isSourcegraphDotCom && canUseBatchChanges && (
+                <BatchChangeListTabHeader
+                    selectedTab={selectedTab}
+                    setSelectedTab={setSelectedTab}
+                    telemetryRecorder={telemetryRecorder}
+                />
+            )}
             {selectedTab === 'gettingStarted' && (
                 <GettingStarted
+                    canCreate={canCreate}
                     isSourcegraphDotCom={isSourcegraphDotCom}
-                    authenticatedUser={authenticatedUser}
                     className="mb-4"
+                    telemetryRecorder={telemetryRecorder}
                 />
             )}
             {selectedTab === 'batchChanges' && (
                 <>
-                    <BatchChangeStatsBar className="mb-4" />
+                    {!namespaceID && <BatchChangeStatsBar className="mb-4" />}
                     <Container className="mb-4">
                         <ConnectionContainer>
                             <div className={styles.filtersRow}>
@@ -206,10 +223,10 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
                                 )}
 
                                 <BatchChangeListFilters
+                                    filters={availableFilters}
+                                    selectedFilters={selectedFilters}
+                                    onFiltersChange={setSelectedFilters}
                                     className="m-0"
-                                    isExecutionEnabled={isExecutionEnabled}
-                                    value={selectedFilters}
-                                    onChange={setSelectedFilters}
                                 />
                             </div>
                             {error && <ConnectionError errors={[error.message]} />}
@@ -233,13 +250,15 @@ export const BatchChangeListPage: React.FunctionComponent<React.PropsWithChildre
                                     <ConnectionSummary
                                         centered={true}
                                         noSummaryIfAllNodesVisible={true}
-                                        first={BATCH_CHANGES_PER_PAGE_COUNT}
                                         connection={connection}
                                         noun="batch change"
                                         pluralNoun="batch changes"
                                         hasNextPage={hasNextPage}
                                         emptyElement={
-                                            <BatchChangeListEmptyElement canCreate={canCreate} location={location} />
+                                            <BatchChangeListEmptyElement
+                                                canCreate={canCreate}
+                                                telemetryRecorder={telemetryRecorder}
+                                            />
                                         }
                                     />
                                     {hasNextPage && <ShowMoreButton centered={true} onClick={fetchMore} />}
@@ -264,14 +283,24 @@ export interface NamespaceBatchChangeListPageProps extends Omit<BatchChangeListP
 export const NamespaceBatchChangeListPage: React.FunctionComponent<
     React.PropsWithChildren<NamespaceBatchChangeListPageProps>
 > = ({ authenticatedUser, namespaceID, ...props }) => {
-    // A user should only see the button to create a batch change in a namespace if it is
-    // their namespace (user namespace), or they belong to it (organization namespace)
-    const canCreateInThisNamespace = useMemo(
-        () =>
+    // A user should only see the button to create a batch change in a namespace if they
+    // have permission to create batch changes and either they are looking at their user
+    // namespace or the namespace of one of the organizations they are a member of.
+    const canCreateInThisNamespace: true | string = useMemo(() => {
+        if (authenticatedUser.siteAdmin) {
+            return true
+        }
+        if (!canWriteBatchChanges(authenticatedUser)) {
+            return NO_ACCESS_BATCH_CHANGES_WRITE
+        }
+        if (
             authenticatedUser.id === namespaceID ||
-            authenticatedUser.organizations.nodes.map(org => org.id).includes(namespaceID),
-        [authenticatedUser, namespaceID]
-    )
+            authenticatedUser.organizations.nodes.map(org => org.id).includes(namespaceID)
+        ) {
+            return true
+        }
+        return NO_ACCESS_NAMESPACE
+    }, [authenticatedUser, namespaceID])
 
     return (
         <BatchChangeListPage
@@ -283,26 +312,33 @@ export const NamespaceBatchChangeListPage: React.FunctionComponent<
     )
 }
 
-interface BatchChangeListEmptyElementProps extends Pick<BatchChangeListPageProps, 'location' | 'canCreate'> {}
+interface BatchChangeListEmptyElementProps extends Pick<BatchChangeListPageProps, 'canCreate' | 'telemetryRecorder'> {}
 
 const BatchChangeListEmptyElement: React.FunctionComponent<
     React.PropsWithChildren<BatchChangeListEmptyElementProps>
-> = ({ canCreate, location }) => (
-    <div className="w-100 py-5 text-center">
-        <Text>
-            <strong>No batch changes have been created.</strong>
-        </Text>
-        {canCreate ? <NewBatchChangeButton to={`${location.pathname}/create`} /> : null}
-    </div>
-)
+> = ({ canCreate, telemetryRecorder }) => {
+    const location = useLocation()
+    return (
+        <div className="w-100 py-5 text-center">
+            <Text>
+                <strong>No batch changes have been created.</strong>
+            </Text>
+            <NewBatchChangeButton
+                to={`${location.pathname}/create`}
+                canCreate={canCreate}
+                telemetryRecorder={telemetryRecorder}
+            />
+        </div>
+    )
+}
 
 const BatchChangeListTabHeader: React.FunctionComponent<
     React.PropsWithChildren<{
         selectedTab: SelectedTab
         setSelectedTab: (selectedTab: SelectedTab) => void
-        isSourcegraphDotCom: boolean
-    }>
-> = ({ selectedTab, setSelectedTab, isSourcegraphDotCom }) => {
+    }> &
+        TelemetryV2Props
+> = ({ selectedTab, setSelectedTab, telemetryRecorder }) => {
     const onSelectBatchChanges = useCallback<React.MouseEventHandler>(
         event => {
             event.preventDefault()
@@ -320,27 +356,26 @@ const BatchChangeListTabHeader: React.FunctionComponent<
     return (
         <nav className="overflow-auto mb-2" aria-label="Batch Changes">
             <div className="nav nav-tabs d-inline-flex d-sm-flex flex-nowrap text-nowrap" role="tablist">
-                {!isSourcegraphDotCom && (
-                    <div className="nav-item">
-                        <Link
-                            to=""
-                            onClick={onSelectBatchChanges}
-                            className={classNames('nav-link', selectedTab === 'batchChanges' && 'active')}
-                            aria-selected={selectedTab === 'batchChanges'}
-                            role="tab"
-                        >
-                            <span className="text-content" data-tab-content="All batch changes">
-                                All batch changes
-                            </span>
-                        </Link>
-                    </div>
-                )}
+                <div className="nav-item">
+                    <Link
+                        to=""
+                        onClick={onSelectBatchChanges}
+                        className={classNames('nav-link', selectedTab === 'batchChanges' && 'active')}
+                        aria-selected={selectedTab === 'batchChanges'}
+                        role="tab"
+                    >
+                        <span className="text-content" data-tab-content="All batch changes">
+                            All batch changes
+                        </span>
+                    </Link>
+                </div>
                 <div className="nav-item">
                     <Link
                         to=""
                         onClick={event => {
                             onSelectGettingStarted(event)
-                            eventLogger.log('batch_change_homepage:getting_started:clicked')
+                            EVENT_LOGGER.log('batch_change_homepage:getting_started:clicked')
+                            telemetryRecorder.recordEvent('batchChanges.gettingStarted', 'click')
                         }}
                         className={classNames('nav-link', selectedTab === 'gettingStarted' && 'active')}
                         aria-selected={selectedTab === 'gettingStarted'}

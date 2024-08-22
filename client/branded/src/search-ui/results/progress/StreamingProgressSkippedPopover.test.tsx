@@ -1,8 +1,11 @@
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import sinon from 'sinon'
+import { describe, expect, it } from 'vitest'
 
-import { Progress } from '@sourcegraph/shared/src/search/stream'
+import type { Progress } from '@sourcegraph/shared/src/search/stream'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
+import { NOOP_TELEMETRY_SERVICE } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { assertAriaDisabled, assertAriaEnabled } from '@sourcegraph/testing'
 import { renderWithBrandedContext } from '@sourcegraph/wildcard/src/testing'
 
@@ -16,7 +19,7 @@ describe('StreamingProgressSkippedPopover', () => {
             repositoriesCount: 2,
             skipped: [
                 {
-                    reason: 'excluded-fork',
+                    reason: 'repository-fork',
                     message: '10k forked repositories excluded',
                     severity: 'info',
                     title: '10k forked repositories excluded',
@@ -67,7 +70,13 @@ describe('StreamingProgressSkippedPopover', () => {
         }
         expect(
             renderWithBrandedContext(
-                <StreamingProgressSkippedPopover progress={progress} onSearchAgain={sinon.spy()} />
+                <StreamingProgressSkippedPopover
+                    query=""
+                    progress={progress}
+                    telemetryService={NOOP_TELEMETRY_SERVICE}
+                    telemetryRecorder={noOpTelemetryRecorder}
+                    onSearchAgain={sinon.spy()}
+                />
             ).asFragment()
         ).toMatchSnapshot()
     })
@@ -79,7 +88,7 @@ describe('StreamingProgressSkippedPopover', () => {
             repositoriesCount: 2,
             skipped: [
                 {
-                    reason: 'excluded-fork',
+                    reason: 'repository-fork',
                     message: '10k forked repositories excluded',
                     severity: 'info',
                     title: '10k forked repositories excluded',
@@ -87,7 +96,15 @@ describe('StreamingProgressSkippedPopover', () => {
             ],
         }
 
-        renderWithBrandedContext(<StreamingProgressSkippedPopover progress={progress} onSearchAgain={sinon.spy()} />)
+        renderWithBrandedContext(
+            <StreamingProgressSkippedPopover
+                query=""
+                progress={progress}
+                telemetryService={NOOP_TELEMETRY_SERVICE}
+                telemetryRecorder={noOpTelemetryRecorder}
+                onSearchAgain={sinon.spy()}
+            />
+        )
         expect(screen.queryByTestId('popover-form')).not.toBeInTheDocument()
     })
 
@@ -98,7 +115,7 @@ describe('StreamingProgressSkippedPopover', () => {
             repositoriesCount: 2,
             skipped: [
                 {
-                    reason: 'excluded-fork',
+                    reason: 'repository-fork',
                     message: '10k forked repositories excluded',
                     severity: 'info',
                     title: '10k forked repositories excluded',
@@ -110,7 +127,15 @@ describe('StreamingProgressSkippedPopover', () => {
             ],
         }
 
-        renderWithBrandedContext(<StreamingProgressSkippedPopover progress={progress} onSearchAgain={sinon.spy()} />)
+        renderWithBrandedContext(
+            <StreamingProgressSkippedPopover
+                query=""
+                progress={progress}
+                telemetryService={NOOP_TELEMETRY_SERVICE}
+                telemetryRecorder={noOpTelemetryRecorder}
+                onSearchAgain={sinon.spy()}
+            />
+        )
         const form = screen.getByTestId('popover-form')
         const searchAgainButton = within(form).getByRole('button')
         expect(searchAgainButton).toBeInTheDocument()
@@ -124,7 +149,7 @@ describe('StreamingProgressSkippedPopover', () => {
             repositoriesCount: 2,
             skipped: [
                 {
-                    reason: 'excluded-fork',
+                    reason: 'repository-fork',
                     message: '10k forked repositories excluded',
                     severity: 'info',
                     title: '10k forked repositories excluded',
@@ -156,7 +181,15 @@ describe('StreamingProgressSkippedPopover', () => {
             ],
         }
 
-        renderWithBrandedContext(<StreamingProgressSkippedPopover progress={progress} onSearchAgain={sinon.spy()} />)
+        renderWithBrandedContext(
+            <StreamingProgressSkippedPopover
+                query=""
+                progress={progress}
+                telemetryService={NOOP_TELEMETRY_SERVICE}
+                telemetryRecorder={noOpTelemetryRecorder}
+                onSearchAgain={sinon.spy()}
+            />
+        )
 
         const checkboxes = screen.getAllByTestId(/^streaming-progress-skipped-suggest-check/)
         expect(checkboxes).toHaveLength(3)
@@ -175,7 +208,7 @@ describe('StreamingProgressSkippedPopover', () => {
             repositoriesCount: 2,
             skipped: [
                 {
-                    reason: 'excluded-fork',
+                    reason: 'repository-fork',
                     message: '10k forked repositories excluded',
                     severity: 'info',
                     title: '10k forked repositories excluded',
@@ -207,7 +240,15 @@ describe('StreamingProgressSkippedPopover', () => {
             ],
         }
 
-        renderWithBrandedContext(<StreamingProgressSkippedPopover progress={progress} onSearchAgain={sinon.spy()} />)
+        renderWithBrandedContext(
+            <StreamingProgressSkippedPopover
+                query=""
+                progress={progress}
+                telemetryService={NOOP_TELEMETRY_SERVICE}
+                telemetryRecorder={noOpTelemetryRecorder}
+                onSearchAgain={sinon.spy()}
+            />
+        )
 
         const checkboxes = screen.getAllByTestId(/^streaming-progress-skipped-suggest-check/)
         expect(checkboxes).toHaveLength(3)
@@ -238,7 +279,7 @@ describe('StreamingProgressSkippedPopover', () => {
                     },
                 },
                 {
-                    reason: 'excluded-fork',
+                    reason: 'repository-fork',
                     message: '10k forked repositories excluded',
                     severity: 'info',
                     title: '10k forked repositories excluded',
@@ -262,7 +303,15 @@ describe('StreamingProgressSkippedPopover', () => {
 
         const searchAgain = sinon.spy()
 
-        renderWithBrandedContext(<StreamingProgressSkippedPopover progress={progress} onSearchAgain={searchAgain} />)
+        renderWithBrandedContext(
+            <StreamingProgressSkippedPopover
+                query=""
+                progress={progress}
+                telemetryService={NOOP_TELEMETRY_SERVICE}
+                telemetryRecorder={noOpTelemetryRecorder}
+                onSearchAgain={searchAgain}
+            />
+        )
 
         const checkboxes = screen.getAllByTestId(/^streaming-progress-skipped-suggest-check/)
         expect(checkboxes).toHaveLength(3)

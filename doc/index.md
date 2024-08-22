@@ -1,123 +1,69 @@
-# Sourcegraph
+<style>
 
-Sourcegraph is a code search and intelligence platform. Devs use it to search, understand, and fix code across large codebases.
+.markdown-body .cards {
+  display: flex;
+  align-items: stretch;
+}
 
-## [Sourcegraph.com/search](https://sourcegraph.com/search)
+.markdown-body .cards .card {
+  flex: 1;
+  margin: 0.5em;
+  color: var(--text-color);
+  border-radius: 4px;
+  border: 1px solid var(--sidebar-nav-active-bg);
+  padding: 1.5rem;
+  padding-top: 1.25rem;
+}
 
-[Sourcegraph.com](https://sourcegraph.com/search) lets you try Sourcegraph instantly on 2 million+ open-source repositories.
+.markdown-body .cards .card:hover {
+  color: var(--link-color);
+}
 
-## Sourcegraph Cloud for private code
+.markdown-body .cards .card span {
+  color: var(--link-color);
+  font-weight: bold;
+}
 
-<div>
-  <a class="cloud-cta" href="https://signup.sourcegraph.com" target="_blank" rel="noopener noreferrer">
-    <div class="cloud-cta-copy">
-      <h2>Sourcegraph Cloud</h2>
-      <h3>A single-tenant instance managed by Sourcegraph</h3>
-    </div>
-    <div class="cloud-cta-btn-container">
-      <div class="visual-btn">Sign up</div>
-    </div>
-  </a>
-</div>
+</style>
 
-## Self-hosted for private code
+<img alt="Sourcegraph logo" src="/assets/sourcegraph-logo-dark.svg" width="50%" class="theme-dark-only"><img alt="Sourcegraph logo" src="/assets/sourcegraph-logo-light.svg" width="50%" class="theme-light-only"><span class="sr-only">Sourcegraph</span>
 
-<div class="grid">
-  <!-- AWS One Click-->
-  <a class="btn-app btn" href="/admin/deploy/machine-images/aws-oneclick">
-    <img alt="aws-logo" src="/assets/other-logos/aws-light.svg" class="theme-light-only" />
-    <img alt="aws-logo" src="/assets/other-logos/aws-dark.svg" class="theme-dark-only" />
-    <h3>AWS One-Click</h3>
-    <p>Deploy onto AWS in one click (AMI)</p>
-  </a>
-</div>
-<div class="grid">
-  <!-- GCE Images-->
-  <a class="btn-app btn" href="/admin/deploy/machine-images/gce">
-    <img alt="aws-logo" src="https://storage.googleapis.com/sourcegraph-resource-estimator/assets/googlecloud.png" />
-    <h3>Google Compute Engine</h3>
-    <p>Launch quickly using a GCE machine image</p>
-  </a>
-</div>
-<div class="grid">
-  <!-- Azure -->
-  <a class="btn-app btn" href="/admin/deploy/single-node/script">
-    <img alt="azure-logo" src="https://storage.googleapis.com/sourcegraph-resource-estimator/assets/azure.png"/>
-    <h3>Azure</h3>
-    <p>Deploy onto Microsoft Azure<br/>(install script)</p>
-  </a>
-  <!-- Digital Ocean -->
-  <a class="btn-app btn" href="/admin/deploy/single-node/script">
-    <img alt="digital-ocean-logo" src="https://storage.googleapis.com/sourcegraph-resource-estimator/assets/DigitalOcean.png"/>
-    <h3>DigitalOcean</h3>
-    <p>Deploy onto DigitalOcean<br/>(install script)</p>
-  </a>
-  <!-- Others -->
-  <a class="btn-app btn" href="/admin/deploy/single-node/script">
-    <img alt="private-cloud-logo" src="https://storage.googleapis.com/sourcegraph-resource-estimator/assets/cloud.png"/>
-    <h3>Script install</h3>
-    <p>Deploy on any Linux machine using our script</p>
-  </a>
-</div>
+Sourcegraph is a Code AI platform that deeply understands your code, no matter how large or where it’s hosted, to power modern developer experiences.
 
-## Enterprise options
-
-For our largest customers, we also offer a Kubernetes multi-node cluster deployment and enterprise support.
-
-<div class="grid">
-  <!-- Kubernetes -->
-  <a class="btn-app btn" href="/admin/deploy/kubernetes">
-    <img alt="kubernetes-logo" src="https://storage.googleapis.com/sourcegraph-resource-estimator/assets/kubernetes.png"/>
-    <h3>Kubernetes</h3>
-	  <p>Deploy a multi-node cluster</p>
-    <p><strong>Enterprise-only</strong></p>
-  </a>
-</div>
-
-## Non-production
-
-<div class="grid">
-  <a class="btn-app btn" href="/admin/deploy/docker-single-container">
-    <img alt="docker-logo" src="https://storage.googleapis.com/sourcegraph-resource-estimator/assets/Docker.png"/>
-    <h3>Docker Container</h3>
-    <p>Spin up a local Sourcegraph instance with pure docker</p>
-  </a>
-  <a class="btn-app btn" href="/admin/deploy/single-node/k3s">
-    <img alt="k3s-logo" src="/assets/other-logos/k3s.png"/>
-    <h3>K3s</h3>
-    <p>Spin up a local Sourcegraph instance with Kubernetes</p>
-  </a>
-  <a class="btn-app btn" href="/admin/deploy/single-node/minikube">
-    <img alt="minikube-logo" src="/assets/other-logos/minikube.png"/>
-    <h3>Minikube</h3>
-    <p>Spin up a local Sourcegraph instance with Kubernetes</p>
-  </a>
-  <div></div>
-</div>
+- **Code search:** Search all of your repositories across all branches and all code hosts
+- **Code intelligence:** Navigate code, find references, see code owners, trace history, and more
+- **Fix & refactor:** Roll out and track large-scale changes and migrations across repos at once
+- **AI code assistant**: Use Cody to read, write, and understand your entire codebase faster
 
 ## Quickstart
 
-<div class="getting-started">
-  <a href="getting-started" class="btn" alt="Run through the Quickstart guide">
-    <span>Sourcegraph 101</span>
-    <p>Learn how to use Sourcegraph.</p>
-  </a>
-  <a href="getting-started/tour" class="btn" alt="Read the src reference">
-    <span>Sourcegraph Tour</span>
-    <p>Take a tour of Sourcegraph’s features using real-world examples and use cases.</p>
-  </a>
+<div class="cards">
+  <a class="card text-left" href="https://sourcegraph.com/cody"><b>Get Cody</b><p>Write, fix, and maintain code with Sourcegraph’s AI coding assistant, Cody.
+</p></a>
+  <a class="card text-left" href="https://sourcegraph.com/search"><b>Try Code Search</b><p>Search all of your repositories across all branches and all code hosts.</p></a>
+</div>
+<div class="cards">
+   <a class="card text-left" href="/getting-started"><b>Sourcegraph 101</b><p>Learn how to use Sourcegraph.</p></a>
+  <a class="card text-left" href="/getting-started/tour"><b>Sourcegaph Tour</b><p>Take a tour of Sourcegraph’s features using real-world examples and use cases.</p></a>
 </div>
 
-## Community
+## Main Features
 
-* [Blog](https://about.sourcegraph.com/blog/)
-* [Discord](https://discord.gg/s2qDtYGnAE)
-* [Twitter](https://twitter.com/sourcegraph)
-* [Issue tracker](https://github.com/sourcegraph/sourcegraph/issues)
-* [Contact us](https://about.sourcegraph.com/contact)
+Some of the main Sourcegraph features include:
 
-## Explanations
+| **Feature**                    | **Description**                                                                                                                        |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Cody**            | Cody is a free AI coding assistant that writes, fixes, and maintains your code      |
+| **Code Navigation**            | Jump-to-definition, find references, and other IDE-like code browsing features on any branch, commit, or PR/code review      |
+| **Code Insights**              | Reveal high-level information about your codebase at its current state and over time, to track migrations, version usage, vulnerability remediation, ownership, and more |
+| **Batch Changes**              | Make large-scale code changes across many repositories and codehosts                                                              |
+| **Integrations**               | With code hosts, code review tools, editors, web browsers, etc.                                                                   |
+| **Notebooks**                  | Pair code and markdown to create powerful live and persistent documentation                                                      |
 
-- [About deploying Sourcegraph, upgrades, etc.](/admin/deploy.md)
-- [How GitHub code search compares to Sourcegraph](https://docs.sourcegraph.com/getting-started/github-vs-sourcegraph)
-- [How Sourcegraph is licensed](https://docs.sourcegraph.com/getting-started/oss-enterprise)
+## What's New
+
+Stay in sync and get the latest news on Sourcegaph products, technologies, and culture. [Read the blog →](https://sourcegraph.com/blog)
+
+## Join our Community
+
+If you have questions about anything related to Sourcegraph, you're always welcome to [ask our community](https://community.sourcegraph.com), [Discord](https://discord.gg/s2qDtYGnAE), and [X](https://twitter.com/sourcegraph).

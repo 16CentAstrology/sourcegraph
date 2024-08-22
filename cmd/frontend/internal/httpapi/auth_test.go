@@ -8,13 +8,15 @@ import (
 	"net/url"
 	"testing"
 
-	mockrequire "github.com/derision-test/go-mockgen/testutil/require"
+	mockrequire "github.com/derision-test/go-mockgen/v2/testutil/require"
 	"github.com/sourcegraph/log/logtest"
 	"github.com/stretchr/testify/require"
 
-	"github.com/sourcegraph/sourcegraph/internal/actor"
+	sgactor "github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
+	"github.com/sourcegraph/sourcegraph/internal/dotcom"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 )
@@ -25,7 +27,7 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 			db,
 			logtest.NoOp(t),
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				actor := actor.FromContext(r.Context())
+				actor := sgactor.FromContext(r.Context())
 				if actor.IsAuthenticated() {
 					_, _ = fmt.Fprintf(w, "user %v", actor.UID)
 				} else {
@@ -45,8 +47,8 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		}
 	}
 
-	db := database.NewMockDB()
-	db.UserExternalAccountsFunc.SetDefaultReturn(database.NewMockUserExternalAccountsStore())
+	db := dbmocks.NewMockDB()
+	db.UserExternalAccountsFunc.SetDefaultReturn(dbmocks.NewMockUserExternalAccountsStore())
 	t.Run("no header", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		checkHTTPResponse(t, db, req, http.StatusOK, "no user")
@@ -56,7 +58,7 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 	// auth middleware.
 	t.Run("no header, actor present", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
-		req = req.WithContext(actor.WithActor(context.Background(), &actor.Actor{UID: 123}))
+		req = req.WithContext(sgactor.WithActor(context.Background(), &sgactor.Actor{UID: 123}))
 		checkHTTPResponse(t, db, req, http.StatusOK, "user 123")
 	})
 
@@ -76,25 +78,34 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		})
 	}
 
+	t.Run("license check bypasses handler in dotcom mode", func(t *testing.T) {
+		dotcom.MockSourcegraphDotComMode(t, true)
+
+		req, _ := http.NewRequest("GET", "/.api/license/check", nil)
+		req.Header.Set("Authorization", "Bearer sometoken")
+		checkHTTPResponse(t, db, req, http.StatusOK, "no user")
+	})
+
 	t.Run("valid header with invalid token", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", "token badbad")
 
-		accessTokens := database.NewMockAccessTokenStore()
+		accessTokens := dbmocks.NewMockAccessTokenStore()
 		accessTokens.LookupFunc.SetDefaultReturn(0, database.InvalidTokenError{})
 		db.AccessTokensFunc.SetDefaultReturn(accessTokens)
 
-		securityEventLogs := database.NewMockSecurityEventLogsStore()
-		securityEventLogs.LogEventFunc.SetDefaultHook(func(ctx context.Context, se *database.SecurityEvent) {
-			if want := database.SecurityEventAccessTokenInvalid; se.Name != want {
-				t.Errorf("got %q, want %q", se.Name, want)
+		securityEventLogs := dbmocks.NewMockSecurityEventLogsStore()
+		securityEventLogs.LogSecurityEventFunc.SetDefaultHook(func(ctx context.Context, eventName database.SecurityEventName, url string, userID uint32, anonymousUserID string, source string, arguments any) error {
+			if want := database.SecurityEventAccessTokenInvalid; eventName != want {
+				t.Errorf("got %q, want %q", eventName, want)
 			}
+			return nil
 		})
 		db.SecurityEventLogsFunc.SetDefaultReturn(securityEventLogs)
 
 		checkHTTPResponse(t, db, req, http.StatusUnauthorized, "Invalid access token.\n")
 		mockrequire.Called(t, accessTokens.LookupFunc)
-		mockrequire.Called(t, securityEventLogs.LogEventFunc)
+		mockrequire.Called(t, securityEventLogs.LogSecurityEventFunc)
 	})
 
 	for _, headerValue := range []string{"token abcdef", `token token="abcdef"`} {
@@ -102,13 +113,13 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 			req, _ := http.NewRequest("GET", "/", nil)
 			req.Header.Set("Authorization", headerValue)
 
-			accessTokens := database.NewMockAccessTokenStore()
-			accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+			accessTokens := dbmocks.NewMockAccessTokenStore()
+			accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 				if want := "abcdef"; tokenHexEncoded != want {
 					t.Errorf("got %q, want %q", tokenHexEncoded, want)
 				}
-				if want := authz.ScopeUserAll; requiredScope != want {
-					t.Errorf("got %q, want %q", requiredScope, want)
+				if want := authz.ScopeUserAll; opts.RequiredScope != want {
+					t.Errorf("got %q, want %q", opts.RequiredScope, want)
 				}
 				return 123, nil
 			})
@@ -123,15 +134,15 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 	t.Run("actor present, valid non-sudo token", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", "token abcdef")
-		req = req.WithContext(actor.WithActor(context.Background(), &actor.Actor{UID: 456}))
+		req = req.WithContext(sgactor.WithActor(context.Background(), &sgactor.Actor{UID: 456}))
 
-		accessTokens := database.NewMockAccessTokenStore()
-		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+		accessTokens := dbmocks.NewMockAccessTokenStore()
+		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 			if want := "abcdef"; tokenHexEncoded != want {
 				t.Errorf("got %q, want %q", tokenHexEncoded, want)
 			}
-			if want := authz.ScopeUserAll; requiredScope != want {
-				t.Errorf("got %q, want %q", requiredScope, want)
+			if want := authz.ScopeUserAll; opts.RequiredScope != want {
+				t.Errorf("got %q, want %q", opts.RequiredScope, want)
 			}
 			return 123, nil
 		})
@@ -156,15 +167,15 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 			} else {
 				req.SetBasicAuth("abcdef", "")
 			}
-			req = req.WithContext(actor.WithActor(context.Background(), &actor.Actor{UID: 456}))
+			req = req.WithContext(sgactor.WithActor(context.Background(), &sgactor.Actor{UID: 456}))
 
-			accessTokens := database.NewMockAccessTokenStore()
-			accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+			accessTokens := dbmocks.NewMockAccessTokenStore()
+			accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 				if want := "abcdef"; tokenHexEncoded != want {
 					t.Errorf("got %q, want %q", tokenHexEncoded, want)
 				}
-				if want := authz.ScopeUserAll; requiredScope != want {
-					t.Errorf("got %q, want %q", requiredScope, want)
+				if want := authz.ScopeUserAll; opts.RequiredScope != want {
+					t.Errorf("got %q, want %q", opts.RequiredScope, want)
 				}
 				return 123, nil
 			})
@@ -179,18 +190,18 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", `token-sudo token="abcdef",user="alice"`)
 
-		accessTokens := database.NewMockAccessTokenStore()
-		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+		accessTokens := dbmocks.NewMockAccessTokenStore()
+		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 			if want := "abcdef"; tokenHexEncoded != want {
 				t.Errorf("got %q, want %q", tokenHexEncoded, want)
 			}
-			if want := authz.ScopeSiteAdminSudo; requiredScope != want {
-				t.Errorf("got %q, want %q", requiredScope, want)
+			if want := authz.ScopeSiteAdminSudo; opts.RequiredScope != want {
+				t.Errorf("got %q, want %q", opts.RequiredScope, want)
 			}
 			return 123, nil
 		})
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByIDFunc.SetDefaultHook(func(ctx context.Context, userID int32) (*types.User, error) {
 			if want := int32(123); userID != want {
 				t.Errorf("got %d, want %d", userID, want)
@@ -204,11 +215,12 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 			return &types.User{ID: 456, SiteAdmin: true}, nil
 		})
 
-		securityEventLogs := database.NewMockSecurityEventLogsStore()
-		securityEventLogs.LogEventFunc.SetDefaultHook(func(ctx context.Context, se *database.SecurityEvent) {
-			if want := database.SecurityEventAccessTokenImpersonated; se.Name != want {
-				t.Errorf("got %q, want %q", se.Name, want)
+		securityEventLogs := dbmocks.NewMockSecurityEventLogsStore()
+		securityEventLogs.LogSecurityEventFunc.SetDefaultHook(func(ctx context.Context, eventName database.SecurityEventName, url string, userID uint32, anonymousUserID string, source string, arguments any) error {
+			if want := database.SecurityEventAccessTokenImpersonated; eventName != want {
+				t.Errorf("got %q, want %q", eventName, want)
 			}
+			return nil
 		})
 
 		db.AccessTokensFunc.SetDefaultReturn(accessTokens)
@@ -219,25 +231,25 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		mockrequire.Called(t, accessTokens.LookupFunc)
 		mockrequire.Called(t, users.GetByIDFunc)
 		mockrequire.Called(t, users.GetByUsernameFunc)
-		mockrequire.Called(t, securityEventLogs.LogEventFunc)
+		mockrequire.Called(t, securityEventLogs.LogSecurityEventFunc)
 	})
 
 	t.Run("valid sudo token as a Sourcegraph operator", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", `token-sudo token="abcdef",user="alice"`)
 
-		accessTokens := database.NewMockAccessTokenStore()
-		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+		accessTokens := dbmocks.NewMockAccessTokenStore()
+		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 			if want := "abcdef"; tokenHexEncoded != want {
 				t.Errorf("got %q, want %q", tokenHexEncoded, want)
 			}
-			if want := authz.ScopeSiteAdminSudo; requiredScope != want {
-				t.Errorf("got %q, want %q", requiredScope, want)
+			if want := authz.ScopeSiteAdminSudo; opts.RequiredScope != want {
+				t.Errorf("got %q, want %q", opts.RequiredScope, want)
 			}
 			return 123, nil
 		})
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByIDFunc.SetDefaultHook(func(ctx context.Context, userID int32) (*types.User, error) {
 			if want := int32(123); userID != want {
 				t.Errorf("got %d, want %d", userID, want)
@@ -251,12 +263,13 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 			return &types.User{ID: 456, SiteAdmin: true}, nil
 		})
 
-		userExternalAccountsStore := database.NewMockUserExternalAccountsStore()
+		userExternalAccountsStore := dbmocks.NewMockUserExternalAccountsStore()
 		userExternalAccountsStore.CountFunc.SetDefaultReturn(1, nil)
 
-		securityEventLogsStore := database.NewMockSecurityEventLogsStore()
-		securityEventLogsStore.LogEventFunc.SetDefaultHook(func(ctx context.Context, _ *database.SecurityEvent) {
-			require.True(t, actor.FromContext(ctx).SourcegraphOperator, "the actor should be a Sourcegraph operator")
+		securityEventLogsStore := dbmocks.NewMockSecurityEventLogsStore()
+		securityEventLogsStore.LogSecurityEventFunc.SetDefaultHook(func(ctx context.Context, eventName database.SecurityEventName, url string, userID uint32, anonymousUserID string, source string, arguments any) error {
+			require.True(t, sgactor.FromContext(ctx).SourcegraphOperator, "the actor should be a Sourcegraph operator")
+			return nil
 		})
 
 		db.AccessTokensFunc.SetDefaultReturn(accessTokens)
@@ -268,7 +281,7 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		mockrequire.Called(t, accessTokens.LookupFunc)
 		mockrequire.Called(t, users.GetByIDFunc)
 		mockrequire.Called(t, users.GetByUsernameFunc)
-		mockrequire.Called(t, securityEventLogsStore.LogEventFunc)
+		mockrequire.Called(t, securityEventLogsStore.LogSecurityEventFunc)
 	})
 
 	// Test that if a sudo token's subject user is not a site admin (which means they were demoted
@@ -277,18 +290,18 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", `token-sudo token="abcdef",user="alice"`)
 
-		accessTokens := database.NewMockAccessTokenStore()
-		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+		accessTokens := dbmocks.NewMockAccessTokenStore()
+		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 			if want := "abcdef"; tokenHexEncoded != want {
 				t.Errorf("got %q, want %q", tokenHexEncoded, want)
 			}
-			if want := authz.ScopeSiteAdminSudo; requiredScope != want {
-				t.Errorf("got %q, want %q", requiredScope, want)
+			if want := authz.ScopeSiteAdminSudo; opts.RequiredScope != want {
+				t.Errorf("got %q, want %q", opts.RequiredScope, want)
 			}
 			return 123, nil
 		})
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByIDFunc.SetDefaultHook(func(ctx context.Context, userID int32) (*types.User, error) {
 			if want := int32(123); userID != want {
 				t.Errorf("got %d, want %d", userID, want)
@@ -296,11 +309,12 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 			return &types.User{ID: userID, SiteAdmin: false}, nil
 		})
 
-		securityEventLogsStore := database.NewMockSecurityEventLogsStore()
-		securityEventLogsStore.LogEventFunc.SetDefaultHook(func(_ context.Context, se *database.SecurityEvent) {
-			if want := database.SecurityEventAccessTokenSubjectNotSiteAdmin; se.Name != want {
-				t.Errorf("got %q, want %q", se.Name, want)
+		securityEventLogsStore := dbmocks.NewMockSecurityEventLogsStore()
+		securityEventLogsStore.LogSecurityEventFunc.SetDefaultHook(func(ctx context.Context, eventName database.SecurityEventName, url string, userID uint32, anonymousUserID string, source string, arguments any) error {
+			if want := database.SecurityEventAccessTokenSubjectNotSiteAdmin; eventName != want {
+				t.Errorf("got %q, want %q", eventName, want)
 			}
+			return nil
 		})
 
 		db.AccessTokensFunc.SetDefaultReturn(accessTokens)
@@ -310,25 +324,25 @@ func TestAccessTokenAuthMiddleware(t *testing.T) {
 		checkHTTPResponse(t, db, req, http.StatusForbidden, "The subject user of a sudo access token must be a site admin.\n")
 		mockrequire.Called(t, accessTokens.LookupFunc)
 		mockrequire.Called(t, users.GetByIDFunc)
-		mockrequire.Called(t, securityEventLogsStore.LogEventFunc)
+		mockrequire.Called(t, securityEventLogsStore.LogSecurityEventFunc)
 	})
 
 	t.Run("valid sudo token, invalid sudo user", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", `token-sudo token="abcdef",user="doesntexist"`)
 
-		accessTokens := database.NewMockAccessTokenStore()
-		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded, requiredScope string) (subjectUserID int32, err error) {
+		accessTokens := dbmocks.NewMockAccessTokenStore()
+		accessTokens.LookupFunc.SetDefaultHook(func(_ context.Context, tokenHexEncoded string, opts database.TokenLookupOpts) (subjectUserID int32, err error) {
 			if want := "abcdef"; tokenHexEncoded != want {
 				t.Errorf("got %q, want %q", tokenHexEncoded, want)
 			}
-			if want := authz.ScopeSiteAdminSudo; requiredScope != want {
-				t.Errorf("got %q, want %q", requiredScope, want)
+			if want := authz.ScopeSiteAdminSudo; opts.RequiredScope != want {
+				t.Errorf("got %q, want %q", opts.RequiredScope, want)
 			}
 			return 123, nil
 		})
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByIDFunc.SetDefaultHook(func(ctx context.Context, userID int32) (*types.User, error) {
 			if want := int32(123); userID != want {
 				t.Errorf("got %d, want %d", userID, want)

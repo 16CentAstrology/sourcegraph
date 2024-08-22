@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 
 import { LineChart } from './LineChart'
 import { FLAT_SERIES } from './story/mocks'
@@ -23,7 +24,6 @@ const renderChart = ({ series }: RenderChartArgs) =>
 
 describe('LineChart', () => {
     // Non-exhaustive smoke tests to check that the chart renders correctly
-    // All other general rendering tests are covered by chromatic
     describe('should render', () => {
         it('empty series', () => {
             renderChart({ ...defaultArgs, series: [] })

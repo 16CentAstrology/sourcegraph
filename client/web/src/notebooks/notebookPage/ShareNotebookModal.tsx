@@ -2,16 +2,17 @@ import React, { useCallback, useMemo, useEffect } from 'react'
 
 import classNames from 'classnames'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { Modal, Button, Checkbox, H3 } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../auth'
+import type { AuthenticatedUser } from '../../auth'
 
-import { NotebookShareOptionsDropdown, ShareOption } from './NotebookShareOptionsDropdown'
+import { NotebookShareOptionsDropdown, type ShareOption } from './NotebookShareOptionsDropdown'
 
 import styles from './ShareNotebookModal.module.scss'
 
-interface ShareNotebookModalProps extends TelemetryProps {
+interface ShareNotebookModalProps extends TelemetryProps, TelemetryV2Props {
     isSourcegraphDotCom: boolean
     selectedShareOption: ShareOption
     setSelectedShareOption: (option: ShareOption) => void
@@ -40,12 +41,14 @@ export const ShareNotebookModal: React.FunctionComponent<React.PropsWithChildren
     authenticatedUser,
     telemetryService,
     onUpdateVisibility,
+    telemetryRecorder,
 }) => {
     useEffect(() => {
         if (isOpen) {
             telemetryService.log('SearchNotebookShareModalOpened')
+            telemetryRecorder.recordEvent('notebook.shareModal', 'open')
         }
-    }, [isOpen, telemetryService])
+    }, [isOpen, telemetryService, telemetryRecorder])
 
     const shareLabelId = 'shareNotebookId'
 
@@ -66,6 +69,7 @@ export const ShareNotebookModal: React.FunctionComponent<React.PropsWithChildren
                 <NotebookShareOptionsDropdown
                     isSourcegraphDotCom={isSourcegraphDotCom}
                     telemetryService={telemetryService}
+                    telemetryRecorder={telemetryRecorder}
                     authenticatedUser={authenticatedUser}
                     selectedShareOption={selectedShareOption}
                     onSelectShareOption={setSelectedShareOption}

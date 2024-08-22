@@ -1,32 +1,34 @@
-import { FunctionComponent, useCallback, useMemo } from 'react'
+import { type FunctionComponent, useCallback, useMemo, useEffect } from 'react'
 
 import BarChartIcon from 'mdi-react/BarChartIcon'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { PageHeader, useLocalStorage, useObservable } from '@sourcegraph/wildcard'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import {
+    PageHeader,
+    useLocalStorage,
+    useObservable,
+    FORM_ERROR,
+    type FormChangeEvent,
+    type SubmissionErrors,
+} from '@sourcegraph/wildcard'
 
 import { PageTitle } from '../../../../../../components/PageTitle'
-import {
-    CodeInsightCreationMode,
-    CodeInsightsCreationActions,
-    CodeInsightsPage,
-    FORM_ERROR,
-    FormChangeEvent,
-    SubmissionErrors,
-} from '../../../../components'
-import { ComputeInsight } from '../../../../core'
+import { CodeInsightCreationMode, CodeInsightsCreationActions, CodeInsightsPage } from '../../../../components'
+import type { ComputeInsight } from '../../../../core'
 import { useUiFeatures } from '../../../../hooks'
 import { CodeInsightTrackType } from '../../../../pings'
+import { V2InsightType } from '../../../../pings/types'
 
 import { ComputeInsightCreationContent } from './components/ComputeInsightCreationContent'
-import { CreateComputeInsightFormFields } from './types'
+import type { CreateComputeInsightFormFields } from './types'
 import { getSanitizedComputeInsight } from './utils/insight-sanitaizer'
 
 export interface InsightCreateEvent {
     insight: ComputeInsight
 }
 
-interface ComputeInsightCreationPageProps extends TelemetryProps {
+interface ComputeInsightCreationPageProps extends TelemetryProps, TelemetryV2Props {
     backUrl: string
     onInsightCreateRequest: (event: InsightCreateEvent) => Promise<unknown>
     onSuccessfulCreation: () => void
@@ -34,7 +36,8 @@ interface ComputeInsightCreationPageProps extends TelemetryProps {
 }
 
 export const ComputeInsightCreationPage: FunctionComponent<ComputeInsightCreationPageProps> = props => {
-    const { backUrl, telemetryService, onInsightCreateRequest, onSuccessfulCreation, onCancel } = props
+    const { backUrl, telemetryService, telemetryRecorder, onInsightCreateRequest, onSuccessfulCreation, onCancel } =
+        props
 
     const { licensed, insight } = useUiFeatures()
     const creationPermission = useObservable(useMemo(() => insight.getCreationPermissions(), [insight]))
@@ -44,9 +47,13 @@ export const ComputeInsightCreationPage: FunctionComponent<ComputeInsightCreatio
     // render creation UI form.
     // eslint-disable-next-line no-restricted-syntax
     const [initialFormValues, setInitialFormValues] = useLocalStorage<CreateComputeInsightFormFields | undefined>(
-        'insights.compute-creation-ui',
+        'insights.compute-creation-ui-v2',
         undefined
     )
+
+    useEffect(() => {
+        telemetryRecorder.recordEvent('insights.create.compute', 'view')
+    }, [telemetryRecorder])
 
     const handleChange = (event: FormChangeEvent<CreateComputeInsightFormFields>): void => {
         setInitialFormValues(event.values)
@@ -60,6 +67,9 @@ export const ComputeInsightCreationPage: FunctionComponent<ComputeInsightCreatio
 
             // Clear initial values if user successfully created search insight
             setInitialFormValues(undefined)
+            telemetryRecorder.recordEvent('insights.create.compute', 'submit', {
+                metadata: { type: V2InsightType[CodeInsightTrackType.ComputeInsight] },
+            })
             telemetryService.log('CodeInsightsComputeCreationPageSubmitClick')
             telemetryService.log(
                 'InsightAddition',
@@ -69,19 +79,20 @@ export const ComputeInsightCreationPage: FunctionComponent<ComputeInsightCreatio
 
             onSuccessfulCreation()
         },
-        [onInsightCreateRequest, onSuccessfulCreation, setInitialFormValues, telemetryService]
+        [onInsightCreateRequest, onSuccessfulCreation, setInitialFormValues, telemetryRecorder, telemetryService]
     )
 
     const handleCancel = useCallback(() => {
         // Clear initial values if user successfully created search insight
         setInitialFormValues(undefined)
         telemetryService.log('CodeInsightsComputeCreationPageCancelClick')
+        telemetryRecorder.recordEvent('insights.create.compute', 'cancel')
 
         onCancel()
-    }, [setInitialFormValues, telemetryService, onCancel])
+    }, [setInitialFormValues, telemetryService, telemetryRecorder, onCancel])
 
     return (
-        <CodeInsightsPage className="col-11">
+        <CodeInsightsPage>
             <PageTitle title="Create group results insight - Code Insights" />
 
             <PageHeader

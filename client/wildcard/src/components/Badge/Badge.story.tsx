@@ -1,11 +1,10 @@
-import { Meta } from '@storybook/react'
+import type { Meta } from '@storybook/react'
 
-import { H1, H2, Text } from '..'
+import { H1, H2, Link, Text } from '..'
 import { BrandedStory } from '../../stories/BrandedStory'
 
-import { BADGE_VARIANTS } from './constants'
-
 import { Badge } from '.'
+import { BADGE_VARIANTS } from './constants'
 
 const config: Meta = {
     title: 'wildcard/Badge',
@@ -14,10 +13,7 @@ const config: Meta = {
 
     parameters: {
         component: Badge,
-        chromatic: {
-            enableDarkMode: true,
-            disableSnapshot: false,
-        },
+
         design: [
             {
                 type: 'figma',
@@ -55,8 +51,10 @@ export const Badges = () => (
         </Badge>
         <H2 className="mt-4">Links</H2>
         <Text>For more advanced functionality, badges can also function as links.</Text>
-        <Badge href="https://example.com" variant="secondary">
-            I am a link
-        </Badge>
+        {BADGE_VARIANTS.map(variant => (
+            <Badge as={Link} to="https://example.com" key={variant} variant={variant} className="mr-2">
+                link/{variant}
+            </Badge>
+        ))}
     </>
 )

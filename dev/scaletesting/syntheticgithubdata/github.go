@@ -5,19 +5,18 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/go-github/v41/github"
-
-	"github.com/sourcegraph/sourcegraph/lib/group"
+	"github.com/google/go-github/v55/github"
+	"github.com/sourcegraph/conc/pool"
 )
 
 // getGitHubRepos fetches the current repos on the GitHub instance for the given org name.
 func getGitHubRepos(ctx context.Context, orgName string) []*github.Repository {
-	g := group.NewWithResults[[]*github.Repository]().WithMaxConcurrency(250)
+	p := pool.NewWithResults[[]*github.Repository]().WithMaxGoroutines(250)
 	// 200k repos + some buffer space returning empty pages
-	for i := 0; i < 2050; i++ {
+	for i := range 2050 {
 		writeInfo(out, "Fetching repo page %d", i)
 		page := i
-		g.Go(func() []*github.Repository {
+		p.Go(func() []*github.Repository {
 			var resp *github.Response
 			var reposPage []*github.Repository
 			var err error
@@ -41,7 +40,7 @@ func getGitHubRepos(ctx context.Context, orgName string) []*github.Repository {
 		})
 	}
 	var repos []*github.Repository
-	for _, rr := range g.Wait() {
+	for _, rr := range p.Wait() {
 		repos = append(repos, rr...)
 	}
 	return repos
@@ -52,7 +51,7 @@ func getGitHubUsers(ctx context.Context) []*github.User {
 	var users []*github.User
 	var since int64
 	for {
-		//writeInfo(out, "Fetching user page, last ID seen is %d", since)
+		// writeInfo(out, "Fetching user page, last ID seen is %d", since)
 		usersPage, _, err := gh.Users.ListAll(ctx, &github.UserListOptions{
 			Since:       since,
 			ListOptions: github.ListOptions{PerPage: 100},
@@ -77,7 +76,7 @@ func getGitHubTeams(ctx context.Context, orgs []*org) []*github.Team {
 	var currentPage int
 	for _, o := range orgs {
 		for {
-			//writeInfo(out, "Fetching team page %d for org %s", currentPage, o.Login)
+			// writeInfo(out, "Fetching team page %d for org %s", currentPage, o.Login)
 			teamsPage, _, err := gh.Teams.ListTeams(ctx, o.Login, &github.ListOptions{
 				Page:    currentPage,
 				PerPage: 100,
@@ -107,7 +106,7 @@ func getGitHubOrgs(ctx context.Context) []*github.Organization {
 	var orgs []*github.Organization
 	var since int64
 	for {
-		//writeInfo(out, "Fetching org page, last ID seen is %d", since)
+		// writeInfo(out, "Fetching org page, last ID seen is %d", since)
 		orgsPage, _, err := gh.Organizations.ListAll(ctx, &github.OrganizationsListOptions{
 			Since:       since,
 			ListOptions: github.ListOptions{PerPage: 100},

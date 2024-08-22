@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react'
 
 import classNames from 'classnames'
-import * as H from 'history'
 
 import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
 import { Link, Button, H2 } from '@sourcegraph/wildcard'
 
-import { RepoBatchChange } from '../../../graphql-operations'
-import { queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs } from '../detail/backend'
+import type { RepoBatchChange } from '../../../graphql-operations'
+import type { queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs } from '../detail/backend'
 import { ChangesetNode } from '../detail/changesets/ChangesetNode'
 
 import { MAX_CHANGESETS_COUNT } from './backend'
@@ -17,8 +16,6 @@ import styles from './BatchChangeNode.module.scss'
 export interface BatchChangeNodeProps {
     node: RepoBatchChange
     viewerCanAdminister: boolean
-    history: H.History
-    location: H.Location
     /** For testing purposes. */
     queryExternalChangesetWithFileDiffs?: typeof _queryExternalChangesetWithFileDiffs
     /** For testing purposes. */

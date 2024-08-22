@@ -1,8 +1,7 @@
 import {
     Annotation,
-    EditorState,
-    Extension,
-    Range,
+    type Extension,
+    type Range,
     RangeSet,
     RangeSetBuilder,
     StateEffect,
@@ -13,13 +12,15 @@ import {
     EditorView,
     gutterLineClass,
     GutterMarker,
+    layer,
     lineNumbers,
-    PluginValue,
+    type PluginValue,
+    RectangleMarker,
     ViewPlugin,
-    ViewUpdate,
+    type ViewUpdate,
 } from '@codemirror/view'
 
-import { isValidLineRange, MOUSE_MAIN_BUTTON, preciseOffsetAtCoords } from './utils'
+import { isValidLineRange, MOUSE_MAIN_BUTTON } from './utils'
 
 /**
  * Represents the currently selected line range. null means no lines are
@@ -29,8 +30,11 @@ import { isValidLineRange, MOUSE_MAIN_BUTTON, preciseOffsetAtCoords } from './ut
 export type SelectedLineRange = { line: number; character?: number; endLine?: number } | null
 
 const selectedLineDecoration = Decoration.line({
-    class: 'selected-line',
-    attributes: { tabIndex: '-1', 'data-line-focusable': '' },
+    attributes: {
+        tabIndex: '-1',
+        'data-line-focusable': '',
+        'data-testid': 'selected-line',
+    },
 })
 const selectedLineGutterMarker = new (class extends GutterMarker {
     public elementClass = 'selected-line'
@@ -45,6 +49,15 @@ const setEndLine = StateEffect.define<number>()
 export const selectedLines = StateField.define<SelectedLineRange>({
     create() {
         return null
+    },
+    compare(a, b) {
+        if (a === b) {
+            return true
+        }
+        if (!a || !b) {
+            return false
+        }
+        return a.line === b.line && a.endLine === b.endLine
     },
     update(value, transaction) {
         for (const effect of transaction.effects) {
@@ -83,6 +96,102 @@ export const selectedLines = StateField.define<SelectedLineRange>({
 
             return builder.finish()
         }),
+
+        /**
+         * We highlight selected lines using layer instead of line decorations.
+         * With this approach both selected lines and editor selection layers are be visible (with the latter taking precedence).
+         *
+         * With line decorations the editor selection layer is positioned behind the document content
+         * and thus the line background set by line decorations overrides the layer background making selected text
+         * not highlighted. An alternative would be to use reduce the opacity of the line decorations but this would
+         * change the text selection color.
+         */
+        layer({
+            above: false,
+            markers(view) {
+                const range = view.state.field(field)
+                if (!range) {
+                    return []
+                }
+
+                // We can't use RectangleMarker.fromRange because this positions the marker exactly at the start/top of
+                // the actual text in the line, not at start/top what we consider to be the line. This is especially
+                // apparent when the blame column is visible because the line hight is increased to give the blame
+                // information more space. The following box illustrates the problem:
+                //
+                // ┌───┬────────────────────────────────────────────────┐ ──┐
+                // │   │               ──┐                              │   │
+                // │ 1 │ Some text here  ├── .fromRange gives us this   │   ├─── we want this
+                // │   │               ──┘                              │   │
+                // └───┴────────────────────────────────────────────────┘ ──┘
+                //
+                // The left and top positions, and width and height of the rectangle marker that corresponds to the
+                // selected line are computed from these values:
+                //
+                //                rectangle.left
+                //                     ◄─►    rectangle.width
+                //                        ◄──────────────────────►
+                //                   ▲ ┌─────────────────────────┐     ▲
+                //                   │ │                         │     │documentPadding.top
+                //                   │ ├─┬───────────────────────┤ ▲ ▲ ▼
+                //      rectangle.top│ │1│First line             │ │ │
+                //                   │ ├─┼───────────────────────┤ │ │topLineBlock.top
+                //                   │ │2│Second line            │ │ │
+                //                  ▲▼ ├─┼───────────────────────┤ │ ▼
+                //  rectangle.height│  │3│███████████████████████│ │topLineBlock.bottom
+                //                  ▼  ├─┼───────────────────────┤ ▼
+                //                     │4│Fourth line            │
+                //                     ├─┼───────────────────────┤
+                //                     │.│...                    │
+                //                     └─┴───────────────────────┘
+                //                       ◄───────────────────────►
+                //                     ▲ ▲   contentRect.width
+                //                     │ │
+                //                     │ │
+                //                     │ contentRect.left
+                //                     │
+                //                     viewRect.left
+
+                const viewRect = view.dom.getBoundingClientRect()
+                const contentRect = view.contentDOM.getBoundingClientRect()
+
+                const topLine = view.state.doc.line(range.endLine ? Math.min(range.line, range.endLine) : range.line)
+                const topLineBlock = view.lineBlockAt(topLine.from)
+
+                // Markers are positioned relative to the view DOM element, i.e. position 0 would be left of the gutter.
+                // This computes the left position of the content element relative to the view DOM element.
+                const left = contentRect.left - viewRect.left
+
+                // block.top is relative to the document top, which is the top of the first line, _not_ including the
+                // content element's padding. So we have to add the padding to properly align the marker with the top
+                // of the line.
+                const top = topLineBlock.top + view.documentPadding.top
+                const width = contentRect.width
+                let height = topLineBlock.bottom - topLineBlock.top
+
+                if (range.endLine !== undefined) {
+                    const bottomLine = view.state.doc.line(
+                        Math.min(view.state.doc.lines, Math.max(range.line, range.endLine))
+                    )
+                    const bottomLineBlock = view.lineBlockAt(bottomLine.from)
+                    height = bottomLineBlock.bottom - topLineBlock.top
+                }
+
+                return [new RectangleMarker('selected-line', left, top, width, height)]
+            },
+            update(update) {
+                return (
+                    update.docChanged ||
+                    update.selectionSet ||
+                    update.viewportChanged ||
+                    update.transactions.some(transaction =>
+                        transaction.effects.some(effect => effect.is(setSelectedLines) || effect.is(setEndLine))
+                    )
+                )
+            },
+            class: 'selected-lines-layer',
+        }),
+
         gutterLineClass.compute([field], state => {
             const range = state.field(field)
             const marks: Range<GutterMarker>[] = []
@@ -119,156 +228,76 @@ export const lineScrollEnforcing = Annotation.define<'scroll-enforcing'>()
  * View plugin responsible for scrolling the selected line(s) into view if/when
  * necessary.
  */
-const scrollIntoView = ViewPlugin.fromClass(
-    class implements PluginValue {
-        private lastSelectedLines: SelectedLineRange | null = null
-        constructor(private readonly view: EditorView) {
-            this.lastSelectedLines = this.view.state.field(selectedLines)
+class ScrollIntoView implements PluginValue {
+    private lastSelectedLines: SelectedLineRange | null = null
+    constructor(private readonly view: EditorView, config: SelectableLineNumbersConfig) {
+        this.lastSelectedLines = this.view.state.field(selectedLines)
+        if (!config.skipInitialScrollIntoView) {
             this.scrollIntoView(this.lastSelectedLines)
         }
+    }
 
-        public update(update: ViewUpdate): void {
-            const currentSelectedLines = update.state.field(selectedLines)
-            const isForcedScroll = update.transactions.some(
-                transaction => transaction.annotation(lineScrollEnforcing) === 'scroll-enforcing'
-            )
+    public update(update: ViewUpdate): void {
+        const currentSelectedLines = update.state.field(selectedLines)
+        const isForcedScroll = update.transactions.some(
+            transaction => transaction.annotation(lineScrollEnforcing) === 'scroll-enforcing'
+        )
 
-            const hasSelectedLineChanged = isForcedScroll ? true : this.lastSelectedLines !== currentSelectedLines
-            const isExternalTrigger = update.transactions.some(
-                transaction => transaction.annotation(lineSelectionSource) !== 'gutter'
-            )
+        const hasSelectedLineChanged = isForcedScroll ? true : this.lastSelectedLines !== currentSelectedLines
+        const isExternalTrigger = update.transactions.some(
+            transaction => transaction.annotation(lineSelectionSource) !== 'gutter'
+        )
 
-            if (hasSelectedLineChanged && isExternalTrigger) {
-                // Only scroll selected lines into view when the user isn't
-                // currently selecting lines themselves (as indicated by the
-                // presence of the "gutter" annotation). Otherwise, the scroll
-                // position might change while the user is selecting lines.
-                this.lastSelectedLines = currentSelectedLines
-                this.scrollIntoView(currentSelectedLines)
-            }
-        }
-
-        public scrollIntoView(selection: SelectedLineRange): void {
-            if (selection && shouldScrollIntoView(this.view, selection)) {
-                window.requestAnimationFrame(() => {
-                    this.view.dispatch({
-                        effects: EditorView.scrollIntoView(this.view.state.doc.line(selection.line).from, {
-                            y: 'center',
-                        }),
-                    })
-                })
-            }
+        if (hasSelectedLineChanged && isExternalTrigger) {
+            // Only scroll selected lines into view when the user isn't
+            // currently selecting lines themselves (as indicated by the
+            // presence of the "gutter" annotation). Otherwise, the scroll
+            // position might change while the user is selecting lines.
+            this.lastSelectedLines = currentSelectedLines
+            this.scrollIntoView(currentSelectedLines)
         }
     }
-)
 
-/**
- * This plugin handles selecting lines by clicking on the end empty after them.
- * What makes this complex is handling text selection properly, and not such
- * figuring out that a user is selecting text (that's easy) but to prevent text
- * selection from being rendered if the user actually want to select multiple
- * lines by shift clicking.
- *
- * Desired behavior:
- * - Drag to select text
- * - Click to select line
- * - Shift click to select text when there is already other selected text
- * - Shift click to select line range if there is no selected text
- */
-function selectOnClick({ onSelection }: SelectableLineNumbersConfig): Extension {
-    // Maybe it would be better to use state fields for this (I don't know). It
-    // works though.
-    let maybeSelectLine = false
-    let preventTextSelection = false
-
-    return [
-        EditorState.transactionFilter.of(transaction => {
-            // If the user tries to select a text range (and doesn't just click
-            // somewhere)
-            if (
-                transaction.isUserEvent('select') &&
-                transaction.selection &&
-                transaction.selection.main.from !== transaction.selection.main.to
-            ) {
-                if (preventTextSelection) {
-                    return []
-                }
-                // If we are selecting a text range and not already prevent text
-                // selection then we don't want to select a line.
-                maybeSelectLine = false
-            }
-            return transaction
-        }),
-        EditorView.domEventHandlers({
-            mousedown(event, view) {
-                if (event.button !== MOUSE_MAIN_BUTTON) {
-                    // Only handle clicks with the main button
-                    return
-                }
-
-                maybeSelectLine = true
-                preventTextSelection = false
-
-                if (event.shiftKey) {
-                    // Selecting text via shift click is only supported when
-                    // there is already other selected text.
-                    if (hasTextSelection(view.state)) {
-                        maybeSelectLine = false
-                    } else {
-                        // Otherwise we need to prevent CodeMirror/the browser
-                        // from applying text selection
-                        preventTextSelection = true
-                    }
-                }
-            },
-            mouseup(event, view) {
-                preventTextSelection = false
-
-                if (!maybeSelectLine || event.button !== MOUSE_MAIN_BUTTON) {
-                    return
-                }
-
-                maybeSelectLine = false
-
-                // IMPORTANT: This gives the offset of the character *closest*
-                // to the clicked position, not *at* the clicked position.
-                const offset = view.posAtCoords(event)
-                // Ignore clicks outside the document
-                if (offset === null) {
-                    return
-                }
-
-                let selectedLine: number | null = null
-
-                const clickedLine = view.state.doc.lineAt(offset)
-                if (offset === clickedLine.to) {
-                    // If the offset is the same value as the end position of
-                    // the line then click happend after the last charcater.
-                    selectedLine = clickedLine.number
-                } else if (offset === clickedLine.from && preciseOffsetAtCoords(view, event) === null) {
-                    // `preciseOffsetAtCoords(...) === null` allows us to recognize clicks before the actual text content
-                    // while `offset === clickedLine.from` ensures that we ignore clicks between lines
-                    selectedLine = clickedLine.number
-                }
-
-                if (selectedLine !== null) {
-                    view.dispatch({
-                        effects: event.shiftKey
-                            ? setEndLine.of(selectedLine)
-                            : setSelectedLines.of({ line: selectedLine }),
-                    })
-                    onSelection(normalizeLineRange(view.state.field(selectedLines)))
-                }
-            },
-        }),
-    ]
+    public scrollIntoView(selection: SelectedLineRange): void {
+        if (selection && shouldScrollIntoView(this.view, selection)) {
+            window.requestAnimationFrame(() => {
+                this.view.dispatch({
+                    effects: EditorView.scrollIntoView(this.view.state.doc.line(selection.line).from, {
+                        y: 'center',
+                    }),
+                })
+            })
+        }
+    }
 }
+
+const selectedLineNumberTheme = EditorView.theme({
+    '.cm-lineNumbers': {
+        cursor: 'pointer',
+        color: 'var(--line-number-color)',
+
+        '& .cm-gutterElement:hover': {
+            textDecoration: 'underline',
+        },
+    },
+})
 
 interface SelectableLineNumbersConfig {
     onSelection: (range: SelectedLineRange) => void
     initialSelection: SelectedLineRange | null
-    navigateToLineOnAnyClick: boolean
-    enableSelectionDrivenCodeNavigation?: boolean
+    /**
+     * If provided, this function will be called if the user
+     * clicks anywhere in a line, not just on the line number.
+     * In this case `onSelection` will be ignored.
+     */
+    onLineClick?: (line: number) => void
+
+    /**
+     * If set to true, the initial selection will not be scrolled into view.
+     */
+    skipInitialScrollIntoView?: boolean
+
+    // todo(fkling): Refactor this logic, maybe move into separate extensions
 }
 
 /**
@@ -286,34 +315,42 @@ export function selectableLineNumbers(config: SelectableLineNumbersConfig): Exte
     let dragging = false
 
     return [
-        scrollIntoView,
+        ViewPlugin.define(view => new ScrollIntoView(view, config)),
         selectedLines.init(() => config.initialSelection),
         lineNumbers({
             domEventHandlers: {
-                mousedown(view, block, event) {
-                    const mouseEvent = event as MouseEvent // make TypeScript happy
+                mouseup(view, block, event) {
+                    if (!config.onLineClick) {
+                        return false
+                    }
+
+                    const mouseEvent = event as MouseEvent
                     if (mouseEvent.button !== MOUSE_MAIN_BUTTON) {
                         return false
                     }
 
                     const line = view.state.doc.lineAt(block.from).number
-                    if (config.navigateToLineOnAnyClick) {
-                        // Only support single line selection when navigateToLineOnAnyClick is true.
-                        view.dispatch({
-                            effects: setSelectedLines.of({ line }),
-                            annotations: lineSelectionSource.of('gutter'),
-                        })
-                    } else {
-                        const range = view.state.field(selectedLines)
-                        view.dispatch({
-                            effects: mouseEvent.shiftKey
-                                ? setEndLine.of(line)
-                                : setSelectedLines.of(isSingleLine(range) && range?.line === line ? null : { line }),
-                            annotations: lineSelectionSource.of('gutter'),
-                            // Collapse/reset text selection
-                            selection: { anchor: view.state.selection.main.anchor },
-                        })
+                    config.onLineClick(line)
+                    return true
+                },
+
+                mousedown(view, block, event) {
+                    if (config.onLineClick) {
+                        return false
                     }
+
+                    const mouseEvent = event as MouseEvent
+                    if (mouseEvent.button !== MOUSE_MAIN_BUTTON) {
+                        return false
+                    }
+
+                    const line = view.state.doc.lineAt(block.from).number
+                    view.dispatch({
+                        effects: mouseEvent.shiftKey ? setEndLine.of(line) : setSelectedLines.of({ line }),
+                        annotations: lineSelectionSource.of('gutter'),
+                        // Collapse/reset text selection
+                        selection: { anchor: view.state.selection.main.anchor },
+                    })
 
                     dragging = true
 
@@ -349,23 +386,7 @@ export function selectableLineNumbers(config: SelectableLineNumbersConfig): Exte
                 },
             },
         }),
-        // Disable `selectOnClick` with token selection because they interact
-        // badly with each other causing errors.
-        config.enableSelectionDrivenCodeNavigation ? [] : selectOnClick(config),
-        EditorView.theme({
-            '.cm-lineNumbers': {
-                cursor: 'pointer',
-                color: 'var(--line-number-color)',
-            },
-            '.cm-lineNumbers .cm-gutterElement': {
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-end',
-            },
-            '.cm-lineNumbers .cm-gutterElement:hover': {
-                textDecoration: 'underline',
-            },
-        }),
+        selectedLineNumberTheme,
     ]
 }
 
@@ -405,30 +426,19 @@ function normalizeLineRange(range: SelectedLineRange): SelectedLineRange {
  * outside of the editor viewport).
  */
 export function shouldScrollIntoView(view: EditorView, range: SelectedLineRange): boolean {
-    if (!range || !isValidLineRange(range, view.state.doc)) {
+    // Only consider start and end line when determining whether to scroll a line into view.
+    // Whether or not the character offset is valid doesn't matter in this case.
+    const normalizedRange: SelectedLineRange = range ? { line: range.line, endLine: range.endLine } : range
+
+    if (!normalizedRange || !isValidLineRange(normalizedRange, view.state.doc)) {
         return false
     }
 
-    const from = view.lineBlockAt(view.state.doc.line(range.line).from)
-    const to = range.endLine ? view.lineBlockAt(view.state.doc.line(range.endLine).to) : from
+    const from = view.lineBlockAt(view.state.doc.line(normalizedRange.line).from)
+    const to = normalizedRange.endLine ? view.lineBlockAt(view.state.doc.line(normalizedRange.endLine).to) : from
 
     return (
         from.top + from.height >= view.scrollDOM.scrollTop + view.scrollDOM.clientHeight ||
         to.top <= view.scrollDOM.scrollTop
     )
-}
-
-function isSingleLine(range: SelectedLineRange): boolean {
-    return !!range && (!range.endLine || range.line === range.endLine)
-}
-
-/**
- * Helper function that returns true if the user has selected any text in the
- * document. A CodeMirror always has a "selection", which determines the cursor
- * position but only if its start and end are different it actually represents
- * selected text.
- */
-function hasTextSelection(state: EditorState): boolean {
-    const range = state.selection.asSingle().main
-    return range.from !== range.to
 }

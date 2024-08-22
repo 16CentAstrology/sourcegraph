@@ -1,10 +1,12 @@
-import { render } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+
+import { renderWithBrandedContext } from '../../testing'
 
 import { Markdown } from './Markdown'
 
 describe('Markdown', () => {
     it('renders', () => {
-        const component = render(<Markdown dangerousInnerHTML="hello" />)
+        const component = renderWithBrandedContext(<Markdown dangerousInnerHTML="hello" />)
         expect(component.asFragment()).toMatchSnapshot()
     })
 })

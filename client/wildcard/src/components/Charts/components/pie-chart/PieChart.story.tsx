@@ -1,4 +1,4 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 
 import { BrandedStory } from '../../../../stories/BrandedStory'
 import { H2, Text } from '../../../Typography'
@@ -8,9 +8,7 @@ import { PieChart } from './PieChart'
 const StoryConfig: Meta = {
     title: 'wildcard/Charts',
     decorators: [story => <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>],
-    parameters: {
-        chromatic: { disableSnapshots: false, enableDarkMode: true },
-    },
+    parameters: {},
 }
 
 export default StoryConfig
@@ -27,7 +25,7 @@ const getColor = (datum: LanguageUsageDatum) => datum.fill
 const getLink = (datum: LanguageUsageDatum) => datum.linkURL
 const getName = (datum: LanguageUsageDatum) => datum.name
 
-export const PieChartDemo: Story = () => (
+export const PieChartDemo: StoryFn = () => (
     <main
         style={{
             display: 'flex',

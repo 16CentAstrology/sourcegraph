@@ -1,23 +1,24 @@
-import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 
-import { ApolloClient } from '@apollo/client'
-import * as H from 'history'
+import type { ApolloClient } from '@apollo/client'
+import type * as H from 'history'
 
 import { KEYBOARD_SHORTCUTS } from '@sourcegraph/shared/src/keyboardShortcuts/keyboardShortcuts'
-import { Settings, SettingsCascadeOrError } from '@sourcegraph/shared/src/settings/settings'
+import type { Settings, SettingsCascadeOrError } from '@sourcegraph/shared/src/settings/settings'
+import { useTheme } from '@sourcegraph/shared/src/theme'
 import { toPrettyBlobURL } from '@sourcegraph/shared/src/util/url'
 import { useSessionStorage } from '@sourcegraph/wildcard'
 
 import { SearchValueRankingCache } from '../../fuzzyFinder/SearchValueRankingCache'
 import { parseBrowserRepoURL } from '../../util/url'
 import { Keybindings, plaintextKeybindings } from '../KeyboardShortcutsHelp/KeyboardShortcutsHelp'
-import { UserHistory } from '../useUserHistory'
+import type { UserHistory } from '../useUserHistory'
 
-import { createActionsFSM, FuzzyActionProps, getAllFuzzyActions } from './FuzzyActions'
+import { createActionsFSM, getAllFuzzyActions } from './FuzzyActions'
 import { FuzzyFiles, FuzzyRepoFiles } from './FuzzyFiles'
-import { getFuzzyFinderFeatureFlags } from './FuzzyFinderFeatureFlag'
-import { FuzzyFSM } from './FuzzyFsm'
-import { FuzzyRepoRevision } from './FuzzyRepoRevision'
+import { useFuzzyFinderFeatureFlags } from './FuzzyFinderFeatureFlag'
+import type { FuzzyFSM } from './FuzzyFsm'
+import type { FuzzyRepoRevision } from './FuzzyRepoRevision'
 import { FuzzyRepos } from './FuzzyRepos'
 import { FuzzySymbols } from './FuzzySymbols'
 
@@ -150,7 +151,7 @@ export class FuzzyTabs {
     public entries(): [FuzzyTabKey, Tab][] {
         const result: [FuzzyTabKey, Tab][] = []
         for (const key of Object.keys(this.underlying)) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             const value = (this.underlying as any)[key as keyof Tab] as Tab
             if (value.isEnabled) {
                 result.push([key as FuzzyTabKey, value])
@@ -208,7 +209,7 @@ export function defaultFuzzyState(): FuzzyState {
         },
     }
 }
-export interface FuzzyTabsProps extends FuzzyActionProps {
+export interface FuzzyTabsProps {
     settingsCascade: SettingsCascadeOrError<Settings>
     isRepositoryRelatedPage: boolean
     location: H.Location
@@ -216,17 +217,18 @@ export interface FuzzyTabsProps extends FuzzyActionProps {
     initialQuery?: string
     isVisible: boolean
     userHistory: UserHistory
+    defaultActiveTab?: FuzzyTabKey
 }
 
 export function useFuzzyState(props: FuzzyTabsProps): FuzzyState {
     const {
-        themeState,
         isVisible,
         location: { pathname, search, hash },
         isRepositoryRelatedPage,
         client: apolloClient,
         settingsCascade,
         userHistory,
+        defaultActiveTab,
     } = props
     let {
         repoName = '',
@@ -252,9 +254,9 @@ export function useFuzzyState(props: FuzzyTabsProps): FuzzyState {
     repoRevisionRef.current = repoRevision
 
     const { fuzzyFinderAll, fuzzyFinderActions, fuzzyFinderRepositories, fuzzyFinderSymbols } =
-        getFuzzyFinderFeatureFlags(props.settingsCascade.final)
+        useFuzzyFinderFeatureFlags()
 
-    const [activeTab, setActiveTab] = useState<FuzzyTabKey>('all')
+    const [activeTab, setActiveTab] = useState<FuzzyTabKey>(defaultActiveTab || 'all')
 
     // NOTE: the query is cached in session storage to mimic the file pickers in
     // IntelliJ (by default) and VS Code (when "Workbench > Quick Open >
@@ -297,11 +299,12 @@ export function useFuzzyState(props: FuzzyTabsProps): FuzzyState {
         [revision, repoName]
     )
 
+    const { theme, setThemeSetting } = useTheme()
     // Actions
     const actions = useMemo<FuzzyTabFSM>(() => {
-        const fsm = createActionsFSM(getAllFuzzyActions({ themeState }))
+        const fsm = createActionsFSM(getAllFuzzyActions({ theme, setThemeSetting }))
         return new FuzzyTabFSM('actions', 'always', () => fsm)
-    }, [themeState])
+    }, [theme, setThemeSetting])
 
     // Repos
     const repos = useMemo<FuzzyTabFSM>(() => {

@@ -2,15 +2,16 @@ import React, { useCallback, useEffect, useRef } from 'react'
 
 import { mdiClose } from '@mdi/js'
 import { VisuallyHidden } from '@reach/visually-hidden'
-import { useHistory } from 'react-router'
+import { useNavigate, useParams } from 'react-router-dom'
 
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { useIsLightTheme } from '@sourcegraph/shared/src/theme'
 import { Card, CardBody, H3, H1, Icon, Text, Code, ErrorAlert } from '@sourcegraph/wildcard'
 
-import { BatchSpecExecutionFields, BatchSpecSource } from '../../../../../graphql-operations'
-import { queryChangesetSpecFileDiffs as _queryChangesetSpecFileDiffs } from '../../../preview/list/backend'
-import { BatchSpecContextState, useBatchSpecContext } from '../../BatchSpecContext'
-import {
+import { type BatchSpecExecutionFields, BatchSpecSource } from '../../../../../graphql-operations'
+import type { queryChangesetSpecFileDiffs as _queryChangesetSpecFileDiffs } from '../../../preview/list/backend'
+import { type BatchSpecContextState, useBatchSpecContext } from '../../BatchSpecContext'
+import type {
     queryBatchSpecWorkspaceStepFileDiffs as _queryBatchSpecWorkspaceStepFileDiffs,
     queryWorkspacesList as _queryWorkspacesList,
 } from '../backend'
@@ -20,8 +21,7 @@ import { WorkspacesPanel } from './WorkspacesPanel'
 
 import styles from './ExecutionWorkspaces.module.scss'
 
-interface ExecutionWorkspacesProps extends ThemeProps {
-    selectedWorkspaceID?: string
+interface ExecutionWorkspacesProps extends TelemetryV2Props {
     /** For testing purposes only */
     queryBatchSpecWorkspaceStepFileDiffs?: typeof _queryBatchSpecWorkspaceStepFileDiffs
     queryChangesetSpecFileDiffs?: typeof _queryChangesetSpecFileDiffs
@@ -54,19 +54,20 @@ type MemoizedExecutionWorkspacesProps = ExecutionWorkspacesProps & Pick<BatchSpe
 
 const MemoizedExecutionWorkspaces: React.FunctionComponent<React.PropsWithChildren<MemoizedExecutionWorkspacesProps>> =
     React.memo(function MemoizedExecutionWorkspaces({
-        selectedWorkspaceID,
-        isLightTheme,
         batchSpec,
         errors,
         queryBatchSpecWorkspaceStepFileDiffs,
         queryChangesetSpecFileDiffs,
         queryWorkspacesList,
+        telemetryRecorder,
     }) {
-        const history = useHistory()
+        const navigate = useNavigate()
+        const isLightTheme = useIsLightTheme()
+        const { workspaceID: selectedWorkspaceID } = useParams()
 
         const deselectWorkspace = useCallback(() => {
-            history.push({ ...history.location, pathname: `${batchSpec.executionURL}/execution` })
-        }, [batchSpec.executionURL, history])
+            navigate(`${batchSpec.executionURL}/execution`)
+        }, [batchSpec.executionURL, navigate])
 
         const videoRef = useRef<HTMLVideoElement | null>(null)
         // Pause the execution animation loop when the batch spec stops executing.
@@ -96,12 +97,13 @@ const MemoizedExecutionWorkspaces: React.FunctionComponent<React.PropsWithChildr
                                         deselectWorkspace={deselectWorkspace}
                                         queryBatchSpecWorkspaceStepFileDiffs={queryBatchSpecWorkspaceStepFileDiffs}
                                         queryChangesetSpecFileDiffs={queryChangesetSpecFileDiffs}
+                                        telemetryRecorder={telemetryRecorder}
                                     />
                                 ) : (
                                     <>
                                         <div className={styles.videoContainer}>
                                             <video
-                                                className="w-100 percy-hide"
+                                                className="w-100"
                                                 autoPlay={true}
                                                 muted={true}
                                                 loop={true}

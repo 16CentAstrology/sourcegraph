@@ -163,33 +163,26 @@ func TestExternalService_BitbucketServer(t *testing.T) {
 
 func TestExternalService_Perforce(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		depot     string
-		useFusion bool
-		blobPath  string
-		wantBlob  string
+		name       string
+		depot      string
+		useFusion  bool
+		headBranch string
+		blobPath   string
+		wantBlob   string
 	}{
 		{
-			name:      "git p4",
-			depot:     "test-perms",
-			useFusion: false,
-			blobPath:  "README.md",
+			name:       "p4 fusion",
+			depot:      "test-perms",
+			blobPath:   "README.md",
+			headBranch: "main",
 			wantBlob: `This depot is used to test user and group permissions.
-`,
-		},
-		{
-			name:      "p4 fusion",
-			depot:     "integration-test-depot",
-			useFusion: true,
-			blobPath:  "path.txt",
-			wantBlob: `./
 `,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repoName := "perforce/" + tc.depot
 			checkPerforceEnvironment(t)
-			cleanup := createPerforceExternalService(t, tc.depot, tc.useFusion)
+			cleanup := createPerforceExternalService(t, tc.depot)
 			t.Cleanup(cleanup)
 
 			err := client.WaitForReposToBeCloned(repoName)
@@ -197,7 +190,7 @@ func TestExternalService_Perforce(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			blob, err := client.GitBlob(repoName, "master", tc.blobPath)
+			blob, err := client.GitBlob(repoName, tc.headBranch, tc.blobPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,7 +209,7 @@ func checkPerforceEnvironment(t *testing.T) {
 // createPerforceExternalService creates an Perforce external service that
 // includes the supplied depot. It returns a function to cleanup after the test
 // which will delete the depot from disk and remove the external service.
-func createPerforceExternalService(t *testing.T, depot string, useP4Fusion bool) func() {
+func createPerforceExternalService(t *testing.T, depot string) func() {
 	t.Helper()
 
 	type Authorization = struct {
@@ -227,6 +220,7 @@ func createPerforceExternalService(t *testing.T, depot string, useP4Fusion bool)
 		LookAhead int  `json:"lookAhead,omitempty"`
 	}
 
+	t.Log("Creating external service")
 	// Set up external service
 	esID, err := client.AddExternalService(gqltestutil.AddExternalServiceInput{
 		Kind:        extsvc.KindPerforce,
@@ -246,7 +240,6 @@ func createPerforceExternalService(t *testing.T, depot string, useP4Fusion bool)
 			Depots:                []string{"//" + depot + "/"},
 			RepositoryPathPattern: "perforce/{depot}",
 			FusionClient: FusionClient{
-				Enabled:   useP4Fusion,
 				LookAhead: 2000,
 			},
 			Authorization: Authorization{
@@ -262,6 +255,7 @@ func createPerforceExternalService(t *testing.T, depot string, useP4Fusion bool)
 	}
 
 	return func() {
+		t.Log("Cleaning up external service")
 		if err := client.DeleteRepoFromDiskByName("perforce/" + depot); err != nil {
 			t.Fatalf("removing depot from disk: %v", err)
 		}

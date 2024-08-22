@@ -1,13 +1,12 @@
-import React, { useEffect } from 'react'
+import { useEffect, type FC } from 'react'
 
 import { mdiPlus } from '@mdi/js'
-import { Redirect } from 'react-router'
+import { Navigate, useLocation } from 'react-router-dom'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { Link, ButtonLink, Icon, PageHeader, Container } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { ButtonLink, Container, Icon, Link, PageHeader } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../auth'
-import { Scalars } from '../../graphql-operations'
 import {
     ConnectionContainer,
     ConnectionError,
@@ -24,11 +23,7 @@ import { ExternalServiceEditingDisabledAlert } from './ExternalServiceEditingDis
 import { ExternalServiceEditingTemporaryAlert } from './ExternalServiceEditingTemporaryAlert'
 import { ExternalServiceNode } from './ExternalServiceNode'
 
-interface Props extends TelemetryProps {
-    routingPrefix: string
-    userID?: Scalars['ID']
-    authenticatedUser: Pick<AuthenticatedUser, 'id'>
-
+interface Props extends TelemetryProps, TelemetryV2Props {
     externalServicesFromFile: boolean
     allowEditExternalServicesWithFile: boolean
 }
@@ -36,48 +31,47 @@ interface Props extends TelemetryProps {
 /**
  * A page displaying the external services on this site.
  */
-export const ExternalServicesPage: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
-    routingPrefix,
-    userID,
+export const ExternalServicesPage: FC<Props> = ({
     telemetryService,
-    authenticatedUser,
+    telemetryRecorder,
     externalServicesFromFile,
     allowEditExternalServicesWithFile,
 }) => {
     useEffect(() => {
         telemetryService.logViewEvent('SiteAdminExternalServices')
-    }, [telemetryService])
+        telemetryRecorder.recordEvent('admin.codeHostConnections', 'view')
+    }, [telemetryService, telemetryRecorder])
+
+    const location = useLocation()
+    const searchParameters = new URLSearchParams(location.search)
+    const repoID = searchParameters.get('repoID') || null
 
     const { loading, hasNextPage, fetchMore, connection, error } = useExternalServicesConnection({
-        first: null,
-        after: null,
+        repo: repoID,
     })
 
     const editingDisabled = externalServicesFromFile && !allowEditExternalServicesWithFile
-    const isManagingOtherUser = !!userID && userID !== authenticatedUser.id
 
-    return !isManagingOtherUser && !loading && (connection?.nodes?.length ?? 0) === 0 ? (
-        <Redirect to={`${routingPrefix}/external-services/new`} />
+    return !loading && (connection?.nodes?.length ?? 0) === 0 ? (
+        <Navigate to="/site-admin/external-services/new" replace={true} />
     ) : (
         <div className="site-admin-external-services-page">
-            <PageTitle title="Manage code hosts" />
+            <PageTitle title="Code host connections" />
             <PageHeader
-                path={[{ text: 'Manage code hosts' }]}
-                description="Manage code host connections to sync repositories."
+                path={[{ text: 'Code host connections' }]}
+                description="Code host connections to sync repositories."
                 headingElement="h2"
                 actions={
                     <>
-                        {!isManagingOtherUser && (
-                            <ButtonLink
-                                className="test-goto-add-external-service-page"
-                                to={`${routingPrefix}/external-services/new`}
-                                variant="primary"
-                                as={Link}
-                                disabled={editingDisabled}
-                            >
-                                <Icon aria-hidden={true} svgPath={mdiPlus} /> Add code host
-                            </ButtonLink>
-                        )}
+                        <ButtonLink
+                            className="test-goto-add-external-service-page"
+                            to="/site-admin/external-services/new"
+                            variant="primary"
+                            as={Link}
+                            disabled={editingDisabled}
+                        >
+                            <Icon aria-hidden={true} svgPath={mdiPlus} /> Add connection
+                        </ButtonLink>
                     </>
                 }
                 className="mb-3"
@@ -90,25 +84,19 @@ export const ExternalServicesPage: React.FunctionComponent<React.PropsWithChildr
                 <ConnectionContainer>
                     {error && <ConnectionError errors={[error.message]} />}
                     {loading && !connection && <ConnectionLoading />}
-                    <ConnectionList as="ul" className="list-group" aria-label="CodeHosts">
+                    <ConnectionList as="ul" className="list-group" aria-label="Code Host Connections">
                         {connection?.nodes?.map(node => (
-                            <ExternalServiceNode
-                                key={node.id}
-                                node={node}
-                                routingPrefix={routingPrefix}
-                                editingDisabled={editingDisabled}
-                            />
+                            <ExternalServiceNode key={node.id} node={node} editingDisabled={editingDisabled} />
                         ))}
                     </ConnectionList>
                     {connection && (
                         <SummaryContainer className="mt-2" centered={true}>
                             <ConnectionSummary
                                 noSummaryIfAllNodesVisible={false}
-                                first={connection.totalCount ?? 0}
                                 centered={true}
                                 connection={connection}
-                                noun="code host"
-                                pluralNoun="code hosts"
+                                noun="code host connection"
+                                pluralNoun="code host connections"
                                 hasNextPage={hasNextPage}
                             />
                             {hasNextPage && <ShowMoreButton centered={true} onClick={fetchMore} />}

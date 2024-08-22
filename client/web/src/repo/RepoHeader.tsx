@@ -2,26 +2,21 @@ import React, { useState, useMemo, useEffect } from 'react'
 
 import { mdiDotsVertical } from '@mdi/js'
 import classNames from 'classnames'
-import * as H from 'history'
+import { useLocation } from 'react-router-dom'
 
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
-import { SettingsCascadeOrError } from '@sourcegraph/shared/src/settings/settings'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { lazyComponent } from '@sourcegraph/shared/src/util/lazyComponent'
+import type { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
+import type { SettingsCascadeOrError } from '@sourcegraph/shared/src/settings/settings'
 import { Menu, MenuList, Position, Icon } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../auth'
-import { Breadcrumbs, BreadcrumbsProps } from '../components/Breadcrumbs'
+import type { AuthenticatedUser } from '../auth'
+import { Breadcrumbs, type BreadcrumbsProps } from '../components/Breadcrumbs'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import type { ActionItemsToggleProps } from '../extensions/components/ActionItemsBar'
-import { ActionButtonDescriptor } from '../util/contributions'
 import { useBreakpoint } from '../util/dom'
 
 import { RepoHeaderActionDropdownToggle } from './components/RepoHeaderActions'
+import { RepoHeaderContextMenu } from './RepoHeaderContextMenu'
 
 import styles from './RepoHeader.module.scss'
-
-const ActionItemsToggle = lazyComponent(() => import('../extensions/components/ActionItemsBar'), 'ActionItemsToggle')
 
 /**
  * Stores the list of RepoHeaderContributions, manages addition/deletion, and ensures they are sorted.
@@ -85,7 +80,9 @@ export interface RepoHeaderContribution {
      * Render function called with RepoHeaderContext.
      * Use `actionType` to determine how to render the component.
      */
-    children: (context: RepoHeaderContext) => React.ReactElement
+    children: (context: RepoHeaderContext) => JSX.Element | null
+
+    renderInContextMenu?: boolean
 }
 
 /**
@@ -119,15 +116,7 @@ export interface RepoHeaderContext {
     actionType: 'nav' | 'dropdown'
 }
 
-export interface RepoHeaderActionButton extends ActionButtonDescriptor<RepoHeaderContext> {}
-
-interface Props extends PlatformContextProps, TelemetryProps, BreadcrumbsProps, ActionItemsToggleProps {
-    /**
-     * An array of render functions for action buttons that can be configured *in addition* to action buttons
-     * contributed through {@link RepoHeaderContributionsLifecycleProps} and through extensions.
-     */
-    actionButtons: readonly RepoHeaderActionButton[]
-
+interface Props extends PlatformContextProps, BreadcrumbsProps {
     /** The repoName from the URL */
     repoName: string
 
@@ -144,9 +133,6 @@ interface Props extends PlatformContextProps, TelemetryProps, BreadcrumbsProps, 
 
     authenticatedUser: AuthenticatedUser | null
 
-    location: H.Location
-    history: H.History
-
     // This is used for testing purposes only because we're using CSS media
     // queries to determine the container height and in storybook we can't
     // control these.
@@ -162,6 +148,7 @@ export const RepoHeader: React.FunctionComponent<React.PropsWithChildren<Props>>
     onLifecyclePropsChange,
     ...props
 }) => {
+    const location = useLocation()
     const [repoHeaderContributions, setRepoHeaderContributions] = useState<RepoHeaderContribution[]>([])
     const repoHeaderContributionStore = useMemo(
         () => new RepoHeaderContributionStore(contributions => setRepoHeaderContributions(contributions)),
@@ -192,7 +179,18 @@ export const RepoHeader: React.FunctionComponent<React.PropsWithChildren<Props>>
     const rightActions = useMemo(
         () =>
             repoHeaderContributions
-                .filter(({ position }) => position === 'right')
+                .filter(({ position, renderInContextMenu }) => position === 'right' && !renderInContextMenu)
+                .map(({ children, ...rest }) => ({
+                    ...rest,
+                    element: children({ ...context, actionType: isLarge ? 'nav' : 'dropdown' }),
+                })),
+        [context, repoHeaderContributions, isLarge]
+    )
+
+    const rightActionsInContextMenu = useMemo(
+        () =>
+            repoHeaderContributions
+                .filter(({ position, renderInContextMenu }) => position === 'right' && renderInContextMenu)
                 .map(({ children, ...rest }) => ({
                     ...rest,
                     element: children({ ...context, actionType: isLarge ? 'nav' : 'dropdown' }),
@@ -201,25 +199,26 @@ export const RepoHeader: React.FunctionComponent<React.PropsWithChildren<Props>>
     )
 
     return (
-        <nav data-testid="repo-header" className={classNames('navbar navbar-expand', styles.repoHeader)}>
-            <div className="d-flex align-items-center flex-shrink-past-contents">
-                {/* Breadcrumb for the nav elements */}
-                <Breadcrumbs
-                    breadcrumbs={props.breadcrumbs}
-                    location={props.location}
-                    className={classNames('justify-content-start', !props.forceWrap ? styles.breadcrumbWrap : '')}
-                />
-            </div>
-            <ul className="navbar-nav">
-                {leftActions.map((a, index) => (
-                    <li className="nav-item" key={a.id || index}>
-                        {a.element}
-                    </li>
-                ))}
-            </ul>
-            <div className={styles.spacer} />
+        <nav data-testid="repo-header" className={classNames('navbar navbar-expand', 'px-3', styles.repoHeader)}>
+            <Breadcrumbs
+                breadcrumbs={props.breadcrumbs}
+                className={classNames(
+                    'justify-content-start flex-grow-1 w-auto m-0',
+                    !props.forceWrap ? styles.breadcrumbWrap : ''
+                )}
+            />
+
+            {leftActions.length !== 0 && (
+                <ul className="navbar-nav">
+                    {leftActions.map((a, index) => (
+                        <li className="nav-item" key={a.id || index}>
+                            {a.element}
+                        </li>
+                    ))}
+                </ul>
+            )}
             <ErrorBoundary
-                location={props.location}
+                location={location}
                 // To be clear to users that this isn't an error reported by extensions
                 // about e.g. the code they're viewing.
                 render={error => (
@@ -231,12 +230,17 @@ export const RepoHeader: React.FunctionComponent<React.PropsWithChildren<Props>>
                 )}
             >
                 {isLarge ? (
-                    <ul className="navbar-nav">
+                    <ul className={classNames('navbar-nav', styles.actionList)}>
                         {rightActions.map((a, index) => (
                             <li className={classNames('nav-item', styles.actionListItem)} key={a.id || index}>
                                 {a.element}
                             </li>
                         ))}
+                        {rightActionsInContextMenu.length > 0 && (
+                            <li className={classNames('nav-item', styles.actionListItem)}>
+                                <RepoHeaderContextMenu actions={rightActionsInContextMenu} />
+                            </li>
+                        )}
                     </ul>
                 ) : (
                     <ul className="navbar-nav">
@@ -246,7 +250,7 @@ export const RepoHeader: React.FunctionComponent<React.PropsWithChildren<Props>>
                                     <Icon aria-hidden={true} svgPath={mdiDotsVertical} />
                                 </RepoHeaderActionDropdownToggle>
                                 <MenuList position={Position.bottomEnd}>
-                                    {rightActions.map(a => (
+                                    {[...rightActionsInContextMenu, ...rightActions].map(a => (
                                         <React.Fragment key={a.id}>{a.element}</React.Fragment>
                                     ))}
                                 </MenuList>
@@ -254,14 +258,6 @@ export const RepoHeader: React.FunctionComponent<React.PropsWithChildren<Props>>
                         </li>
                     </ul>
                 )}
-                {window.context.enableLegacyExtensions ? (
-                    <ul className="navbar-nav">
-                        <ActionItemsToggle
-                            useActionItemsToggle={props.useActionItemsToggle}
-                            extensionsController={props.extensionsController}
-                        />
-                    </ul>
-                ) : null}
             </ErrorBoundary>
         </nav>
     )

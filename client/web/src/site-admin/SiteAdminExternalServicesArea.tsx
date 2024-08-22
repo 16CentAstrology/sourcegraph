@@ -1,19 +1,18 @@
-import React from 'react'
+import type { FC } from 'react'
 
-import { RouteComponentProps, Switch, Route, Redirect } from 'react-router'
-import { SiteExternalServiceConfigResult, SiteExternalServiceConfigVariables } from 'src/graphql-operations'
+import { Routes, Route, Navigate } from 'react-router-dom'
 
 import { useQuery } from '@sourcegraph/http-client'
-import { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
-import { Scalars } from '@sourcegraph/shared/src/graphql-operations'
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
-import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
+import type { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
+import type { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { lazyComponent } from '@sourcegraph/shared/src/util/lazyComponent'
 import { LoadingSpinner, ErrorAlert } from '@sourcegraph/wildcard'
 
 import { codeHostExternalServices, nonCodeHostExternalServices } from '../components/externalServices/externalServices'
+import type { SiteExternalServiceConfigResult, SiteExternalServiceConfigVariables } from '../graphql-operations'
 
 import { SITE_EXTERNAL_SERVICE_CONFIG } from './backend'
 
@@ -34,19 +33,11 @@ const AddExternalServicesPage = lazyComponent(
     'AddExternalServicesPage'
 )
 
-interface Props
-    extends RouteComponentProps<{}>,
-        ThemeProps,
-        TelemetryProps,
-        PlatformContextProps,
-        SettingsCascadeProps {
+interface Props extends TelemetryProps, TelemetryV2Props, PlatformContextProps, SettingsCascadeProps {
     authenticatedUser: AuthenticatedUser
 }
 
-export const SiteAdminExternalServicesArea: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
-    match,
-    ...outerProps
-}) => {
+export const SiteAdminExternalServicesArea: FC<Props> = props => {
     const { data, error, loading } = useQuery<SiteExternalServiceConfigResult, SiteExternalServiceConfigVariables>(
         SITE_EXTERNAL_SERVICE_CONFIG,
         {}
@@ -65,65 +56,52 @@ export const SiteAdminExternalServicesArea: React.FunctionComponent<React.PropsW
     }
 
     return (
-        <Switch>
+        <Routes>
             <Route
-                path={match.url}
-                render={props => (
+                index={true}
+                element={
                     <ExternalServicesPage
-                        {...outerProps}
                         {...props}
-                        routingPrefix="/site-admin"
                         externalServicesFromFile={data?.site?.externalServicesFromFile}
                         allowEditExternalServicesWithFile={data?.site?.allowEditExternalServicesWithFile}
                     />
-                )}
-                exact={true}
+                }
             />
-            <Route path={match.url + '/add'} render={() => <Redirect to="new" />} exact={true} />
+
+            <Route path="/add" element={<Navigate to="new" replace={true} />} />
             <Route
-                path={`${match.url}/new`}
-                render={props => (
+                path="new"
+                element={
                     <AddExternalServicesPage
-                        {...outerProps}
                         {...props}
-                        routingPrefix="/site-admin"
                         codeHostExternalServices={codeHostExternalServices}
                         nonCodeHostExternalServices={nonCodeHostExternalServices}
                         externalServicesFromFile={data?.site?.externalServicesFromFile}
                         allowEditExternalServicesWithFile={data?.site?.allowEditExternalServicesWithFile}
                     />
-                )}
-                exact={true}
+                }
             />
             <Route
-                path={`${match.url}/:id`}
-                render={({ match, ...props }: RouteComponentProps<{ id: Scalars['ID'] }>) => (
+                path=":externalServiceID"
+                element={
                     <ExternalServicePage
-                        {...outerProps}
                         {...props}
-                        routingPrefix="/site-admin"
                         afterDeleteRoute="/site-admin/external-services"
-                        externalServiceID={match.params.id}
                         externalServicesFromFile={data?.site?.externalServicesFromFile}
                         allowEditExternalServicesWithFile={data?.site?.allowEditExternalServicesWithFile}
                     />
-                )}
-                exact={true}
+                }
             />
             <Route
-                path={`${match.url}/:id/edit`}
-                render={({ match, ...props }: RouteComponentProps<{ id: Scalars['ID'] }>) => (
+                path=":externalServiceID/edit"
+                element={
                     <ExternalServiceEditPage
-                        {...outerProps}
                         {...props}
-                        routingPrefix="/site-admin"
-                        externalServiceID={match.params.id}
                         externalServicesFromFile={data?.site?.externalServicesFromFile}
                         allowEditExternalServicesWithFile={data?.site?.allowEditExternalServicesWithFile}
                     />
-                )}
-                exact={true}
+                }
             />
-        </Switch>
+        </Routes>
     )
 }

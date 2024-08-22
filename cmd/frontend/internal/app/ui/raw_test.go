@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,13 +12,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sourcegraph/log/logtest"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
 	"github.com/sourcegraph/sourcegraph/internal/fileutil"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/types"
-	"github.com/stretchr/testify/assert"
 )
 
 // initHTTPTestGitServer instantiates an httptest.Server to make it return an HTTP response as set
@@ -48,18 +49,7 @@ func initHTTPTestGitServer(t *testing.T, httpStatusCode int, resp string) {
 
 	t.Cleanup(func() {
 		s.Close()
-		gitserver.ResetClientMocks()
 	})
-
-	gitserver.ClientMocks.Archive = func(ctx context.Context, repo api.RepoName, opt gitserver.ArchiveOptions) (reader io.ReadCloser, err error) {
-		if httpStatusCode != http.StatusOK {
-			err = errors.New("error")
-		} else {
-			stringReader := strings.NewReader(resp)
-			reader = io.NopCloser(stringReader)
-		}
-		return reader, err
-	}
 }
 
 func Test_serveRawWithHTTPRequestMethodHEAD(t *testing.T) {
@@ -76,6 +66,8 @@ func Test_serveRawWithHTTPRequestMethodHEAD(t *testing.T) {
 		mockNewCommon = nil
 	}()
 
+	logger := logtest.Scoped(t)
+
 	t.Run("success response for HEAD request", func(t *testing.T) {
 		// httptest server will return a 200 OK, so gitserver.Client.RepoInfo will not return
 		// an error.
@@ -84,12 +76,12 @@ func Test_serveRawWithHTTPRequestMethodHEAD(t *testing.T) {
 		req := httptest.NewRequest("HEAD", "/github.com/sourcegraph/sourcegraph/-/raw", nil)
 		w := httptest.NewRecorder()
 
-		db := database.NewMockDB()
-		rstore := database.NewMockRepoStore()
+		db := dbmocks.NewMockDB()
+		rstore := dbmocks.NewMockRepoStore()
 		db.ReposFunc.SetDefaultReturn(rstore)
 		rstore.GetByNameFunc.SetDefaultReturn(&types.Repo{ID: 123}, nil)
 
-		err := serveRaw(db, gitserver.NewClient(db))(w, req)
+		err := serveRaw(logger, db, gitserver.NewTestClient(t), nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -107,12 +99,12 @@ func Test_serveRawWithHTTPRequestMethodHEAD(t *testing.T) {
 		req := httptest.NewRequest("HEAD", "/github.com/sourcegraph/sourcegraph/-/raw", nil)
 		w := httptest.NewRecorder()
 
-		db := database.NewMockDB()
-		rstore := database.NewMockRepoStore()
+		db := dbmocks.NewMockDB()
+		rstore := dbmocks.NewMockRepoStore()
 		db.ReposFunc.SetDefaultReturn(rstore)
 		rstore.GetByNameFunc.SetDefaultReturn(nil, &database.RepoNotFoundErr{ID: 123})
 
-		err := serveRaw(db, gitserver.NewClient(db))(w, req)
+		err := serveRaw(logger, db, gitserver.NewTestClient(t), nil)(w, req)
 		if err == nil {
 			t.Fatal("Want error but got nil")
 		}
@@ -136,6 +128,8 @@ func Test_serveRawWithContentArchive(t *testing.T) {
 		mockNewCommon = nil
 	}()
 
+	logger := logtest.Scoped(t)
+
 	mockGitServerResponse := "this is a gitserver archive response"
 
 	t.Run("success response for format=zip", func(t *testing.T) {
@@ -146,8 +140,11 @@ func Test_serveRawWithContentArchive(t *testing.T) {
 		req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw?format=zip", nil)
 		w := httptest.NewRecorder()
 
-		db := database.NewMockDB()
-		err := serveRaw(db, gitserver.NewClient(db))(w, req)
+		db := dbmocks.NewMockDB()
+		client := gitserver.NewMockClient()
+		client.ArchiveReaderFunc.SetDefaultReturn(io.NopCloser(strings.NewReader(mockGitServerResponse)), nil)
+
+		err := serveRaw(logger, db, client, nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -172,7 +169,7 @@ func Test_serveRawWithContentArchive(t *testing.T) {
 			}
 		}
 
-		body := string(w.Body.Bytes())
+		body := w.Body.String()
 		if body != mockGitServerResponse {
 			t.Errorf("Want %q in body, but got %q", mockGitServerResponse, body)
 		}
@@ -186,8 +183,10 @@ func Test_serveRawWithContentArchive(t *testing.T) {
 		req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw?format=tar", nil)
 		w := httptest.NewRecorder()
 
-		db := database.NewMockDB()
-		err := serveRaw(db, gitserver.NewClient(db))(w, req)
+		db := dbmocks.NewMockDB()
+		client := gitserver.NewMockClient()
+		client.ArchiveReaderFunc.SetDefaultReturn(io.NopCloser(strings.NewReader(mockGitServerResponse)), nil)
+		err := serveRaw(logger, db, client, nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -212,12 +211,11 @@ func Test_serveRawWithContentArchive(t *testing.T) {
 			}
 		}
 
-		body := string(w.Body.Bytes())
+		body := w.Body.String()
 		if body != mockGitServerResponse {
 			t.Errorf("Want %q in body, but got %q", mockGitServerResponse, body)
 		}
 	})
-
 }
 
 func Test_serveRawWithContentTypePlain(t *testing.T) {
@@ -232,6 +230,8 @@ func Test_serveRawWithContentTypePlain(t *testing.T) {
 	defer func() {
 		mockNewCommon = nil
 	}()
+
+	logger := logtest.Scoped(t)
 
 	assertHeaders := func(w http.ResponseWriter) {
 		t.Helper()
@@ -262,8 +262,8 @@ func Test_serveRawWithContentTypePlain(t *testing.T) {
 		req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw", nil)
 		w := httptest.NewRecorder()
 
-		db := database.NewMockDB()
-		err := serveRaw(db, gsClient)(w, req)
+		db := dbmocks.NewMockDB()
+		err := serveRaw(logger, db, gsClient, nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -281,19 +281,19 @@ func Test_serveRawWithContentTypePlain(t *testing.T) {
 
 		gsClient := gitserver.NewMockClient()
 		gsClient.StatFunc.SetDefaultReturn(&fileutil.FileInfo{Mode_: os.ModeDir}, nil)
-		gsClient.ReadDirFunc.SetDefaultHook(func(context.Context, authz.SubRepoPermissionChecker, api.RepoName, api.CommitID, string, bool) ([]fs.FileInfo, error) {
-			return []fs.FileInfo{
+		gsClient.ReadDirFunc.SetDefaultHook(func(context.Context, api.RepoName, api.CommitID, string, bool) (gitserver.ReadDirIterator, error) {
+			return gitserver.NewReadDirIteratorFromSlice([]fs.FileInfo{
 				&fileutil.FileInfo{Name_: "test/a", Mode_: os.ModeDir},
 				&fileutil.FileInfo{Name_: "test/b", Mode_: os.ModeDir},
 				&fileutil.FileInfo{Name_: "c.go", Mode_: 0},
-			}, nil
+			}), nil
 		})
 
 		req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw", nil)
 		w := httptest.NewRecorder()
 
-		db := database.NewMockDB()
-		err := serveRaw(db, gsClient)(w, req)
+		db := dbmocks.NewMockDB()
+		err := serveRaw(logger, db, gsClient, nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -307,7 +307,7 @@ func Test_serveRawWithContentTypePlain(t *testing.T) {
 		want := `a/
 b/
 c.go`
-		body := string(w.Body.Bytes())
+		body := w.Body.String()
 		if body != want {
 			t.Errorf("Want %q in body, but got %q", want, body)
 		}
@@ -319,14 +319,14 @@ c.go`
 
 		gitserverClient := gitserver.NewMockClient()
 		gitserverClient.StatFunc.SetDefaultReturn(&fileutil.FileInfo{Mode_: 0}, nil)
-		gitserverClient.NewFileReaderFunc.SetDefaultHook(func(context.Context, authz.SubRepoPermissionChecker, api.RepoName, api.CommitID, string) (io.ReadCloser, error) {
+		gitserverClient.NewFileReaderFunc.SetDefaultHook(func(context.Context, api.RepoName, api.CommitID, string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader("this is a test file")), nil
 		})
 
 		req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw", nil)
 		w := httptest.NewRecorder()
 
-		err := serveRaw(database.NewMockDB(), gitserverClient)(w, req)
+		err := serveRaw(logger, dbmocks.NewMockDB(), gitserverClient, nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -339,7 +339,7 @@ c.go`
 
 		want := "this is a test file"
 
-		body := string(w.Body.Bytes())
+		body := w.Body.String()
 		if body != want {
 			t.Errorf("Want %q in body, but got %q", want, body)
 		}
@@ -352,14 +352,14 @@ c.go`
 
 		gitserverClient := gitserver.NewMockClient()
 		gitserverClient.StatFunc.SetDefaultReturn(&fileutil.FileInfo{Mode_: 0}, nil)
-		gitserverClient.NewFileReaderFunc.SetDefaultHook(func(context.Context, authz.SubRepoPermissionChecker, api.RepoName, api.CommitID, string) (io.ReadCloser, error) {
+		gitserverClient.NewFileReaderFunc.SetDefaultHook(func(context.Context, api.RepoName, api.CommitID, string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader("this is a test file")), nil
 		})
 
 		req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw?format=exe", nil)
 		w := httptest.NewRecorder()
 
-		err := serveRaw(database.NewMockDB(), gitserverClient)(w, req)
+		err := serveRaw(logger, dbmocks.NewMockDB(), gitserverClient, nil)(w, req)
 		if err != nil {
 			t.Fatalf("Failed to invoke serveRaw: %v", err)
 		}
@@ -372,7 +372,7 @@ c.go`
 
 		want := "this is a test file"
 
-		body := string(w.Body.Bytes())
+		body := w.Body.String()
 		if body != want {
 			t.Errorf("Want %q in body, but got %q", want, body)
 		}
@@ -388,6 +388,7 @@ func Test_serveRawRepoCloning(t *testing.T) {
 	t.Cleanup(func() {
 		mockNewCommon = nil
 	})
+	logger := logtest.Scoped(t)
 	// Fail git server calls, as they should not be invoked for a cloning repo.
 	initHTTPTestGitServer(t, http.StatusInternalServerError, "{should not be invoked}")
 	gsClient := gitserver.NewMockClient()
@@ -395,10 +396,10 @@ func Test_serveRawRepoCloning(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/github.com/sourcegraph/sourcegraph/-/raw", nil)
 	w := httptest.NewRecorder()
-	db := database.NewMockDB()
+	db := dbmocks.NewMockDB()
 	// Former implementation would sleep awaiting repository to be available.
 	// Await request to be served with a timeout by racing done channel with time.After.
-	err := serveRaw(db, gsClient)(w, req)
+	err := serveRaw(logger, db, gsClient, nil)(w, req)
 	if err != nil {
 		t.Fatalf("Failed to invoke serveRaw: %v", err)
 	}

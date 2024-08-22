@@ -2,13 +2,13 @@ import { dataOrThrowErrors } from '@sourcegraph/http-client'
 
 import {
     useShowMorePagination,
-    UseShowMorePaginationResult,
+    type UseShowMorePaginationResult,
 } from '../../../../../components/FilteredConnection/hooks/useShowMorePagination'
-import {
-    Scalars,
-    PreviewBatchSpecImportingChangesetFields,
+import type {
     BatchSpecImportingChangesetsResult,
     BatchSpecImportingChangesetsVariables,
+    PreviewBatchSpecImportingChangesetFields,
+    Scalars,
 } from '../../../../../graphql-operations'
 import { IMPORTING_CHANGESETS } from '../../../create/backend'
 
@@ -25,7 +25,7 @@ export type ImportingChangesetFields =
  */
 export const useImportingChangesets = (
     batchSpecID: Scalars['ID']
-): UseShowMorePaginationResult<ImportingChangesetFields> =>
+): UseShowMorePaginationResult<BatchSpecImportingChangesetsResult, ImportingChangesetFields> =>
     useShowMorePagination<
         BatchSpecImportingChangesetsResult,
         BatchSpecImportingChangesetsVariables,
@@ -34,11 +34,9 @@ export const useImportingChangesets = (
         query: IMPORTING_CHANGESETS,
         variables: {
             batchSpec: batchSpecID,
-            after: null,
-            first: CHANGESETS_PER_PAGE_COUNT,
         },
         options: {
-            useURL: false,
+            pageSize: CHANGESETS_PER_PAGE_COUNT,
             fetchPolicy: 'cache-and-network',
         },
         getConnection: result => {

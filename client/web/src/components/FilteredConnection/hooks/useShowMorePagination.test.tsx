@@ -1,17 +1,20 @@
-import { MockedResponse } from '@apollo/client/testing'
+import type { MockedResponse } from '@apollo/client/testing'
 import { fireEvent } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 
 import { dataOrThrowErrors, getDocumentNode, gql } from '@sourcegraph/http-client'
 import { MockedTestProvider, waitForNextApolloResponse } from '@sourcegraph/shared/src/testing/apollo'
 import { Text } from '@sourcegraph/wildcard'
-import { RenderWithBrandedContextResult, renderWithBrandedContext } from '@sourcegraph/wildcard/src/testing'
+import { renderWithBrandedContext, type RenderWithBrandedContextResult } from '@sourcegraph/wildcard/src/testing'
 
-import {
+import type {
     TestShowMorePaginationQueryFields,
     TestShowMorePaginationQueryResult,
     TestShowMorePaginationQueryVariables,
 } from '../../../graphql-operations'
+import type { Filter } from '../FilterControl'
 
+import { useUrlSearchParamsForConnectionState } from './connectionState'
 import { useShowMorePagination } from './useShowMorePagination'
 
 const TEST_SHOW_MORE_PAGINATION_QUERY = gql`
@@ -35,23 +38,26 @@ const TEST_SHOW_MORE_PAGINATION_QUERY = gql`
     }
 `
 
-const TestComponent = () => {
+const FILTERS: Filter[] = []
+
+const TestComponent = ({ skip = false }) => {
+    const connectionState = useUrlSearchParamsForConnectionState(FILTERS)
     const { connection, fetchMore, hasNextPage } = useShowMorePagination<
         TestShowMorePaginationQueryResult,
         TestShowMorePaginationQueryVariables,
         TestShowMorePaginationQueryFields
     >({
         query: TEST_SHOW_MORE_PAGINATION_QUERY,
-        variables: {
-            first: 1,
-        },
+        variables: {},
         getConnection: result => {
             const data = dataOrThrowErrors(result)
             return data.repositories
         },
         options: {
-            useURL: true,
+            skip,
+            pageSize: 1,
         },
+        state: connectionState,
     })
 
     return (
@@ -137,10 +143,14 @@ describe('useShowMorePagination', () => {
         },
     ]
 
-    const renderWithMocks = async (mocks: MockedResponse<TestShowMorePaginationQueryResult>[], route = '/') => {
+    const renderWithMocks = async (
+        mocks: MockedResponse<TestShowMorePaginationQueryResult>[],
+        route = '/',
+        skip = false
+    ) => {
         const renderResult = renderWithBrandedContext(
             <MockedTestProvider mocks={mocks}>
-                <TestComponent />
+                <TestComponent skip={skip} />
             </MockedTestProvider>,
             { route }
         )
@@ -171,13 +181,21 @@ describe('useShowMorePagination', () => {
 
         const cursorMocks = generateMockCursorResponses(mockResultNodes)
 
+        it('does not fetch anything if skip is true', async () => {
+            const queries = await renderWithMocks(cursorMocks, '/', true)
+            expect(queries.queryByText('repo-A')).not.toBeInTheDocument()
+            expect(queries.queryByText('repo-C')).not.toBeInTheDocument()
+            expect(queries.queryByText('repo-D')).not.toBeInTheDocument()
+            expect(queries.queryByText('Total count')).not.toBeInTheDocument()
+        })
+
         it('renders correct result', async () => {
             const queries = await renderWithMocks(cursorMocks)
             expect(queries.getAllByRole('listitem').length).toBe(1)
             expect(queries.getByText('repo-A')).toBeVisible()
             expect(queries.getByText('Total count: 4')).toBeVisible()
             expect(queries.getByText('Fetch more')).toBeVisible()
-            expect(queries.history.location.search).toBe('')
+            expect(queries.locationRef.current?.search).toBe('')
         })
 
         it('fetches next page of results correctly', async () => {
@@ -194,7 +212,7 @@ describe('useShowMorePagination', () => {
             expect(queries.getByText('Fetch more')).toBeVisible()
 
             // URL updates to match visible results
-            expect(queries.history.location.search).toBe('?visible=2')
+            expect(queries.locationRef.current?.search).toBe('?first=2')
         })
 
         it('fetches final page of results correctly', async () => {
@@ -217,12 +235,12 @@ describe('useShowMorePagination', () => {
             expect(queries.queryByText('Fetch more')).not.toBeInTheDocument()
 
             // URL updates to match visible results
-            expect(queries.history.location.search).toBe('?visible=4')
+            expect(queries.locationRef.current?.search).toBe('?first=4')
         })
 
         it('fetches correct amount of results when navigating directly with a URL', async () => {
-            // We need to add an extra mock here, as we will derive a different `first` variable from `visible` in the URL.
-            const mockFromVisible: MockedResponse<TestShowMorePaginationQueryResult> = {
+            // We need to add an extra mock here, as we will derive a different `first` variable the URL.
+            const mockFromFirst: MockedResponse<TestShowMorePaginationQueryResult> = {
                 request: generateMockRequest({ first: 3 }),
                 result: generateMockResult({
                     nodes: [mockResultNodes[0], mockResultNodes[1], mockResultNodes[2]],
@@ -232,7 +250,7 @@ describe('useShowMorePagination', () => {
                 }),
             }
 
-            const queries = await renderWithMocks([...cursorMocks, mockFromVisible], '/?visible=3')
+            const queries = await renderWithMocks([...cursorMocks, mockFromFirst], '/?first=3')
 
             // Renders 3 results without having to manually fetch
             expect(queries.getAllByRole('listitem').length).toBe(3)
@@ -249,7 +267,7 @@ describe('useShowMorePagination', () => {
             expect(queries.getByText('Total count: 4')).toBeVisible()
 
             // URL should be overidden
-            expect(queries.history.location.search).toBe('?visible=4')
+            expect(queries.locationRef.current?.search).toBe('?first=4')
         })
     })
 
@@ -274,6 +292,15 @@ describe('useShowMorePagination', () => {
                 }),
             },
             {
+                request: generateMockRequest({ first: 3 }),
+                result: generateMockResult({
+                    nodes: [mockResultNodes[0], mockResultNodes[1], mockResultNodes[2]],
+                    endCursor: null,
+                    hasNextPage: true,
+                    totalCount: 4,
+                }),
+            },
+            {
                 request: generateMockRequest({ first: 4 }),
                 result: generateMockResult({
                     nodes: mockResultNodes,
@@ -290,7 +317,7 @@ describe('useShowMorePagination', () => {
             expect(queries.getByText('repo-A')).toBeVisible()
             expect(queries.getByText('Total count: 4')).toBeVisible()
             expect(queries.getByText('Fetch more')).toBeVisible()
-            expect(queries.history.location.search).toBe('')
+            expect(queries.locationRef.current?.search).toBe('')
         })
 
         it('fetches next page of results correctly', async () => {
@@ -307,13 +334,14 @@ describe('useShowMorePagination', () => {
             expect(queries.getByText('Fetch more')).toBeVisible()
 
             // URL updates to match the new request
-            expect(queries.history.location.search).toBe('?first=2')
+            expect(queries.locationRef.current?.search).toBe('?first=2')
         })
 
         it('fetches final page of results correctly', async () => {
             const queries = await renderWithMocks(batchedMocks)
 
             // Fetch both pages
+            await fetchNextPage(queries)
             await fetchNextPage(queries)
             await fetchNextPage(queries)
 
@@ -329,7 +357,7 @@ describe('useShowMorePagination', () => {
             expect(queries.queryByText('Fetch more')).not.toBeInTheDocument()
 
             // URL updates to match the new request
-            expect(queries.history.location.search).toBe('?first=4')
+            expect(queries.locationRef.current?.search).toBe('?first=4')
         })
 
         it('fetches correct amount of results when navigating directly with a URL', async () => {
@@ -340,16 +368,16 @@ describe('useShowMorePagination', () => {
             expect(queries.getByText('repo-A')).toBeVisible()
             expect(queries.getByText('repo-B')).toBeVisible()
             expect(queries.getByText('Total count: 4')).toBeVisible()
+            expect(queries.locationRef.current?.search).toBe('?first=2')
 
             // Fetching next page should work as usual
             await fetchNextPage(queries)
-            expect(queries.getAllByRole('listitem').length).toBe(4)
+            expect(queries.getAllByRole('listitem').length).toBe(3)
             expect(queries.getByText('repo-C')).toBeVisible()
-            expect(queries.getByText('repo-D')).toBeVisible()
             expect(queries.getByText('Total count: 4')).toBeVisible()
 
             // URL should be overidden
-            expect(queries.history.location.search).toBe('?first=4')
+            expect(queries.locationRef.current?.search).toBe('?first=3')
         })
     })
 })

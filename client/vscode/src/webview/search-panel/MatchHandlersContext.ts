@@ -1,14 +1,14 @@
 import { createContext, useContext, useMemo } from 'react'
 
-import * as Comlink from 'comlink'
+import type * as Comlink from 'comlink'
 import { noop } from 'lodash'
 
-import { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
-import { RepositoryMatch } from '@sourcegraph/shared/src/search/stream'
+import type { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
+import type { RepositoryMatch } from '@sourcegraph/shared/src/search/stream'
 
-import { ExtensionCoreAPI } from '../../contract'
-import { SourcegraphUri, SourcegraphUriOptionals } from '../../file-system/SourcegraphUri'
-import { VSCodePlatformContext } from '../platform/context'
+import type { ExtensionCoreAPI } from '../../contract'
+import { SourcegraphUri, type SourcegraphUriOptionals } from '../../file-system/SourcegraphUri'
+import type { VSCodePlatformContext } from '../platform/context'
 
 type MinimalRepositoryMatch = Pick<RepositoryMatch, 'repository' | 'branches' | 'description'>
 
@@ -19,6 +19,7 @@ export interface MatchHandlersContext {
     openCommit: (commitUrl: string) => void
     instanceURL: string
 }
+
 export const MatchHandlersContext = createContext<MatchHandlersContext>({
     // Initialize in `SearchResultsView` (via `useMatchHandlers`)
     openRepo: noop,

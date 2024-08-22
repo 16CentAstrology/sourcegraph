@@ -9,8 +9,12 @@ import (
 	"github.com/grafana/regexp"
 
 	"github.com/sourcegraph/sourcegraph/internal/search/limits"
+	"github.com/sourcegraph/sourcegraph/internal/types"
+	"github.com/sourcegraph/sourcegraph/lib/pointers"
 )
 
+// ExpectedOperand is a 'marker' error type that the frontend logic
+// knows how to convert into a user-facing alert.
 type ExpectedOperand struct {
 	Msg string
 }
@@ -19,6 +23,8 @@ func (e *ExpectedOperand) Error() string {
 	return e.Msg
 }
 
+// UnsupportedError is a 'marker' error type that the frontend logic
+// knows how to convert into a user-facing alert.
 type UnsupportedError struct {
 	Msg string
 }
@@ -33,8 +39,8 @@ const (
 	SearchTypeRegex SearchType = iota
 	SearchTypeLiteral
 	SearchTypeStructural
-	SearchTypeLucky
 	SearchTypeStandard
+	SearchTypeCodyContext
 	SearchTypeKeyword
 )
 
@@ -48,8 +54,8 @@ func (s SearchType) String() string {
 		return "literal"
 	case SearchTypeStructural:
 		return "structural"
-	case SearchTypeLucky:
-		return "lucky"
+	case SearchTypeCodyContext:
+		return "codycontext"
 	case SearchTypeKeyword:
 		return "keyword"
 	default:
@@ -147,7 +153,11 @@ func (q Q) Repositories() (repos []ParsedRepoFilter, negatedRepos []string) {
 		if negated {
 			negatedRepos = append(negatedRepos, value)
 		} else {
-			repoFilter := ParseRepositoryRevisions(value)
+			repoFilter, err := ParseRepositoryRevisions(value)
+			// Should never happen because the repo name is already validated
+			if err != nil {
+				panic(fmt.Sprintf("repo field %q is an invalid regex: %v", value, err))
+			}
 			repos = append(repos, repoFilter)
 		}
 	})
@@ -199,7 +209,7 @@ func (p Plan) ToQ() Q {
 		operands := basic.ToParseTree()
 		nodes = append(nodes, NewOperator(operands, And)...)
 	}
-	return Q(NewOperator(nodes, Or))
+	return NewOperator(nodes, Or)
 }
 
 // Basic represents a leaf expression to evaluate in our search engine. A basic
@@ -345,6 +355,7 @@ func (p Parameters) IncludeExcludeValues(field string) (include, exclude []strin
 // - repo:contains.file(path:foo content:bar) || repo:has.file(path:foo content:bar)
 // - repo:contains.path(foo) || repo:has.path(foo)
 // - repo:contains.content(c) || repo:has.content(c)
+// - repo:contains(file:foo content:bar)
 // - repohasfile:f
 type RepoHasFileContentArgs struct {
 	// At least one of these strings should be non-empty
@@ -379,6 +390,14 @@ func (p Parameters) RepoHasFileContent() (res []RepoHasFileContentArgs) {
 	VisitTypedPredicate(nodes, func(pred *RepoContainsFilePredicate) {
 		res = append(res, RepoHasFileContentArgs{
 			Path:    pred.Path,
+			Content: pred.Content,
+			Negated: pred.Negated,
+		})
+	})
+
+	VisitTypedPredicate(nodes, func(pred *RepoContainsPredicate) {
+		res = append(res, RepoHasFileContentArgs{
+			Path:    pred.File,
 			Content: pred.Content,
 			Negated: pred.Negated,
 		})
@@ -421,37 +440,75 @@ func (p Parameters) RepoContainsCommitAfter() (res *RepoHasCommitAfterArgs) {
 }
 
 type RepoKVPFilter struct {
-	Key     string
-	Value   *string
+	Key     types.RegexpPattern
+	Value   *types.RegexpPattern
 	Negated bool
 	KeyOnly bool
 }
 
 func (p Parameters) RepoHasKVPs() (res []RepoKVPFilter) {
-	VisitTypedPredicate(toNodes(p), func(pred *RepoHasKVPPredicate) {
+	VisitTypedPredicate(toNodes(p), func(pred *RepoHasMetaPredicate) {
 		res = append(res, RepoKVPFilter{
 			Key:     pred.Key,
-			Value:   &pred.Value,
+			Value:   pred.Value,
+			Negated: pred.Negated,
+			KeyOnly: pred.KeyOnly,
+		})
+	})
+
+	VisitTypedPredicate(toNodes(p), func(pred *RepoHasKVPPredicate) {
+		res = append(res, RepoKVPFilter{
+			Key:     exactRegexpPattern(pred.Key),
+			Value:   pointers.Ptr(exactRegexpPattern(pred.Value)),
 			Negated: pred.Negated,
 		})
 	})
 
 	VisitTypedPredicate(toNodes(p), func(pred *RepoHasTagPredicate) {
 		res = append(res, RepoKVPFilter{
-			Key:     pred.Key,
+			Key:     exactRegexpPattern(pred.Key),
 			Negated: pred.Negated,
 		})
 	})
 
 	VisitTypedPredicate(toNodes(p), func(pred *RepoHasKeyPredicate) {
 		res = append(res, RepoKVPFilter{
-			Key:     pred.Key,
+			Key:     exactRegexpPattern(pred.Key),
 			Negated: pred.Negated,
 			KeyOnly: true,
 		})
 	})
 
 	return res
+}
+
+func (p Parameters) RepoHasTopics() (res []RepoHasTopicPredicate) {
+	VisitTypedPredicate(toNodes(p), func(pred *RepoHasTopicPredicate) {
+		res = append(res, *pred)
+	})
+	return res
+}
+
+func (p Parameters) FileHasOwner() (include, exclude []string) {
+	VisitTypedPredicate(toNodes(p), func(pred *FileHasOwnerPredicate) {
+		if pred.Negated {
+			exclude = append(exclude, pred.Owner)
+		} else {
+			include = append(include, pred.Owner)
+		}
+	})
+	return include, exclude
+}
+
+func (p Parameters) FileHasContributor() (include []string, exclude []string) {
+	VisitTypedPredicate(toNodes(p), func(pred *FileHasContributorPredicate) {
+		if pred.Negated {
+			exclude = append(exclude, pred.Contributor)
+		} else {
+			include = append(include, pred.Contributor)
+		}
+	})
+	return include, exclude
 }
 
 // Exists returns whether a parameter exists in the query (whether negated or not).
@@ -565,7 +622,11 @@ func (p Parameters) Repositories() (repos []ParsedRepoFilter, negatedRepos []str
 		if negated {
 			negatedRepos = append(negatedRepos, value)
 		} else {
-			repoFilter := ParseRepositoryRevisions(value)
+			repoFilter, err := ParseRepositoryRevisions(value)
+			// Should never happen because the repo name is already validated
+			if err != nil {
+				panic(fmt.Sprintf("repo field %q is an invalid regex: %v", value, err))
+			}
 			repos = append(repos, repoFilter)
 		}
 	})

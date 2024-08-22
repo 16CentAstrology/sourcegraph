@@ -1,26 +1,27 @@
 import React from 'react'
 
-import { Connection } from '../../../../../components/FilteredConnection'
-import { UseShowMorePaginationResult } from '../../../../../components/FilteredConnection/hooks/useShowMorePagination'
+import type { Connection } from '../../../../../components/FilteredConnection'
+import type { UseShowMorePaginationResult } from '../../../../../components/FilteredConnection/hooks/useShowMorePagination'
 import {
     ConnectionContainer,
     ConnectionError,
     ConnectionList,
-    SummaryContainer,
     ConnectionSummary,
     ShowMoreButton,
+    SummaryContainer,
 } from '../../../../../components/FilteredConnection/ui'
-import {
+import type {
+    BatchSpecWorkspacesPreviewResult,
     PreviewHiddenBatchSpecWorkspaceFields,
     PreviewVisibleBatchSpecWorkspaceFields,
 } from '../../../../../graphql-operations'
 
-import { WORKSPACES_PER_PAGE_COUNT } from './useWorkspaces'
 import { WorkspacesPreviewListItem } from './WorkspacesPreviewListItem'
 
 interface WorkspacesPreviewListProps {
     /** The current workspaces preview connection result used to render the list. */
     workspacesConnection: UseShowMorePaginationResult<
+        BatchSpecWorkspacesPreviewResult,
         PreviewHiddenBatchSpecWorkspaceFields | PreviewVisibleBatchSpecWorkspaceFields
     >
     /**
@@ -88,7 +89,6 @@ export const WorkspacesPreviewList: React.FunctionComponent<React.PropsWithChild
                     <ConnectionSummary
                         centered={true}
                         noSummaryIfAllNodesVisible={true}
-                        first={WORKSPACES_PER_PAGE_COUNT}
                         connection={connectionOrCached}
                         noun="workspace"
                         pluralNoun="workspaces"

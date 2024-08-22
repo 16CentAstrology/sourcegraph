@@ -1,3 +1,5 @@
+import { describe, expect, test } from 'vitest'
+
 import { CaseInsensitiveFuzzySearch } from './CaseInsensitiveFuzzySearch'
 
 function fuzzyMatches(query: string, values: string[]): string[] {
@@ -38,6 +40,7 @@ describe('case-insensitive fuzzy search', () => {
         ['batches/executor.go']
     )
     checkFuzzyMatches('exact-match', 'src/hello.ts', ['src/hello.ts', 'ignore.me'], ['src/hello.ts'])
+    checkFuzzyMatches('no-smart-case', 'getSlocEntry', ['getSLocEntry'], ['getSLocEntry'])
 
     // Buggy cache test. Previously, the cached list of candidates only included
     // results that had a fuzzy score above 0.2 causing the 'a' query to filter

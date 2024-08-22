@@ -1,11 +1,12 @@
-import React, { useState, useCallback, useMemo, useEffect, useContext } from 'react'
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react'
 
-import * as H from 'history'
 import { Subject } from 'rxjs'
 
 import { dataOrThrowErrors } from '@sourcegraph/http-client'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
 import { Container } from '@sourcegraph/wildcard'
 
+import { useUrlSearchParamsForConnectionState } from '../../../../components/FilteredConnection/hooks/connectionState'
 import { useShowMorePagination } from '../../../../components/FilteredConnection/hooks/useShowMorePagination'
 import {
     ConnectionContainer,
@@ -17,22 +18,22 @@ import {
     SummaryContainer,
 } from '../../../../components/FilteredConnection/ui'
 import {
-    ExternalChangesetFields,
-    HiddenExternalChangesetFields,
-    Scalars,
-    BatchChangeChangesetsResult,
-    BatchChangeChangesetsVariables,
     BatchChangeState,
+    type BatchChangeChangesetsResult,
+    type BatchChangeChangesetsVariables,
+    type ExternalChangesetFields,
+    type HiddenExternalChangesetFields,
+    type Scalars,
 } from '../../../../graphql-operations'
 import { MultiSelectContext, MultiSelectContextProvider } from '../../MultiSelectContext'
 import {
-    queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs,
-    queryAllChangesetIDs as _queryAllChangesetIDs,
     CHANGESETS,
+    queryAllChangesetIDs as _queryAllChangesetIDs,
+    type queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs,
 } from '../backend'
 
 import { BatchChangeChangesetsHeader } from './BatchChangeChangesetsHeader'
-import { ChangesetFilters, ChangesetFilterRow } from './ChangesetFilterRow'
+import { ChangesetFilterRow, type ChangesetFilters } from './ChangesetFilterRow'
 import { ChangesetNode } from './ChangesetNode'
 import { ChangesetSelectRow } from './ChangesetSelectRow'
 import { EmptyArchivedChangesetListElement } from './EmptyArchivedChangesetListElement'
@@ -42,13 +43,11 @@ import { EmptyDraftChangesetListElement } from './EmptyDraftChangesetListElement
 
 import styles from './BatchChangeChangesets.module.scss'
 
-interface Props {
+interface Props extends TelemetryV2Props {
     batchChangeID: Scalars['ID']
     batchChangeState: BatchChangeState
     isExecutionEnabled: boolean
     viewerCanAdminister: boolean
-    history: H.History
-    location: H.Location
 
     hideFilters?: boolean
     onlyArchived?: boolean
@@ -76,8 +75,6 @@ const BATCH_COUNT = 15
 const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
     batchChangeID,
     viewerCanAdminister,
-    history,
-    location,
     hideFilters = false,
     queryAllChangesetIDs = _queryAllChangesetIDs,
     queryExternalChangesetWithFileDiffs,
@@ -86,6 +83,7 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
     refetchBatchChange,
     batchChangeState,
     isExecutionEnabled,
+    telemetryRecorder,
 }) => {
     // You might look at this destructuring statement and wonder why this isn't
     // just a single context consumer object. The reason is because making it a
@@ -130,6 +128,7 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
         [changesetFilters, batchChangeID, onlyArchived]
     )
 
+    const connectionState = useUrlSearchParamsForConnectionState()
     const { connection, error, loading, fetchMore, hasNextPage } = useShowMorePagination<
         BatchChangeChangesetsResult,
         BatchChangeChangesetsVariables,
@@ -138,12 +137,10 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
         query: CHANGESETS,
         variables: {
             ...queryArguments,
-            first: BATCH_COUNT,
-            after: null,
             onlyClosable: null,
         },
         options: {
-            useURL: true,
+            pageSize: BATCH_COUNT,
             fetchPolicy: 'cache-and-network',
             pollInterval: 5000,
         },
@@ -158,6 +155,7 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
             }
             return data.node.changesets
         },
+        state: connectionState,
     })
 
     useEffect(() => {
@@ -194,11 +192,7 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
     return (
         <Container>
             {!hideFilters && !showSelectRow && (
-                <ChangesetFilterRow
-                    history={history}
-                    location={location}
-                    onFiltersChange={setChangesetFiltersAndDeselectAll}
-                />
+                <ChangesetFilterRow onFiltersChange={setChangesetFiltersAndDeselectAll} />
             )}
             {showSelectRow && queryArguments && (
                 <ChangesetSelectRow
@@ -206,6 +200,7 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
                     onSubmit={onSubmitBulkAction}
                     queryAllChangesetIDs={queryAllChangesetIDs}
                     queryArguments={queryArguments}
+                    telemetryRecorder={telemetryRecorder}
                 />
             )}
             <div className="list-group position-relative" ref={nextContainerElement}>
@@ -224,8 +219,6 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
                                 key={node.id}
                                 node={node}
                                 viewerCanAdminister={viewerCanAdminister}
-                                history={history}
-                                location={location}
                                 expandByDefault={expandByDefault}
                                 queryExternalChangesetWithFileDiffs={queryExternalChangesetWithFileDiffs}
                                 selectable={{ onSelect: toggleSingle, isSelected }}
@@ -241,7 +234,6 @@ const BatchChangeChangesetsImpl: React.FunctionComponent<React.PropsWithChildren
                         <SummaryContainer centered={true}>
                             <ConnectionSummary
                                 noSummaryIfAllNodesVisible={true}
-                                first={BATCH_COUNT}
                                 centered={true}
                                 connection={connection}
                                 noun="changeset"

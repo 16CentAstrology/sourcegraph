@@ -65,6 +65,7 @@ var (
 		router.Favicon:            {},
 		router.Logout:             {},
 		router.SignUp:             {},
+		router.RequestAccess:      {},
 		router.SiteInit:           {},
 		router.SignIn:             {},
 		router.SignOut:            {},
@@ -79,6 +80,7 @@ var (
 		uirouter.RouteSignUp:             {},
 		uirouter.RoutePasswordReset:      {},
 		uirouter.RoutePingFromSelfHosted: {},
+		uirouter.RouteRequestAccess:      {},
 	}
 	// Some routes return non-standard HTTP responses when a user is not
 	// signed in.
@@ -105,6 +107,10 @@ func matchedRouteName(req *http.Request, router *mux.Router) string {
 // users to perform undesired actions.
 func AllowAnonymousRequest(req *http.Request) bool {
 	if conf.AuthPublic() {
+		return true
+	}
+
+	if conf.Get().AuthPublic {
 		return true
 	}
 
@@ -141,6 +147,11 @@ func AllowAnonymousRequest(req *http.Request) bool {
 
 	// Permission is checked by a shared token
 	if strings.HasPrefix(req.URL.Path, "/.executors") {
+		return true
+	}
+
+	// Permission is checked by a shared token for SCIM
+	if strings.HasPrefix(req.URL.Path, "/.api/scim/v2") {
 		return true
 	}
 

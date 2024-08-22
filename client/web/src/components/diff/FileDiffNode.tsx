@@ -2,14 +2,15 @@ import React, { useState, useCallback } from 'react'
 
 import { mdiChevronDown, mdiChevronUp } from '@mdi/js'
 import classNames from 'classnames'
-import * as H from 'history'
 import prettyBytes from 'pretty-bytes'
+import { useLocation } from 'react-router-dom'
 
+import { dirname } from '@sourcegraph/common'
 import { Button, Badge, Link, Icon, Text, createLinkUrl, Tooltip } from '@sourcegraph/wildcard'
 
-import { FileDiffFields } from '../../graphql-operations'
-import { DiffMode } from '../../repo/commit/RepositoryCommitPage'
-import { dirname } from '../../util/path'
+import type { FileDiffFields } from '../../graphql-operations'
+import type { DiffMode } from '../../repo/commit/RepositoryCommitPage'
+import { isPerforceChangelistMappingEnabled } from '../../repo/utils'
 
 import { DiffStat, DiffStatSquares } from './DiffStat'
 import { FileDiffHunks } from './FileDiffHunks'
@@ -20,7 +21,6 @@ export interface FileDiffNodeProps {
     node: FileDiffFields
     lineNumbers: boolean
     className?: string
-    location: H.Location
 
     /** Reflect selected line in url */
     persistLines?: boolean
@@ -30,12 +30,12 @@ export interface FileDiffNodeProps {
 /** A file diff. */
 export const FileDiffNode: React.FunctionComponent<React.PropsWithChildren<FileDiffNodeProps>> = ({
     lineNumbers,
-    location,
     node,
     className,
     persistLines,
     diffMode = 'unified',
 }) => {
+    const location = useLocation()
     const [expanded, setExpanded] = useState<boolean>(true)
     const [renderDeleted, setRenderDeleted] = useState<boolean>(false)
 
@@ -60,7 +60,6 @@ export const FileDiffNode: React.FunctionComponent<React.PropsWithChildren<FileD
         // By process of elimination (that TypeScript is unfortunately unable to infer, except
         // by reorganizing this code in a way that's much more complex to humans), node.oldPath
         // is non-null.
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         path = <span title={node.oldPath!}>{node.oldPath}</span>
     }
 
@@ -80,6 +79,13 @@ export const FileDiffNode: React.FunctionComponent<React.PropsWithChildren<FileD
     }
 
     const anchor = `diff-${node.internalID}`
+
+    const gitBlobURL =
+        isPerforceChangelistMappingEnabled() &&
+        node.mostRelevantFile.__typename === 'GitBlob' &&
+        node.mostRelevantFile.changelistURL
+            ? node.mostRelevantFile.changelistURL
+            : node.mostRelevantFile.url
 
     return (
         <>
@@ -115,7 +121,7 @@ export const FileDiffNode: React.FunctionComponent<React.PropsWithChildren<FileD
                         {stat}
                         {node.mostRelevantFile.__typename === 'GitBlob' ? (
                             <Tooltip content="View file at revision">
-                                <Link to={node.mostRelevantFile.url} className="mr-0 ml-2 fw-bold">
+                                <Link to={gitBlobURL} className="mr-0 ml-2 fw-bold">
                                     <strong>{path}</strong>
                                 </Link>
                             </Tooltip>

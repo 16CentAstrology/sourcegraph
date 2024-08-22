@@ -3,15 +3,16 @@
     "**/node_modules": true,
     "**/bower_components": true,
     "dist": true,
-    "ui/assets/!(*.go)": true,
+    "ui/assets/": true,
+    "ui/assets/*.go": false,
     "client/browser/build": true,
-    "**/coverage": true,
     "**/out": true,
     "**/__fixtures__/**": true,
     "**/.cache": true,
     "**/.nyc_output": true,
     "doc/_resources/assets": true,
-    "**/.eslintcache": true
+    "**/.eslintcache": true,
+    "bazel*/**": true
   },
   "files.exclude": {
     "**/*.scss.d.ts": true
@@ -19,7 +20,8 @@
   "files.associations": {
     "**/dev/critical-config.json": "jsonc",
     "**/dev/site-config.json": "jsonc",
-    "**/.mocharc.json": "jsonc"
+    "**/.mocharc.json": "jsonc",
+    "**/tools/build_rules/prelude_bazel": "starlark"
   },
   "json.schemas": [
     {
@@ -34,12 +36,8 @@
   "editor.formatOnSave": true,
   "go.useLanguageServer": true,
   "gopls": {
-    "build.allowImplicitNetworkAccess": true,
     "local": "github.com/sourcegraph/sourcegraph"
   },
-  "jest.jestCommandLine": "pnpm test",
-  "jest.showCoverageOnLoad": false,
-  "gulp.autoDetect": "off",
   "npm.packageManager": "pnpm",
   "npm.runSilent": true,
   "typescript.preferences.quoteStyle": "single",
@@ -47,13 +45,14 @@
   "typescript.format.semicolons": "remove",
   "typescript.tsc.autoDetect": "off",
   "typescript.tsdk": "node_modules/typescript/lib",
-  "eslint.packageManager": "pnpm",
   "eslint.lintTask.enable": false,
   "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact"],
   "editor.codeActionsOnSave": {},
   "eslint.codeActionsOnSave.mode": "problems",
-  "eslint.options": { "cache": true },
-  "eslint.workingDirectories": ["./dev/release", "./client/*"],
+  "eslint.options": {
+    "cache": true
+  },
+  "eslint.workingDirectories": ["./client/*"],
   "go.lintTool": "golangci-lint",
   "shellformat.flag": "-i 2 -ci",
   "vscode-graphql.useSchemaFileDefinitions": true,
@@ -71,5 +70,7 @@
   },
   "[typescript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
-  }
+  },
+  "cody.codebase": "github.com/sourcegraph/sourcegraph",
+  "rust-analyzer.linkedProjects": ["docker-images/syntax-highlighter/Cargo.toml"]
 }

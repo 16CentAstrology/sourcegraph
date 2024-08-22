@@ -7,6 +7,11 @@ import _ "embed"
 //go:embed aws_codecommit.schema.json
 var AWSCodeCommitSchemaJSON string
 
+// AzureDevOpsSchemaJSON is the content of the file "azuredevops.schema.json".
+//
+//go:embed azuredevops.schema.json
+var AzureDevOpsSchemaJSON string
+
 // BatchSpecSchemaJSON is the content of the file "batch_spec.schema.json".
 //
 //go:embed batch_spec.schema.json
@@ -94,3 +99,13 @@ var SettingsSchemaJSON string
 //
 //go:embed site.schema.json
 var SiteSchemaJSON string
+
+// OpenCodeGraphSchemaJSON is the content of the file "opencodegraph.schema.json".
+//
+//go:embed opencodegraph.schema.json
+var OpenCodeGraphSchemaJSON string
+
+// OpenCodeGraphProtocolSchemaJSON is the content of the file "opencodegraph-protocol.schema.json".
+//
+//go:embed opencodegraph-protocol.schema.json
+var OpenCodeGraphProtocolSchemaJSON string

@@ -1,15 +1,23 @@
-import { ApolloClient, createHttpLink, from, HttpOptions, InMemoryCache, NormalizedCacheObject } from '@apollo/client'
-import { LocalStorageWrapper, CachePersistor } from 'apollo3-cache-persist'
-import { PersistenceMapperFunction } from 'apollo3-cache-persist/lib/types'
+import {
+    ApolloClient,
+    createHttpLink,
+    from,
+    type HttpOptions,
+    type InMemoryCache,
+    type NormalizedCacheObject,
+} from '@apollo/client'
+import { setContext } from '@apollo/client/link/context'
+import type { PersistenceMapperFunction } from 'apollo3-cache-persist/lib/types'
 import { once } from 'lodash'
+
+import { defined } from '@sourcegraph/common'
 
 import { checkOk } from '../../http-status-error'
 import { buildGraphQLUrl } from '../graphql'
 import { ConcurrentRequestsLink } from '../links/concurrent-requests-link'
 
 interface GetGraphqlClientOptions {
-    headers: RequestInit['headers']
-    isAuthenticated: boolean
+    getHeaders?: () => Record<string, string>
     cache: InMemoryCache
     baseUrl?: string
     credentials?: 'include' | 'omit' | 'same-origin'
@@ -18,32 +26,9 @@ interface GetGraphqlClientOptions {
 
 export type GraphQLClient = ApolloClient<NormalizedCacheObject>
 
-/**
- * 🚨 SECURITY: Use two unique keys for authenticated and anonymous users
- * to avoid keeping private information in localStorage after logout.
- */
-const getApolloPersistCacheKey = (isAuthenticated: boolean): string =>
-    `apollo-cache-persist-${isAuthenticated ? 'authenticated' : 'anonymous'}`
-
 export const getGraphQLClient = once(async (options: GetGraphqlClientOptions): Promise<GraphQLClient> => {
-    const { headers, baseUrl, isAuthenticated, credentials, persistenceMapper, cache } = options
+    const { getHeaders, baseUrl, credentials, cache } = options
     const uri = buildGraphQLUrl({ baseUrl })
-
-    if (persistenceMapper) {
-        const persistor = new CachePersistor({
-            cache,
-            persistenceMapper,
-            // Use max 4 MB for persistent cache. Leave 1 MB for other means out of 5 MB available.
-            // If exceeded, persistence will pause and app will start up cold on next launch.
-            maxSize: 1024 * 1024 * 4,
-            key: getApolloPersistCacheKey(isAuthenticated),
-            storage: new LocalStorageWrapper(window.localStorage),
-        })
-
-        // 🚨 SECURITY: Drop persisted cache item in case `isAuthenticated` value changed.
-        localStorage.removeItem(getApolloPersistCacheKey(!isAuthenticated))
-        await persistor.restore()
-    }
 
     const apolloClient = new ApolloClient({
         uri,
@@ -70,15 +55,25 @@ export const getGraphQLClient = once(async (options: GetGraphqlClientOptions): P
                 fetchPolicy: 'network-only',
             },
         },
-        link: from([
-            new ConcurrentRequestsLink(),
-            createHttpLink({
-                uri: ({ operationName }) => `${uri}?${operationName}`,
-                headers,
-                credentials,
-                fetch: customFetch,
-            }),
-        ]),
+        link: from(
+            defined([
+                new ConcurrentRequestsLink(),
+                getHeaders
+                    ? setContext((_request, previousContext) => ({
+                          ...previousContext,
+                          headers: {
+                              ...previousContext.headers,
+                              ...getHeaders(),
+                          },
+                      }))
+                    : null,
+                createHttpLink({
+                    uri: ({ operationName }) => `${uri}?${operationName}`,
+                    credentials,
+                    fetch: customFetch,
+                }),
+            ])
+        ),
     })
 
     return Promise.resolve(apolloClient)

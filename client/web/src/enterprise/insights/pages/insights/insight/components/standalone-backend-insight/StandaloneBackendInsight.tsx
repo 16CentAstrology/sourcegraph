@@ -1,20 +1,24 @@
-import React, { useContext, useState } from 'react'
+import React, { useContext, useMemo, useState } from 'react'
 
 import classNames from 'classnames'
-import { useHistory } from 'react-router'
+import { useNavigate } from 'react-router-dom'
+import { lastValueFrom } from 'rxjs'
 
 import { useQuery } from '@sourcegraph/http-client'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { Card, CardBody, useDebounce, useDeepMemo } from '@sourcegraph/wildcard'
+import { useSettingsCascade } from '@sourcegraph/shared/src/settings/settings'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { Card, CardBody, useDebounce, useDeepMemo, type FormChangeEvent } from '@sourcegraph/wildcard'
 
-import {
+import type {
     GetInsightViewResult,
     GetInsightViewVariables,
     InsightViewFiltersInput,
     SeriesDisplayOptionsInput,
 } from '../../../../../../../graphql-operations'
 import { useSeriesToggle } from '../../../../../../../insights/utils/use-series-toggle'
-import { InsightCard, InsightCardHeader, InsightCardLoading, FormChangeEvent } from '../../../../../components'
+import { defaultPatternTypeFromSettings } from '../../../../../../../util/settings'
+import { InsightCard, InsightCardHeader, InsightCardLoading } from '../../../../../components'
 import {
     DrillDownInsightFilters,
     FilterSectionVisualMode,
@@ -23,16 +27,15 @@ import {
     BackendInsightChart,
     BackendInsightErrorAlert,
     InsightIncompleteAlert,
-    DrillDownFiltersFormValues,
-    DrillDownInsightCreationFormValues,
-    parseSeriesLimit,
+    type DrillDownFiltersFormValues,
+    type DrillDownInsightCreationFormValues,
 } from '../../../../../components/insights-view-grid/components/backend-insight/components'
 import {
-    BackendInsightData,
-    BackendInsight,
+    type BackendInsight,
     CodeInsightsBackendContext,
-    InsightFilters,
+    type InsightFilters,
     useSaveInsightAsNewView,
+    isComputeInsight,
 } from '../../../../../core'
 import { GET_INSIGHT_VIEW_GQL } from '../../../../../core/backend/gql-backend'
 import { createBackendInsightData } from '../../../../../core/backend/gql-backend/methods/get-backend-insight-data/deserializators'
@@ -42,19 +45,18 @@ import { StandaloneInsightContextMenu } from '../context-menu/StandaloneInsightC
 
 import styles from './StandaloneBackendInsight.module.scss'
 
-interface StandaloneBackendInsight extends TelemetryProps {
+interface StandaloneBackendInsight extends TelemetryProps, TelemetryV2Props {
     insight: BackendInsight
     className?: string
 }
 
 export const StandaloneBackendInsight: React.FunctionComponent<StandaloneBackendInsight> = props => {
-    const { telemetryService, insight, className } = props
-    const history = useHistory()
+    const { telemetryService, telemetryRecorder, insight, className } = props
+    const navigate = useNavigate()
     const { updateInsight } = useContext(CodeInsightsBackendContext)
     const [saveAsNewView] = useSaveInsightAsNewView({ dashboard: null })
 
     const seriesToggleState = useSeriesToggle()
-    const [insightData, setInsightData] = useState<BackendInsightData | undefined>()
 
     // Visual line chart settings
     const [zeroYAxisMin, setZeroYAxisMin] = useState(false)
@@ -77,37 +79,43 @@ export const StandaloneBackendInsight: React.FunctionComponent<StandaloneBackend
     }
 
     const seriesDisplayOptions: SeriesDisplayOptionsInput = {
-        limit: parseSeriesLimit(debouncedFilters.seriesDisplayOptions.limit),
+        limit: debouncedFilters.seriesDisplayOptions.limit,
+        numSamples: debouncedFilters.seriesDisplayOptions.numSamples,
         sortOptions: debouncedFilters.seriesDisplayOptions.sortOptions,
     }
 
-    const { error, loading, stopPolling } = useQuery<GetInsightViewResult, GetInsightViewVariables>(
+    const { data, error, loading, stopPolling } = useQuery<GetInsightViewResult, GetInsightViewVariables>(
         GET_INSIGHT_VIEW_GQL,
         {
             variables: { id: insight.id, filters: filterInput, seriesDisplayOptions },
             fetchPolicy: 'cache-and-network',
             pollInterval: insightPollingInterval(insight),
             context: { concurrentRequests: { key: 'GET_INSIGHT_VIEW' } },
-            onCompleted: data => {
-                const node = data.insightViews.nodes[0]
-                if (node === null) {
-                    stopPolling()
-                    return
-                }
-                const parsedData = createBackendInsightData({ ...insight, filters }, node)
-                if (!parsedData.isFetchingHistoricalData) {
-                    stopPolling()
-                }
-                setInsightData(parsedData)
-            },
             onError: () => {
                 stopPolling()
             },
         }
     )
 
+    const defaultPatternType = defaultPatternTypeFromSettings(useSettingsCascade())
+
+    const insightData = useMemo(() => {
+        const node = data?.insightViews.nodes[0]
+
+        if (!node) {
+            stopPolling()
+            return
+        }
+        const parsedData = createBackendInsightData({ ...insight, filters }, node, defaultPatternType)
+        if (!parsedData.isFetchingHistoricalData) {
+            stopPolling()
+        }
+        return parsedData
+    }, [data, filters, insight, stopPolling, defaultPatternType])
+
     const { trackMouseLeave, trackMouseEnter, trackDatumClicks } = useCodeInsightViewPings({
         telemetryService,
+        telemetryRecorder,
         insightType: getTrackingTypeByInsightType(insight.type),
     })
 
@@ -118,9 +126,12 @@ export const StandaloneBackendInsight: React.FunctionComponent<StandaloneBackend
     }
 
     const handleFilterSave = async (filters: InsightFilters): Promise<void> => {
-        await updateInsight({ insightId: insight.id, nextInsightData: { ...insight, filters } }).toPromise()
+        await lastValueFrom(updateInsight({ insightId: insight.id, nextInsightData: { ...insight, filters } }), {
+            defaultValue: undefined,
+        })
         setOriginalInsightFilters(filters)
         telemetryService.log('CodeInsightsSearchBasedFilterUpdating')
+        telemetryRecorder.recordEvent('insights.searchBasedFilter', 'update', { metadata: { location: 1 } })
     }
 
     const handleInsightFilterCreation = async (values: DrillDownInsightCreationFormValues): Promise<void> => {
@@ -132,8 +143,9 @@ export const StandaloneBackendInsight: React.FunctionComponent<StandaloneBackend
         })
 
         setOriginalInsightFilters(filters)
-        history.push('/insights/all')
+        navigate('/insights/all')
         telemetryService.log('CodeInsightsSearchBasedFilterInsightCreation')
+        telemetryRecorder.recordEvent('insights.createFromFilter.searchBased', 'submit', { metadata: { location: 1 } })
     }
 
     return (
@@ -144,6 +156,9 @@ export const StandaloneBackendInsight: React.FunctionComponent<StandaloneBackend
                         initialValues={filters}
                         originalValues={originalInsightFilters}
                         visualMode={filterVisualMode}
+                        // It doesn't make sense to have max series per point for compute insights
+                        // because there is always only one point per series
+                        isNumSamplesFilterAvailable={!isComputeInsight(insight)}
                         onVisualModeChange={setFilterVisualMode}
                         onFiltersChange={handleFilterChange}
                         onFilterSave={handleFilterSave}

@@ -1,36 +1,63 @@
-import { Remote, ProxyMarked } from 'comlink'
-import { Unsubscribable } from 'rxjs'
-import { DocumentHighlight } from 'sourcegraph'
+import type { Remote, ProxyMarked } from 'comlink'
+import type { Unsubscribable } from 'rxjs'
 
-import { Contributions, Evaluated, Raw, TextDocumentPositionParameters, HoverMerged } from '@sourcegraph/client-api'
-import { MaybeLoadingResult } from '@sourcegraph/codeintellify'
-import { DeepReplace, ErrorLike } from '@sourcegraph/common'
-import * as clientType from '@sourcegraph/extension-api-types'
-import { GraphQLResult } from '@sourcegraph/http-client'
+import type {
+    Contributions,
+    Evaluated,
+    Raw,
+    TextDocumentPositionParameters,
+    HoverMerged,
+} from '@sourcegraph/client-api'
+import type { MaybeLoadingResult } from '@sourcegraph/codeintellify'
+import type * as clientType from '@sourcegraph/extension-api-types'
+import type { GraphQLResult } from '@sourcegraph/http-client'
 
-import type { ReferenceContext, InputBoxOptions } from '../codeintel/legacy-extensions/api'
-import { ConfiguredExtension } from '../extensions/extension'
-import { SettingsCascade } from '../settings/settings'
+import type { DocumentHighlight, ReferenceContext } from '../codeintel/legacy-extensions/api'
+import type { Occurrence } from '../codeintel/scip'
+import type { ConfiguredExtension } from '../extensions/extension'
+import type { SettingsCascade } from '../settings/settings'
+import type { TelemetryV2Props } from '../telemetry'
 
-import { SettingsEdit } from './client/services/settings'
-import { ExecutableExtension } from './extension/activation'
-import { ProxySubscribable } from './extension/api/common'
-import {
-    ViewContexts,
-    PanelViewData,
-    ViewProviderResult,
-    ProgressNotification,
-    PlainNotification,
-    ContributionOptions,
-} from './extension/extensionHostApi'
-import { ExtensionViewer, TextDocumentData, ViewerData, ViewerId, ViewerUpdate } from './viewerTypes'
+import type { SettingsEdit } from './client/services/settings'
+import type { ExecutableExtension } from './extension/activation'
+import type { ProxySubscribable } from './extension/api/common'
+import type { ContributionOptions } from './extension/extensionHostApi'
+import type { ExtensionViewer, TextDocumentData, ViewerData, ViewerId, ViewerUpdate } from './viewerTypes'
+
+export interface ScipParameters {
+    referenceOccurrence: Occurrence
+    documentOccurrences: Occurrence[]
+}
+
+// Extracted from FlatExtensionHostAPI so it can be implemented separately.
+// The goal is to unify this with the CodeIntelAPI in client/shared/src/codeintel/api.ts
+// TODO(camdencheek)
+export interface CodeIntelExtensionHostAPI {
+    getHover: (parameters: TextDocumentPositionParameters) => ProxySubscribable<MaybeLoadingResult<HoverMerged | null>>
+    getDocumentHighlights: (parameters: TextDocumentPositionParameters) => ProxySubscribable<DocumentHighlight[]>
+    getDefinition: (
+        parameters: TextDocumentPositionParameters,
+        scipParameters?: ScipParameters
+    ) => ProxySubscribable<MaybeLoadingResult<clientType.Location[]>>
+    getReferences: (
+        parameters: TextDocumentPositionParameters,
+        context: ReferenceContext,
+        scipParameters?: ScipParameters
+    ) => ProxySubscribable<MaybeLoadingResult<clientType.Location[]>>
+    getLocations: (
+        id: string,
+        parameters: TextDocumentPositionParameters
+    ) => ProxySubscribable<MaybeLoadingResult<clientType.Location[]>>
+
+    hasReferenceProvidersForDocument: (parameters: TextDocumentPositionParameters) => ProxySubscribable<boolean>
+}
 
 /**
  * This is exposed from the extension host thread to the main thread
  * e.g. for communicating  direction "main -> ext host"
  * Note this API object lives in the extension host thread
  */
-export interface FlatExtensionHostAPI {
+export interface FlatExtensionHostAPI extends CodeIntelExtensionHostAPI {
     /**
      * Updates the settings exposed to extensions.
      */
@@ -42,26 +69,6 @@ export interface FlatExtensionHostAPI {
     removeWorkspaceRoot: (uri: string) => void
 
     setSearchContext: (searchContext: string | undefined) => void
-
-    // Search
-    transformSearchQuery: (query: string) => ProxySubscribable<string>
-
-    // Languages
-    getHover: (parameters: TextDocumentPositionParameters) => ProxySubscribable<MaybeLoadingResult<HoverMerged | null>>
-    getDocumentHighlights: (parameters: TextDocumentPositionParameters) => ProxySubscribable<DocumentHighlight[]>
-    getDefinition: (
-        parameters: TextDocumentPositionParameters
-    ) => ProxySubscribable<MaybeLoadingResult<clientType.Location[]>>
-    getReferences: (
-        parameters: TextDocumentPositionParameters,
-        context: ReferenceContext
-    ) => ProxySubscribable<MaybeLoadingResult<clientType.Location[]>>
-    getLocations: (
-        id: string,
-        parameters: TextDocumentPositionParameters
-    ) => ProxySubscribable<MaybeLoadingResult<clientType.Location[]>>
-
-    hasReferenceProvidersForDocument: (parameters: TextDocumentPositionParameters) => ProxySubscribable<boolean>
 
     // CONTEXT + CONTRIBUTIONS
 
@@ -134,33 +141,6 @@ export interface FlatExtensionHostAPI {
      */
     removeViewer(viewer: ViewerId): void
 
-    // Notifications
-    getPlainNotifications: () => ProxySubscribable<PlainNotification>
-    getProgressNotifications: () => ProxySubscribable<ProgressNotification & ProxyMarked>
-
-    // Views
-    getPanelViews: () => ProxySubscribable<PanelViewData[]>
-
-    // Insight page
-    getInsightViewById: (id: string, context: ViewContexts['insightsPage']) => ProxySubscribable<ViewProviderResult>
-    getInsightsViews: (
-        context: ViewContexts['insightsPage'],
-        // Resolve only insights that were included in that
-        // ids list. Used for the insights dashboard functionality.
-        insightIds?: string[]
-    ) => ProxySubscribable<ViewProviderResult[]>
-
-    // Home (search) page
-    getHomepageViews: (context: ViewContexts['homepage']) => ProxySubscribable<ViewProviderResult[]>
-
-    // Directory page
-    getDirectoryViews: (
-        // Construct URL object on host from string provided by main thread
-        context: DeepReplace<ViewContexts['directory'], URL, string>
-    ) => ProxySubscribable<ViewProviderResult[]>
-
-    getGlobalPageViews: (context: ViewContexts['global/page']) => ProxySubscribable<ViewProviderResult[]>
-
     /**
      * Emits true when the initial batch of extensions have been loaded.
      */
@@ -192,20 +172,19 @@ export interface MainThreadAPI {
         command: Remote<((...args: any) => any) & ProxyMarked>
     ) => Unsubscribable & ProxyMarked
 
-    // User interaction methods
-    showMessage: (message: string) => Promise<void>
-    showInputBox: (options?: InputBoxOptions) => Promise<string | undefined>
-
-    getScriptURLForExtension: () =>
-        | undefined
-        | (((bundleURLs: string[]) => Promise<(string | ErrorLike)[]>) & ProxyMarked)
-
     getEnabledExtensions: () => ProxySubscribable<(ConfiguredExtension | ExecutableExtension)[]>
 
     /**
      * Log an event (by sending it to the server).
+     *
+     * @deprecated use getTelemetryRecorder().recordEvent instead
      */
     logEvent: (eventName: string, eventProperties?: any) => void
+
+    /**
+     * Get a TelemetryRecorder for recording telemetry events to the server.
+     */
+    getTelemetryRecorder: () => TelemetryV2Props['telemetryRecorder']
 
     /**
      * Log messages from extensions in the main thread. Makes it easier to debug extensions for applications

@@ -1,24 +1,22 @@
 import React, { useCallback } from 'react'
 
-import { RouteComponentProps } from 'react-router'
-import { Observable } from 'rxjs'
+import type { Observable } from 'rxjs'
 import { map } from 'rxjs/operators'
 
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
-import { Scalars } from '@sourcegraph/shared/src/graphql-operations'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { Scalars } from '@sourcegraph/shared/src/graphql-operations'
 
-import { fileDiffFields, diffStatFields } from '../../backend/diff'
+import { diffStatFields, fileDiffFields } from '../../backend/diff'
 import { requestGraphQL } from '../../backend/graphql'
-import { FileDiffNode, FileDiffNodeProps } from '../../components/diff/FileDiffNode'
-import { ConnectionQueryArguments, FilteredConnection } from '../../components/FilteredConnection'
-import {
+import { FileDiffNode, type FileDiffNodeProps } from '../../components/diff/FileDiffNode'
+import { FilteredConnection, type FilteredConnectionQueryArguments } from '../../components/FilteredConnection'
+import type {
+    FileDiffFields,
     RepositoryComparisonDiffResult,
     RepositoryComparisonDiffVariables,
-    FileDiffFields,
 } from '../../graphql-operations'
 
-import { RepositoryCompareAreaPageProps } from './RepositoryCompareArea'
+import type { RepositoryCompareAreaPageProps } from './RepositoryCompareArea'
 
 export type RepositoryComparisonDiff = Extract<RepositoryComparisonDiffResult['node'], { __typename?: 'Repository' }>
 
@@ -83,7 +81,7 @@ export function queryRepositoryComparisonFileDiffs(args: {
     )
 }
 
-interface RepositoryCompareDiffPageProps extends RepositoryCompareAreaPageProps, RouteComponentProps<{}>, ThemeProps {
+interface RepositoryCompareDiffPageProps extends RepositoryCompareAreaPageProps {
     /** The base of the comparison. */
     base: { repoName: string; repoID: Scalars['ID']; revision: string | null; commitID: string }
 
@@ -97,7 +95,7 @@ interface RepositoryCompareDiffPageProps extends RepositoryCompareAreaPageProps,
 /** A page with the file diffs in the comparison. */
 export const RepositoryCompareDiffPage: React.FunctionComponent<RepositoryCompareDiffPageProps> = props => {
     const queryDiffs = useCallback(
-        (args: ConnectionQueryArguments): Observable<RepositoryComparisonDiff['comparison']['fileDiffs']> =>
+        (args: FilteredConnectionQueryArguments): Observable<RepositoryComparisonDiff['comparison']['fileDiffs']> =>
             queryRepositoryComparisonFileDiffs({
                 first: args.first ?? null,
                 after: args.after ?? null,
@@ -124,8 +122,6 @@ export const RepositoryCompareDiffPage: React.FunctionComponent<RepositoryCompar
                 hideSearch={true}
                 noSummaryIfAllNodesVisible={true}
                 withCenteredSummary={true}
-                history={props.history}
-                location={props.location}
                 cursorPaging={true}
             />
         </div>

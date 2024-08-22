@@ -1,24 +1,26 @@
 import { EMPTY, of, Subject } from 'rxjs'
 import sinon from 'sinon'
+import { describe, expect, test } from 'vitest'
 
-import { getGraphQLClient as getGraphQLClientBase, SuccessGraphQLResult } from '@sourcegraph/http-client'
+import { getGraphQLClient as getGraphQLClientBase, type SuccessGraphQLResult } from '@sourcegraph/http-client'
 
 import { cache } from '../../backend/apolloCache'
-import { PlatformContext } from '../../platform/context'
-import { SettingsCascade } from '../../settings/settings'
-import { FlatExtensionHostAPI } from '../contract'
+import type { PlatformContext } from '../../platform/context'
+import type { SettingsCascade } from '../../settings/settings'
+import { noOpTelemetryRecorder } from '../../telemetry'
+import type { FlatExtensionHostAPI } from '../contract'
 import { pretendRemote } from '../util'
 
 import { initMainThreadAPI } from './mainthread-api'
-import { SettingsEdit } from './services/settings'
+import type { SettingsEdit } from './services/settings'
 
 describe('MainThreadAPI', () => {
     // TODO(tj): commands, notifications
-    const getGraphQLClient = () => getGraphQLClientBase({ headers: {}, isAuthenticated: false, cache })
+    const getGraphQLClient = () => getGraphQLClientBase({ cache })
 
     describe('graphQL', () => {
         test('PlatformContext#requestGraphQL is called with the correct arguments', async () => {
-            const requestGraphQL = sinon.spy(_options => EMPTY)
+            const requestGraphQL = sinon.spy(_options => of({ data: null, errors: [] }))
 
             const platformContext: Pick<
                 PlatformContext,
@@ -26,15 +28,15 @@ describe('MainThreadAPI', () => {
                 | 'settings'
                 | 'getGraphQLClient'
                 | 'requestGraphQL'
-                | 'getScriptURLForExtension'
                 | 'clientApplication'
+                | 'telemetryRecorder'
             > = {
                 settings: EMPTY,
                 getGraphQLClient,
                 updateSettings: () => Promise.resolve(),
                 requestGraphQL,
-                getScriptURLForExtension: () => undefined,
                 clientApplication: 'other',
+                telemetryRecorder: noOpTelemetryRecorder,
             }
 
             const { api } = initMainThreadAPI(pretendRemote({}), platformContext)
@@ -65,15 +67,15 @@ describe('MainThreadAPI', () => {
                 | 'settings'
                 | 'getGraphQLClient'
                 | 'requestGraphQL'
-                | 'getScriptURLForExtension'
                 | 'clientApplication'
+                | 'telemetryRecorder'
             > = {
                 settings: EMPTY,
                 getGraphQLClient,
                 updateSettings: () => Promise.resolve(),
                 requestGraphQL,
-                getScriptURLForExtension: () => undefined,
                 clientApplication: 'other',
+                telemetryRecorder: noOpTelemetryRecorder,
             }
 
             const { api } = initMainThreadAPI(pretendRemote({}), platformContext)
@@ -97,8 +99,8 @@ describe('MainThreadAPI', () => {
                 | 'settings'
                 | 'requestGraphQL'
                 | 'getGraphQLClient'
-                | 'getScriptURLForExtension'
                 | 'clientApplication'
+                | 'telemetryRecorder'
             > = {
                 settings: of({
                     subjects: [
@@ -131,16 +133,19 @@ describe('MainThreadAPI', () => {
                 updateSettings,
                 getGraphQLClient,
                 requestGraphQL: () => EMPTY,
-                getScriptURLForExtension: () => undefined,
                 clientApplication: 'other',
+                telemetryRecorder: noOpTelemetryRecorder,
             }
 
-            const { api } = initMainThreadAPI(pretendRemote({}), platformContext)
+            const { api } = initMainThreadAPI(
+                pretendRemote<FlatExtensionHostAPI>({ syncSettingsData: () => {} }),
+                platformContext
+            )
 
             const edit: SettingsEdit = { path: ['a'], value: 'newVal' }
             await api.applySettingsEdit(edit)
 
-            expect(calledWith).toEqual<Parameters<PlatformContext['updateSettings']>>(['id2', edit])
+            expect(calledWith).toEqual(['id2', edit] as Parameters<PlatformContext['updateSettings']>)
         })
 
         test('changes of settings from platform propagated to the ext host', () => {
@@ -165,15 +170,15 @@ describe('MainThreadAPI', () => {
                 | 'settings'
                 | 'getGraphQLClient'
                 | 'requestGraphQL'
-                | 'getScriptURLForExtension'
                 | 'clientApplication'
+                | 'telemetryRecorder'
             > = {
                 getGraphQLClient,
                 settings: of(...values),
                 updateSettings: () => Promise.resolve(),
                 requestGraphQL: () => EMPTY,
-                getScriptURLForExtension: () => undefined,
                 clientApplication: 'other',
+                telemetryRecorder: noOpTelemetryRecorder,
             }
 
             const passedToExtensionHost: SettingsCascade<object>[] = []
@@ -186,7 +191,7 @@ describe('MainThreadAPI', () => {
                 platformContext
             )
 
-            expect(passedToExtensionHost).toEqual<SettingsCascade<{ a: string }>[]>([values[0], values[2]])
+            expect(passedToExtensionHost).toEqual([values[0], values[2]] as SettingsCascade<{ a: string }>[])
         })
 
         test('changes of settings are not passed to ext host after unsub', () => {
@@ -197,15 +202,15 @@ describe('MainThreadAPI', () => {
                 | 'settings'
                 | 'getGraphQLClient'
                 | 'requestGraphQL'
-                | 'getScriptURLForExtension'
                 | 'clientApplication'
+                | 'telemetryRecorder'
             > = {
                 settings: values.asObservable(),
                 updateSettings: () => Promise.resolve(),
                 getGraphQLClient,
                 requestGraphQL: () => EMPTY,
-                getScriptURLForExtension: () => undefined,
                 clientApplication: 'other',
+                telemetryRecorder: noOpTelemetryRecorder,
             }
             const passedToExtensionHost: SettingsCascade<object>[] = []
             const { subscription } = initMainThreadAPI(

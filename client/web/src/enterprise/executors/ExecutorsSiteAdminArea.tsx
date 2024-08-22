@@ -1,14 +1,16 @@
-import React from 'react'
+import type { FC } from 'react'
 
-import MapSearchIcon from 'mdi-react/MapSearchIcon'
-import { Route, RouteComponentProps, Switch } from 'react-router'
+import { Route, Routes } from 'react-router-dom'
 
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
 import { lazyComponent } from '@sourcegraph/shared/src/util/lazyComponent'
 
-import { HeroPage } from '../../components/HeroPage'
+import { NotFoundPage } from '../../components/HeroPage'
 
 import type { ExecutorsListPageProps } from './instances/ExecutorsListPage'
 import type { GlobalExecutorSecretsListPageProps } from './secrets/ExecutorSecretsListPage'
+
+interface ExecutorsSiteAdminAreaProps extends TelemetryV2Props {}
 
 const ExecutorsListPage = lazyComponent<ExecutorsListPageProps, 'ExecutorsListPage'>(
     () => import('./instances/ExecutorsListPage'),
@@ -20,26 +22,11 @@ const GlobalExecutorSecretsListPage = lazyComponent<
     'GlobalExecutorSecretsListPage'
 >(() => import('./secrets/ExecutorSecretsListPage'), 'GlobalExecutorSecretsListPage')
 
-export interface ExecutorsSiteAdminAreaProps<RouteProps extends {} = {}> extends RouteComponentProps<RouteProps> {}
-
 /** The page area for all executors settings in site-admin. */
-export const ExecutorsSiteAdminArea: React.FunctionComponent<React.PropsWithChildren<ExecutorsSiteAdminAreaProps>> = ({
-    match,
-    ...outerProps
-}) => (
-    <>
-        <Switch>
-            <Route render={props => <ExecutorsListPage {...outerProps} {...props} />} path={match.url} exact={true} />
-            <Route
-                path={`${match.url}/secrets`}
-                render={props => <GlobalExecutorSecretsListPage {...outerProps} {...props} />}
-                exact={true}
-            />
-            <Route component={NotFoundPage} key="hardcoded-key" />
-        </Switch>
-    </>
-)
-
-const NotFoundPage: React.FunctionComponent<React.PropsWithChildren<unknown>> = () => (
-    <HeroPage icon={MapSearchIcon} title="404: Not Found" />
+export const ExecutorsSiteAdminArea: FC<ExecutorsSiteAdminAreaProps> = props => (
+    <Routes>
+        <Route index={true} element={<ExecutorsListPage {...props} />} />
+        <Route path="secrets" element={<GlobalExecutorSecretsListPage {...props} />} />
+        <Route path="*" element={<NotFoundPage pageType="settings" />} />
+    </Routes>
 )

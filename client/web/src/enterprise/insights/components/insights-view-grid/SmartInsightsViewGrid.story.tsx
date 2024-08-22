@@ -1,17 +1,18 @@
-import { MockedResponse } from '@apollo/client/testing/core'
-import { Meta } from '@storybook/react'
+import type { MockedResponse } from '@apollo/client/testing/core'
+import type { Meta } from '@storybook/react'
 
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 import { NOOP_TELEMETRY_SERVICE } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { MockedTestProvider } from '@sourcegraph/shared/src/testing/apollo'
 
 import { WebStory } from '../../../../components/WebStory'
 import {
-    GetInsightViewResult,
-    GetInsightViewVariables,
+    type GetInsightViewResult,
+    type GetInsightViewVariables,
     SeriesSortDirection,
     SeriesSortMode,
 } from '../../../../graphql-operations'
-import { InsightExecutionType, InsightType, BackendInsight } from '../../core'
+import { InsightType, type BackendInsight } from '../../core'
 import { GET_INSIGHT_VIEW_GQL } from '../../core/backend/gql-backend'
 
 import { SmartInsightsViewGrid } from './SmartInsightsViewGrid'
@@ -19,12 +20,7 @@ import { SmartInsightsViewGrid } from './SmartInsightsViewGrid'
 const defaultStory: Meta = {
     title: 'web/insights/SmartInsightsViewGridExample',
     decorators: [story => <WebStory>{() => story()}</WebStory>],
-    parameters: {
-        chromatic: {
-            viewports: [576, 1440],
-            enableDarkMode: true,
-        },
-    },
+    parameters: {},
 }
 
 export default defaultStory
@@ -34,7 +30,8 @@ const DEFAULT_FILTERS = {
     includeRepoRegexp: '',
     context: '',
     seriesDisplayOptions: {
-        limit: '20',
+        limit: 20,
+        numSamples: null,
         sortOptions: {
             direction: SeriesSortDirection.DESC,
             mode: SeriesSortMode.RESULT_COUNT,
@@ -45,8 +42,8 @@ const DEFAULT_FILTERS = {
 const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
     {
         id: 'searchInsights.insight.Backend_1',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.SearchBased,
         title: 'Backend insight #1',
         series: [{ id: '001', query: 'test_query', stroke: 'blue', name: 'series A' }],
@@ -54,13 +51,12 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
     {
         id: 'searchInsights.insight.Backend_2',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.SearchBased,
         title: 'Backend insight #2',
         series: [
@@ -71,13 +67,12 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
     {
         id: 'searchInsights.insight.Backend_3',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.SearchBased,
         title: 'Backend insight #3',
         series: [
@@ -89,13 +84,12 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
     {
         id: 'searchInsights.insight.Backend_4',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.SearchBased,
         title: 'Backend insight #4',
         series: [{ id: '001', query: 'test_query', stroke: 'blue', name: 'series A' }],
@@ -103,13 +97,12 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
     {
         id: 'searchInsights.insight.Backend_5',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.CaptureGroup,
         title: 'Backend insight #5',
         query: '',
@@ -117,13 +110,12 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
     {
         id: 'searchInsights.insight.Backend_6',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.SearchBased,
         title: 'Backend insight #6',
         series: [{ id: '001', query: 'test_query', stroke: 'blue', name: 'series A' }],
@@ -131,13 +123,12 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
     {
         id: 'searchInsights.insight.Backend_7',
-        executionType: InsightExecutionType.Backend,
         repositories: [],
+        repoQuery: '',
         type: InsightType.SearchBased,
         title: 'Backend insight #7',
         series: [{ id: '001', query: 'test_query', stroke: 'red', name: 'series A' }],
@@ -145,7 +136,6 @@ const INSIGHT_CONFIGURATIONS: BackendInsight[] = [
         filters: DEFAULT_FILTERS,
         dashboardReferenceCount: 0,
         isFrozen: false,
-        seriesDisplayOptions: {},
         dashboards: [],
     },
 ]
@@ -174,31 +164,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 8000,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 16000,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -309,31 +299,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 9800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 12300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -351,31 +341,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 6500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 10800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 14300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -414,31 +404,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 9800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 12300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -456,31 +446,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 6500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 10800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 14300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -508,31 +498,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 6000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 6000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 7500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 11800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 15300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -571,31 +561,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -634,31 +624,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 9800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 12300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -681,31 +671,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 5000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 6500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 10800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 14300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -728,31 +718,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 6000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 6000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 7500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 11800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 15300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -775,31 +765,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 7000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 7000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 8500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 12800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 16300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -822,31 +812,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 8000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 8000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 9500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 13800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 17300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -869,31 +859,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 8000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 8000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 9500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 13800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 17300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -916,31 +906,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 9000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 9000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 10500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 14800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 18300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -963,31 +953,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 10000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 10000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 11500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 15800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 19300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -1010,31 +1000,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 11000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 11000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 12500,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 16800,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 20300,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -1078,31 +1068,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -1141,31 +1131,31 @@ const INSIGHT_DATA_MOCKS: MockedResponse<GetInsightViewResult>[] = [
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Mon May 04 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Tue May 05 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Wed May 06 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Thu May 07 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                         {
                                             __typename: 'InsightDataPoint',
                                             value: 4000,
                                             dateTime: 'Fri May 08 2020 16:21:40 GMT-0300 (-03)',
-                                            diffQuery: 'type:diff',
+                                            pointInTimeQuery: 'type:diff',
                                         },
                                     ],
                                     status: {
@@ -1196,6 +1186,12 @@ function generateDefaultRequestVariables(insightId: string): GetInsightViewVaria
 
 export const SmartInsightsViewGridExample = (): JSX.Element => (
     <MockedTestProvider mocks={INSIGHT_DATA_MOCKS} addTypename={true}>
-        <SmartInsightsViewGrid insights={INSIGHT_CONFIGURATIONS} telemetryService={NOOP_TELEMETRY_SERVICE} />
+        <SmartInsightsViewGrid
+            id="test-insight-id"
+            persistSizeAndOrder={false}
+            insights={INSIGHT_CONFIGURATIONS}
+            telemetryService={NOOP_TELEMETRY_SERVICE}
+            telemetryRecorder={noOpTelemetryRecorder}
+        />
     </MockedTestProvider>
 )

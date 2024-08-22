@@ -28,8 +28,12 @@ type Actor struct {
 	// Only set if the current actor is an authenticated user.
 	UID int32 `json:",omitempty"`
 
-	// AnonymousUID is the user's semi-stable anonymousID from the request cookie.
-	// Only set if the user is unauthenticated and the request contains an anonymousID.
+	// AnonymousUID is the user's semi-stable anonymousID from the request cookie
+	// or the 'X-Sourcegraph-Actor-Anonymous-UID' request header. This may be
+	// set even if the actor is authenticated, to maintain a consistent mapping.
+	//
+	// 🚨 SECURITY:  When deciding how to handle anonymous vs authenticated users,
+	// ALWAYS check the UID field first.
 	AnonymousUID string `json:",omitempty"`
 
 	// Internal is true if the actor represents an internal Sourcegraph service (and is therefore
@@ -56,11 +60,21 @@ type Actor struct {
 // FromUser returns an actor corresponding to the user with the given ID
 func FromUser(uid int32) *Actor { return &Actor{UID: uid} }
 
+// FromActualUser returns an actor corresponding to the user with the given ID
+func FromActualUser(user *types.User) *Actor {
+	a := &Actor{UID: user.ID, user: user, userErr: nil}
+	a.userOnce.Do(func() {})
+	return a
+}
+
 // FromAnonymousUser returns an actor corresponding to an unauthenticated user with the given anonymous ID
 func FromAnonymousUser(anonymousUID string) *Actor { return &Actor{AnonymousUID: anonymousUID} }
 
 // FromMockUser returns an actor corresponding to a test user. Do not use outside of tests.
 func FromMockUser(uid int32) *Actor { return &Actor{UID: uid, mockUser: true} }
+
+// Internal returns an internal actor.
+func Internal() *Actor { return &Actor{Internal: true} }
 
 // UIDString is a helper method that returns the UID as a string.
 func (a *Actor) UIDString() string { return strconv.Itoa(int(a.UID)) }
@@ -127,5 +141,5 @@ func WithActor(ctx context.Context, a *Actor) context.Context {
 // 🚨 SECURITY: The caller MUST ensure that it performs its own access controls
 // or removal of sensitive data.
 func WithInternalActor(ctx context.Context) context.Context {
-	return context.WithValue(ctx, actorKey, &Actor{Internal: true})
+	return context.WithValue(ctx, actorKey, Internal())
 }

@@ -1,22 +1,19 @@
 import React, { useCallback } from 'react'
 
-import { useHistory } from 'react-router'
-import { Subject } from 'rxjs'
-import { delay, repeatWhen, tap } from 'rxjs/operators'
-
-import { H2 } from '@sourcegraph/wildcard'
+import type { Subject } from 'rxjs'
+import { repeat, tap } from 'rxjs/operators'
 
 import {
-    ExternalServiceSyncJobConnectionFields,
-    ExternalServiceSyncJobListFields,
+    type ExternalServiceSyncJobConnectionFields,
+    type ExternalServiceSyncJobListFields,
     ExternalServiceSyncJobState,
-    Scalars,
+    type Scalars,
 } from '../../graphql-operations'
-import { FilteredConnection, FilteredConnectionQueryArguments } from '../FilteredConnection'
+import { FilteredConnection, type FilteredConnectionQueryArguments } from '../FilteredConnection'
 
 import { queryExternalServiceSyncJobs as _queryExternalServiceSyncJobs } from './backend'
 import { EXTERNAL_SERVICE_SYNC_RUNNING_STATUSES } from './externalServices'
-import { ExternalServiceSyncJobNode, ExternalServiceSyncJobNodeProps } from './ExternalServiceSyncJobNode'
+import { ExternalServiceSyncJobNode, type ExternalServiceSyncJobNodeProps } from './ExternalServiceSyncJobNode'
 
 interface ExternalServiceSyncJobsListProps {
     externalServiceID: Scalars['ID']
@@ -51,35 +48,28 @@ export const ExternalServiceSyncJobsList: React.FunctionComponent<ExternalServic
                         }
                     }
                 }),
-                repeatWhen(obs => obs.pipe(delay(1500)))
+                repeat({ delay: 1500 })
             ),
         [externalServiceID, queryExternalServiceSyncJobs, updateSyncInProgress, updateNumberOfRepos]
     )
 
-    const history = useHistory()
-
     return (
-        <>
-            <H2 className="mt-3">Recent sync jobs</H2>
-            <FilteredConnection<
-                ExternalServiceSyncJobListFields,
-                Omit<ExternalServiceSyncJobNodeProps, 'node'>,
-                {},
-                ExternalServiceSyncJobConnectionFields
-            >
-                className="mb-0 mt-1"
-                noun="sync job"
-                listClassName="list-group-flush"
-                pluralNoun="sync jobs"
-                queryConnection={queryConnection}
-                nodeComponent={ExternalServiceSyncJobNode}
-                nodeComponentProps={{ onUpdate: updates }}
-                hideSearch={true}
-                noSummaryIfAllNodesVisible={true}
-                history={history}
-                updates={updates}
-                location={history.location}
-            />
-        </>
+        <FilteredConnection<
+            ExternalServiceSyncJobListFields,
+            Omit<ExternalServiceSyncJobNodeProps, 'node'>,
+            {},
+            ExternalServiceSyncJobConnectionFields
+        >
+            className="mb-0"
+            noun="sync job"
+            listClassName="list-group-flush"
+            pluralNoun="sync jobs"
+            queryConnection={queryConnection}
+            nodeComponent={ExternalServiceSyncJobNode}
+            nodeComponentProps={{ onUpdate: updates }}
+            hideSearch={true}
+            noSummaryIfAllNodesVisible={true}
+            updates={updates}
+        />
     )
 }

@@ -4,14 +4,14 @@ import (
 	"context"
 
 	"github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/relay"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 )
 
 // This file just contains stub GraphQL resolvers and data types for Code Insights which merely
 // return an error if not running in enterprise mode. The actual resolvers can be found in
-// enterprise/internal/insights/resolvers
+// internal/insights/resolvers
 
 // InsightsResolver is the root resolver.
 type InsightsResolver interface {
@@ -41,9 +41,14 @@ type InsightsResolver interface {
 	SaveInsightAsNewView(ctx context.Context, args SaveInsightAsNewViewArgs) (InsightViewPayloadResolver, error)
 
 	// Admin Management
-	UpdateInsightSeries(ctx context.Context, args *UpdateInsightSeriesArgs) (InsightSeriesMetadataPayloadResolver, error)
 	InsightSeriesQueryStatus(ctx context.Context) ([]InsightSeriesQueryStatusResolver, error)
 	InsightViewDebug(ctx context.Context, args InsightViewDebugArgs) (InsightViewDebugResolver, error)
+	InsightAdminBackfillQueue(ctx context.Context, args *AdminBackfillQueueArgs) (*gqlutil.ConnectionResolver[*BackfillQueueItemResolver], error)
+	// Admin Mutations
+	UpdateInsightSeries(ctx context.Context, args *UpdateInsightSeriesArgs) (InsightSeriesMetadataPayloadResolver, error)
+	RetryInsightSeriesBackfill(ctx context.Context, args *BackfillArgs) (*BackfillQueueItemResolver, error)
+	MoveInsightSeriesBackfillToFrontOfQueue(ctx context.Context, args *BackfillArgs) (*BackfillQueueItemResolver, error)
+	MoveInsightSeriesBackfillToBackOfQueue(ctx context.Context, args *BackfillArgs) (*BackfillQueueItemResolver, error)
 }
 
 type SearchInsightLivePreviewArgs struct {
@@ -87,11 +92,13 @@ type InsightsDataPointResolver interface {
 	DateTime() gqlutil.DateTime
 	Value() float64
 	DiffQuery() (*string, error)
+	PointInTimeQuery() (*string, error)
 }
 
 type InsightViewDebugResolver interface {
 	Raw(context.Context) ([]string, error)
 }
+
 type InsightStatusResolver interface {
 	TotalPoints(context.Context) (int32, error)
 	PendingJobs(context.Context) (int32, error)
@@ -131,7 +138,7 @@ type InsightsDashboardsArgs struct {
 
 type InsightsDashboardConnectionResolver interface {
 	Nodes(ctx context.Context) ([]InsightsDashboardResolver, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type InsightsDashboardResolver interface {
@@ -184,7 +191,7 @@ type DeleteInsightsDashboardArgs struct {
 type InsightViewConnectionResolver interface {
 	Nodes(ctx context.Context) ([]InsightViewResolver, error)
 	TotalCount(ctx context.Context) (*int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type InsightViewResolver interface {
@@ -467,6 +474,7 @@ type InsightViewQueryArgs struct {
 	First                *int32
 	After                *string
 	Id                   *graphql.ID
+	ExcludeIds           *[]graphql.ID
 	Find                 *string
 	IsFrozen             *bool
 	Filters              *InsightViewFiltersInput
@@ -490,11 +498,13 @@ type IncompleteDatapointAlert interface {
 
 type TimeoutDatapointAlert interface {
 	Time() gqlutil.DateTime
+	Repositories(ctx context.Context) (*[]*RepositoryResolver, error)
 }
 
 type GenericIncompleteDatapointAlert interface {
 	Time() gqlutil.DateTime
 	Reason() string
+	Repositories(ctx context.Context) (*[]*RepositoryResolver, error)
 }
 
 type ValidateScopedInsightQueryArgs struct {
@@ -514,4 +524,69 @@ type PreviewRepositoriesFromQueryArgs struct {
 type RepositoryPreviewPayloadResolver interface {
 	Query(ctx context.Context) string
 	NumberOfRepositories(ctx context.Context) *int32
+}
+
+type BackfillQueueID struct {
+	BackfillID int
+	InsightID  string
+}
+type BackfillQueueItemResolver struct {
+	BackfillID      int
+	InsightUniqueID string
+	InsightTitle    string
+	CreatorID       *int32
+	Label           string
+	Query           string
+	BackfillStatus  BackfillQueueStatusResolver
+	GetUserResolver func(*int32) (*UserResolver, error)
+}
+
+func (r *BackfillQueueItemResolver) ID() graphql.ID {
+	return relay.MarshalID("backfillQueueItem", BackfillQueueID{BackfillID: r.BackfillID, InsightID: r.InsightUniqueID})
+}
+
+func (r *BackfillQueueItemResolver) IDInt32() int32 {
+	return int32(r.BackfillID)
+}
+
+func (r *BackfillQueueItemResolver) InsightViewTitle() string {
+	return r.InsightTitle
+}
+func (r *BackfillQueueItemResolver) Creator(ctx context.Context) (*UserResolver, error) {
+	return r.GetUserResolver(r.CreatorID)
+}
+func (r *BackfillQueueItemResolver) SeriesLabel() string {
+	return r.Label
+}
+func (r *BackfillQueueItemResolver) SeriesSearchQuery() string {
+	return r.Query
+}
+func (r *BackfillQueueItemResolver) BackfillQueueStatus() (BackfillQueueStatusResolver, error) {
+	return r.BackfillStatus, nil
+}
+
+type BackfillQueueStatusResolver interface {
+	State() string // enum
+	QueuePosition() *int32
+	Errors() *[]string
+	Cost() *int32
+	PercentComplete() *int32
+	CreatedAt() *gqlutil.DateTime
+	StartedAt() *gqlutil.DateTime
+	CompletedAt() *gqlutil.DateTime
+	Runtime() *string
+}
+
+type BackfillArgs struct {
+	Id graphql.ID
+}
+
+type AdminBackfillQueueArgs struct {
+	gqlutil.ConnectionResolverArgs
+	OrderBy    string
+	Descending bool
+
+	//filters
+	States     *[]string
+	TextSearch *string
 }

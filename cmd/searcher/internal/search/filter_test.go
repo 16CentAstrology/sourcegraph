@@ -2,19 +2,21 @@ package search
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
+	"io"
+	"os"
 	"testing"
 	"testing/quick"
 
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
-	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 func TestNewFilter(t *testing.T) {
 	gitserverClient := gitserver.NewMockClient()
-	gitserverClient.ReadFileFunc.SetDefaultReturn([]byte("foo/"), nil)
+	gitserverClient.NewFileReaderFunc.SetDefaultReturn(io.NopCloser(bytes.NewReader([]byte("foo/"))), nil)
 
-	ig, err := NewFilter(context.Background(), gitserverClient, "", "")
+	ig, err := NewFilterFactory(gitserverClient)(context.Background(), "", "")
 	if err != nil {
 		t.Error(err)
 	}
@@ -51,9 +53,9 @@ func TestNewFilter(t *testing.T) {
 
 func TestMissingIgnoreFile(t *testing.T) {
 	gitserverClient := gitserver.NewMockClient()
-	gitserverClient.ReadFileFunc.SetDefaultReturn(nil, errors.Errorf("err open .sourcegraph/ignore: file does not exist"))
+	gitserverClient.NewFileReaderFunc.SetDefaultReturn(nil, os.ErrNotExist)
 
-	ig, err := NewFilter(context.Background(), gitserverClient, "", "")
+	ig, err := NewFilterFactory(gitserverClient)(context.Background(), "", "")
 	if err != nil {
 		t.Error(err)
 	}

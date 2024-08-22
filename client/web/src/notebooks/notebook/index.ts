@@ -1,22 +1,22 @@
 import { escapeRegExp } from 'lodash'
 // We're using marked import here to access the `marked` package type definitions.
 // eslint-disable-next-line no-restricted-imports
-import { marked, Renderer } from 'marked'
-import { Observable, forkJoin, of } from 'rxjs'
-import { startWith, catchError, mapTo, map, switchMap } from 'rxjs/operators'
+import { type marked, Renderer } from 'marked'
+import { forkJoin, type Observable, of } from 'rxjs'
+import { catchError, map, startWith, switchMap } from 'rxjs/operators'
 import * as uuid from 'uuid'
 
-import { renderMarkdown, asError, isErrorLike } from '@sourcegraph/common'
+import { asError, isErrorLike, renderMarkdown } from '@sourcegraph/common'
 import {
     aggregateStreamingSearch,
     emptyAggregateResults,
+    type SymbolMatch,
     LATEST_VERSION,
-    SymbolMatch,
 } from '@sourcegraph/shared/src/search/stream'
-import { UIRangeSpec } from '@sourcegraph/shared/src/util/url'
+import type { UIRangeSpec } from '@sourcegraph/shared/src/util/url'
 
-import { Block, BlockInit, BlockDependencies, BlockInput, BlockDirection, SymbolBlockInput } from '..'
-import { NotebookFields, SearchPatternType } from '../../graphql-operations'
+import type { Block, BlockDependencies, BlockDirection, BlockInit, BlockInput, SymbolBlockInput } from '..'
+import { type NotebookFields, SearchPatternType } from '../../graphql-operations'
 import { parseBrowserRepoURL } from '../../util/url'
 import { createNotebook } from '../backend'
 import { fetchSuggestions } from '../blocks/suggestions/suggestions'
@@ -45,6 +45,7 @@ export function copyNotebook({ title, blocks, namespace }: CopyNotebookProps): O
 
 function findSymbolAtRevision(
     input: Omit<SymbolBlockInput, 'revision'>,
+    patternType: SearchPatternType,
     revision: string
 ): Observable<{ range: UIRangeSpec['range']; revision: string } | Error> {
     const { repositoryName, filePath, symbolName, symbolContainerName, symbolKind } = input
@@ -52,6 +53,7 @@ function findSymbolAtRevision(
         `repo:${escapeRegExp(repositoryName)} file:${escapeRegExp(
             filePath
         )} rev:${revision} ${symbolName} type:symbol count:50`,
+        patternType,
         (suggestion): suggestion is SymbolMatch => suggestion.type === 'symbol',
         symbol => symbol
     ).pipe(
@@ -97,11 +99,17 @@ export class NotebookHeadingMarkdownRenderer extends Renderer {
 export class Notebook {
     private blocks: Map<string, Block>
     private blockOrder: string[]
+    private patternType: SearchPatternType
 
-    constructor(initializerBlocks: BlockInit[], private dependencies: BlockDependencies) {
+    constructor(
+        initializerBlocks: BlockInit[],
+        patternType: SearchPatternType,
+        private dependencies: BlockDependencies
+    ) {
         const blocks = initializerBlocks.map(block => ({ ...block, output: null }))
 
         this.blocks = new Map(blocks.map(block => [block.id, block]))
+        this.patternType = patternType
         this.blockOrder = blocks.map(block => block.id)
 
         // Pre-run certain blocks, for a better user experience.
@@ -144,7 +152,7 @@ export class Notebook {
             return
         }
         switch (block.type) {
-            case 'md':
+            case 'md': {
                 this.blocks.set(block.id, {
                     ...block,
                     output: renderMarkdown(block.input.text, {
@@ -153,14 +161,15 @@ export class Notebook {
                     }),
                 })
                 break
+            }
             case 'query': {
                 // Removes comments
-                const query = block.input.query.replace(/\/\/.*/g, '')
+                const query = block.input.query.replaceAll(/\/\/.*/g, '')
                 this.blocks.set(block.id, {
                     ...block,
                     output: aggregateStreamingSearch(of(query), {
                         version: LATEST_VERSION,
-                        patternType: SearchPatternType.standard,
+                        patternType: this.patternType,
                         caseSensitive: false,
                         trace: undefined,
                         chunkMatches: true,
@@ -168,7 +177,7 @@ export class Notebook {
                 })
                 break
             }
-            case 'file':
+            case 'file': {
                 this.blocks.set(block.id, {
                     ...block,
                     output: this.dependencies
@@ -187,15 +196,16 @@ export class Notebook {
                         ),
                 })
                 break
+            }
             case 'symbol': {
                 // Start by searching for the symbol at the latest HEAD (main) revision.
-                const output = findSymbolAtRevision(block.input, 'HEAD').pipe(
+                const output = findSymbolAtRevision(block.input, this.patternType, 'HEAD').pipe(
                     switchMap(symbolSearchResult => {
                         if (!isErrorLike(symbolSearchResult)) {
                             return of({ ...symbolSearchResult, symbolFoundAtLatestRevision: true })
                         }
                         // If not found, look at the revision stored in the block input (should always be found).
-                        return findSymbolAtRevision(block.input, block.input.revision).pipe(
+                        return findSymbolAtRevision(block.input, this.patternType, block.input.revision).pipe(
                             map(symbolSearchResult =>
                                 !isErrorLike(symbolSearchResult)
                                     ? { ...symbolSearchResult, symbolFoundAtLatestRevision: false }
@@ -260,11 +270,11 @@ export class Notebook {
             }
             // Identical if/else if branches to make the TS compiler happy
             if (block.type === 'query') {
-                observables.push(block.output.pipe(mapTo(DONE)))
+                observables.push(block.output.pipe(map(() => DONE)))
             } else if (block.type === 'file') {
-                observables.push(block.output.pipe(mapTo(DONE)))
+                observables.push(block.output.pipe(map(() => DONE)))
             } else if (block.type === 'symbol') {
-                observables.push(block.output.pipe(mapTo(DONE)))
+                observables.push(block.output.pipe(map(() => DONE)))
             }
         }
         // We store output observables and join them into a single observable,
@@ -319,7 +329,7 @@ export class Notebook {
     }
 
     public getLastBlockId(): string | null {
-        return this.blockOrder.length > 0 ? this.blockOrder[this.blockOrder.length - 1] : null
+        return this.blockOrder.length > 0 ? this.blockOrder.at(-1)! : null
     }
 
     public getPreviousBlockId(id: string): string | null {

@@ -1,18 +1,15 @@
-import React, { useEffect, useMemo } from 'react'
+import React, { useEffect } from 'react'
 
 import { mdiOpenInNew } from '@mdi/js'
 import classNames from 'classnames'
 
-import { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
+import type { AuthenticatedUser } from '@sourcegraph/shared/src/auth'
 import { useTemporarySetting } from '@sourcegraph/shared/src/settings/temporary/useTemporarySetting'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { buildCloudTrialURL } from '@sourcegraph/shared/src/util/url'
-import { Container, Icon, Link, H2, H3, Text } from '@sourcegraph/wildcard'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { useIsLightTheme } from '@sourcegraph/shared/src/theme'
+import { Container, H2, H3, Icon, Link, Text, useReducedMotion } from '@sourcegraph/wildcard'
 
-import { CloudCtaBanner } from '../../components/CloudCtaBanner'
-import { EnterprisePageRoutes } from '../../routes.constants'
-import { useTheme, ThemePreference } from '../../theme'
-import { eventLogger } from '../../tracking/eventLogger'
+import { PageRoutes } from '../../routes.constants'
 
 import styles from './NotebooksGettingStartedTab.module.scss'
 
@@ -55,22 +52,22 @@ const functionalityPanels = [
 
 export const NotebooksGettingStartedTab: React.FunctionComponent<
     React.PropsWithChildren<NotebooksGettingStartedTabProps>
-> = ({ telemetryService, authenticatedUser }) => {
-    useEffect(() => telemetryService.log('NotebooksGettingStartedTabViewed'), [telemetryService])
+> = ({ telemetryService }) => {
+    useEffect(() => {
+        // No V2 telemetry required, as this is duplicative with the view event logged in NotebooksListPage.tsx.
+        telemetryService.log('NotebooksGettingStartedTabViewed')
+    }, [telemetryService])
 
     const [, setHasSeenGettingStartedTab] = useTemporarySetting('search.notebooks.gettingStartedTabSeen', false)
-    const isSourcegraphDotCom: boolean = window.context?.sourcegraphDotComMode || false
 
     useEffect(() => {
         setHasSeenGettingStartedTab(true)
     }, [setHasSeenGettingStartedTab])
 
-    const videoAutoplayAttributes = useMemo(() => {
-        const canAutoplay = window.matchMedia('(prefers-reduced-motion: no-preference)').matches
-        return canAutoplay ? { autoPlay: true, loop: true, controls: false } : { controls: true }
-    }, [])
+    const canAutoplay = !useReducedMotion()
+    const videoAutoplayAttributes = canAutoplay ? { autoPlay: true, loop: true, controls: false } : { controls: true }
 
-    const isLightTheme = useTheme().enhancedThemePreference === ThemePreference.Light
+    const isLightTheme = useIsLightTheme()
 
     return (
         <>
@@ -79,7 +76,7 @@ export const NotebooksGettingStartedTab: React.FunctionComponent<
                     <div className="col-12 col-md-6">
                         <video
                             key={`notebooks_overview_video_${isLightTheme}`}
-                            className="w-100 h-auto shadow percy-hide"
+                            className="w-100 h-auto shadow"
                             muted={true}
                             playsInline={true}
                             {...videoAutoplayAttributes}
@@ -125,23 +122,6 @@ export const NotebooksGettingStartedTab: React.FunctionComponent<
                 </div>
             </Container>
 
-            {isSourcegraphDotCom && (
-                <CloudCtaBanner variant="filled">
-                    To create Notebooks across your team's private repositories,{' '}
-                    <Link
-                        to={buildCloudTrialURL(authenticatedUser, 'notebooks')}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() =>
-                            eventLogger.log('ClickedOnCloudCTA', { cloudCtaType: 'NotebooksGettingStarted' })
-                        }
-                    >
-                        try Sourcegraph Cloud
-                    </Link>
-                    .
-                </CloudCtaBanner>
-            )}
-
             <H3>Example notebooks</H3>
             <div className={classNames(styles.row, 'row', 'mb-4')}>
                 <div className="col-12 col-md-6">
@@ -170,34 +150,6 @@ export const NotebooksGettingStartedTab: React.FunctionComponent<
                     </Container>
                 </div>
             </div>
-            <H3>Powerful creation features</H3>
-            <Container className="mb-4">
-                <div className={classNames(styles.row, 'row', 'mb-4')}>
-                    <div className="col-12 col-md-6">
-                        <strong>Enable the notepad for frictionless knowledge sharing</strong>
-                        <Text className="mt-1">
-                            With the notepad, create notebooks while you browse. Add searches, files, and file ranges
-                            without leaving the page you're on, then create a notebook of it all with one click.
-                        </Text>
-                        <strong>Compose rich documentation with multiple block types</strong>
-                        <Text className="mt-1">
-                            Create text content with Markdown blocks, track symbols within files with symbol blocks, and
-                            add whole files or line ranges with file blocks.
-                        </Text>
-                    </div>
-                    <div className="col-12 col-md-6">
-                        <video
-                            className="w-100 h-auto shadow percy-hide"
-                            muted={true}
-                            playsInline={true}
-                            controls={true}
-                            src={`https://storage.googleapis.com/sourcegraph-assets/notebooks/notepad_overview_${
-                                isLightTheme ? 'light' : 'dark'
-                            }.mp4`}
-                        />
-                    </div>
-                </div>
-            </Container>
             <H3>Functionality</H3>
             <div className={classNames(styles.row, 'row', 'mb-4')}>
                 {functionalityPanels.map(panel => (
@@ -224,7 +176,7 @@ export const NotebooksGettingStartedTab: React.FunctionComponent<
                     <div className="mb-2">
                         Notebooks can be used for onboarding, documentation, incident response, and more.
                     </div>
-                    <Link to={EnterprisePageRoutes.NotebookCreate}>Create a notebook</Link>
+                    <Link to={PageRoutes.NotebookCreate}>Create a notebook</Link>
                 </div>
                 <div className="col-12 col-md-6">
                     <div className="mb-2">

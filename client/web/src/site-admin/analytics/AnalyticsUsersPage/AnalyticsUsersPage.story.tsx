@@ -1,17 +1,17 @@
-import { MockedResponse } from '@apollo/client/testing'
-import { DecoratorFn, Meta, Story } from '@storybook/react'
+import type { MockedResponse } from '@apollo/client/testing'
+import type { Decorator, Meta, StoryFn } from '@storybook/react'
 
 import { getDocumentNode } from '@sourcegraph/http-client'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 import { MockedTestProvider } from '@sourcegraph/shared/src/testing/apollo'
 
 import { WebStory } from '../../../components/WebStory'
-import { UsersStatisticsResult } from '../../../graphql-operations'
-
-import { USERS_STATISTICS } from './queries'
+import type { UsersStatisticsResult } from '../../../graphql-operations'
 
 import { AnalyticsUsersPage } from './index'
+import { USERS_STATISTICS } from './queries'
 
-const decorator: DecoratorFn = story => <WebStory>{() => <div className="p-3 container">{story()}</div>}</WebStory>
+const decorator: Decorator = story => <WebStory>{() => <div className="p-3 container">{story()}</div>}</WebStory>
 
 const config: Meta = {
     title: 'web/site-admin/analytics/AnalyticsUsersPage',
@@ -686,12 +686,16 @@ const USER_ANALYTICS_QUERY_MOCK: MockedResponse<UsersStatisticsResult> = {
                 totalCount: 49036,
                 __typename: 'UserConnection',
             },
+            pendingAccessRequests: {
+                totalCount: 123,
+                __typename: 'AccessRequestConnection',
+            },
         },
     },
 }
 
-export const AnalyticsUsersPageExample: Story = () => (
+export const AnalyticsUsersPageExample: StoryFn = () => (
     <MockedTestProvider mocks={[USER_ANALYTICS_QUERY_MOCK]}>
-        <AnalyticsUsersPage history={{} as any} location={{} as any} match={{} as any} />
+        <AnalyticsUsersPage telemetryRecorder={noOpTelemetryRecorder} />
     </MockedTestProvider>
 )

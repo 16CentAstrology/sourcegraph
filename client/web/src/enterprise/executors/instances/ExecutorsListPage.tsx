@@ -1,29 +1,29 @@
-import React, { FunctionComponent, useCallback, useEffect } from 'react'
+import React, { useCallback, useEffect } from 'react'
 
 import { useApolloClient } from '@apollo/client'
 import { mdiMapSearch } from '@mdi/js'
-import { useHistory } from 'react-router'
 
-import { Container, Link, PageHeader, Icon, H3, Text } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { Container, H3, Icon, Link, PageHeader, Text } from '@sourcegraph/wildcard'
 
 import {
     FilteredConnection,
-    FilteredConnectionFilter,
-    FilteredConnectionQueryArguments,
+    type Filter,
+    type FilteredConnectionQueryArguments,
 } from '../../../components/FilteredConnection'
 import { PageTitle } from '../../../components/PageTitle'
-import { ExecutorFields } from '../../../graphql-operations'
-import { eventLogger } from '../../../tracking/eventLogger'
+import type { ExecutorFields } from '../../../graphql-operations'
 
 import { ExecutorNode } from './ExecutorNode'
 import { queryExecutors as defaultQueryExecutors } from './useExecutors'
 
-const filters: FilteredConnectionFilter[] = [
+const filters: Filter[] = [
     {
         id: 'filters',
         label: 'State',
         type: 'select',
-        values: [
+        options: [
             {
                 label: 'All',
                 value: 'all',
@@ -40,16 +40,18 @@ const filters: FilteredConnectionFilter[] = [
     },
 ]
 
-export interface ExecutorsListPageProps {
+export interface ExecutorsListPageProps extends TelemetryV2Props {
     queryExecutors?: typeof defaultQueryExecutors
 }
 
-export const ExecutorsListPage: FunctionComponent<React.PropsWithChildren<ExecutorsListPageProps>> = ({
+export const ExecutorsListPage: React.FC<ExecutorsListPageProps> = ({
     queryExecutors = defaultQueryExecutors,
+    telemetryRecorder,
 }) => {
-    useEffect(() => eventLogger.logViewEvent('ExecutorsList'))
-
-    const history = useHistory()
+    useEffect(() => {
+        EVENT_LOGGER.logViewEvent('ExecutorsList')
+        telemetryRecorder.recordEvent('admin.executors.list', 'view')
+    }, [telemetryRecorder])
 
     const apolloClient = useApolloClient()
     const queryExecutorsCallback = useCallback(
@@ -83,7 +85,7 @@ export const ExecutorsListPage: FunctionComponent<React.PropsWithChildren<Execut
                         running batch changes server-side
                     </Link>
                     . In order to use those features,{' '}
-                    <Link to="/help/admin/deploy_executors" rel="noopener">
+                    <Link to="/help/admin/executors/deploy_executors" rel="noopener">
                         set them up
                     </Link>
                     .
@@ -99,8 +101,6 @@ export const ExecutorsListPage: FunctionComponent<React.PropsWithChildren<Execut
                     nodeComponent={ExecutorNode}
                     nodeComponentProps={{}}
                     queryConnection={queryExecutorsCallback}
-                    history={history}
-                    location={history.location}
                     cursorPaging={true}
                     filters={filters}
                     emptyElement={<NoExecutors />}

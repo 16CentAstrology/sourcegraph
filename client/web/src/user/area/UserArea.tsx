@@ -1,28 +1,32 @@
-import React, { useMemo } from 'react'
+import { Suspense, useMemo, type FC } from 'react'
 
-import MapSearchIcon from 'mdi-react/MapSearchIcon'
-import { Route, RouteComponentProps, Switch } from 'react-router'
+import { Route, Routes, useParams } from 'react-router-dom'
 
 import { gql, useQuery } from '@sourcegraph/http-client'
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
-import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
+import type { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { LoadingSpinner } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../auth'
-import { BatchChangesProps } from '../../batches'
-import { BreadcrumbsProps, BreadcrumbSetters } from '../../components/Breadcrumbs'
-import { ErrorBoundary } from '../../components/ErrorBoundary'
-import { HeroPage } from '../../components/HeroPage'
+import type { AuthenticatedUser } from '../../auth'
+import type { BatchChangesProps } from '../../batches'
+import type { BreadcrumbSetters, BreadcrumbsProps } from '../../components/Breadcrumbs'
+import { RouteError } from '../../components/ErrorBoundary'
+import { NotFoundPage } from '../../components/HeroPage'
 import { Page } from '../../components/Page'
-import { UserAreaUserFields, UserAreaUserProfileResult, UserAreaUserProfileVariables } from '../../graphql-operations'
-import { NamespaceProps } from '../../namespaces'
-import { RouteDescriptor } from '../../util/contributions'
-import { UserSettingsAreaRoute } from '../settings/UserSettingsArea'
-import { UserSettingsSidebarItems } from '../settings/UserSettingsSidebar'
+import type {
+    UserAreaUserFields,
+    UserAreaUserProfileResult,
+    UserAreaUserProfileVariables,
+} from '../../graphql-operations'
+import type { NamespaceProps } from '../../namespaces'
+import type { RouteV6Descriptor } from '../../util/contributions'
+import { isAccessTokenCallbackPage } from '../settings/accessTokens/UserSettingsCreateAccessTokenCallbackPage'
+import type { UserSettingsAreaRoute } from '../settings/UserSettingsArea'
+import type { UserSettingsSidebarItems } from '../settings/UserSettingsSidebar'
 
-import { UserAreaHeader, UserAreaHeaderNavItem } from './UserAreaHeader'
+import { UserAreaHeader, type UserAreaHeaderNavItem } from './UserAreaHeader'
 
 /**
  * GraphQL fragment for the User fields needed by UserArea.
@@ -44,11 +48,22 @@ export const UserAreaGQLFragment = gql`
         avatarURL
         viewerCanAdminister
         builtinAuth
+        createdAt
+        emails @skip(if: $isSourcegraphDotCom) {
+            email
+            isPrimary
+        }
+        roles @skip(if: $isSourcegraphDotCom) {
+            nodes {
+                name
+                system
+            }
+        }
     }
 `
 
 export const USER_AREA_USER_PROFILE = gql`
-    query UserAreaUserProfile($username: String!) {
+    query UserAreaUserProfile($username: String!, $isSourcegraphDotCom: Boolean!) {
         user(username: $username) {
             ...UserAreaUserFields
         }
@@ -56,16 +71,14 @@ export const USER_AREA_USER_PROFILE = gql`
     ${UserAreaGQLFragment}
 `
 
-export interface UserAreaRoute extends RouteDescriptor<UserAreaRouteContext> {
+export interface UserAreaRoute extends RouteV6Descriptor<UserAreaRouteContext> {
     /** When true, the header is not rendered and the component is not wrapped in a container. */
     fullPage?: boolean
 }
 
 interface UserAreaProps
-    extends RouteComponentProps<{ username: string }>,
-        PlatformContextProps,
+    extends PlatformContextProps,
         SettingsCascadeProps,
-        ThemeProps,
         TelemetryProps,
         BreadcrumbsProps,
         BreadcrumbSetters,
@@ -90,8 +103,8 @@ interface UserAreaProps
 export interface UserAreaRouteContext
     extends PlatformContextProps,
         SettingsCascadeProps,
-        ThemeProps,
         TelemetryProps,
+        TelemetryV2Props,
         NamespaceProps,
         BreadcrumbsProps,
         BreadcrumbSetters,
@@ -120,19 +133,14 @@ export interface UserAreaRouteContext
 /**
  * A user's public profile area.
  */
-export const UserArea: React.FunctionComponent<React.PropsWithChildren<UserAreaProps>> = ({
-    useBreadcrumb,
-    userAreaRoutes,
-    match: {
-        url,
-        params: { username },
-    },
-    ...props
-}) => {
+export const UserArea: FC<UserAreaProps> = ({ useBreadcrumb, userAreaRoutes, isSourcegraphDotCom, ...props }) => {
+    const { username } = useParams()
+    const userAreaMainUrl = `/users/${username}`
+
     const { data, error, loading, previousData } = useQuery<UserAreaUserProfileResult, UserAreaUserProfileVariables>(
         USER_AREA_USER_PROFILE,
         {
-            variables: { username },
+            variables: { username: username!, isSourcegraphDotCom },
         }
     )
 
@@ -165,63 +173,60 @@ export const UserArea: React.FunctionComponent<React.PropsWithChildren<UserAreaP
     }
 
     if (!user) {
-        return <NotFoundPage />
+        return <NotFoundPage pageType="user" />
     }
+
+    // Since the access token callback page is rendered in a nested route, we can't use the
+    // `fullPage` route prop to determine whether to render the header. Instead, we check
+    // whether the current page is the access token callback page.
+    const isFullscreenPage = isAccessTokenCallbackPage()
 
     const context: UserAreaRouteContext = {
         ...props,
-        url,
+        url: userAreaMainUrl,
         user,
         namespace: user,
         ...childBreadcrumbSetters,
+        isSourcegraphDotCom,
+        telemetryRecorder: props.platformContext.telemetryRecorder,
     }
 
     return (
-        <ErrorBoundary location={props.location}>
-            <React.Suspense
-                fallback={
-                    <div className="w-100 text-center">
-                        <LoadingSpinner className="m-2" />
-                    </div>
-                }
-            >
-                <Switch>
-                    {userAreaRoutes.map(
-                        ({ path, exact, render, condition = () => true, fullPage }) =>
-                            condition(context) && (
-                                <Route
-                                    render={routeComponentProps =>
-                                        fullPage ? (
-                                            render({ ...context, ...routeComponentProps })
-                                        ) : (
-                                            <Page>
-                                                <UserAreaHeader
-                                                    {...props}
-                                                    {...context}
-                                                    className="mb-3"
-                                                    navItems={props.userAreaHeaderNavItems}
-                                                />
-                                                <div className="container">
-                                                    {render({ ...context, ...routeComponentProps })}
-                                                </div>
-                                            </Page>
-                                        )
-                                    }
-                                    path={url + path}
-                                    key="hardcoded-key" // see https://github.com/ReactTraining/react-router/issues/4578#issuecomment-334489490
-                                    exact={exact}
-                                />
-                            )
-                    )}
-                    <Route key="hardcoded-key">
-                        <NotFoundPage />
-                    </Route>
-                </Switch>
-            </React.Suspense>
-        </ErrorBoundary>
+        <Suspense
+            fallback={
+                <div className="w-100 text-center">
+                    <LoadingSpinner className="m-2" />
+                </div>
+            }
+        >
+            <Routes>
+                {userAreaRoutes.map(
+                    ({ path, render, condition = () => true, fullPage }) =>
+                        condition(context) && (
+                            <Route
+                                errorElement={<RouteError />}
+                                element={
+                                    fullPage || isFullscreenPage ? (
+                                        render(context)
+                                    ) : (
+                                        <Page>
+                                            <UserAreaHeader
+                                                {...props}
+                                                {...context}
+                                                className="mb-3"
+                                                navItems={props.userAreaHeaderNavItems}
+                                            />
+                                            <div className="container">{render(context)}</div>
+                                        </Page>
+                                    )
+                                }
+                                path={path}
+                                key="hardcoded-key" // see https://github.com/ReactTraining/react-router/issues/4578#issuecomment-334489490
+                            />
+                        )
+                )}
+                <Route path="*" element={<NotFoundPage pageType="user" />} />
+            </Routes>
+        </Suspense>
     )
 }
-
-const NotFoundPage: React.FunctionComponent<React.PropsWithChildren<{}>> = () => (
-    <HeroPage icon={MapSearchIcon} title="404: Not Found" subtitle="Sorry, the requested user page was not found." />
-)

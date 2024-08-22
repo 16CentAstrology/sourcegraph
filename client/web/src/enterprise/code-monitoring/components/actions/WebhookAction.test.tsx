@@ -1,14 +1,15 @@
-import { MockedResponse } from '@apollo/client/testing'
-import { render } from '@testing-library/react'
+import type { MockedResponse } from '@apollo/client/testing'
 import userEvent from '@testing-library/user-event'
 import sinon from 'sinon'
+import { describe, expect, test } from 'vitest'
 
 import { MockedTestProvider, waitForNextApolloResponse } from '@sourcegraph/shared/src/testing/apollo'
 import { assertAriaDisabled, assertAriaEnabled } from '@sourcegraph/testing'
+import { renderWithBrandedContext } from '@sourcegraph/wildcard/src/testing'
 
-import { SendTestWebhookResult, SendTestWebhookVariables } from '../../../../graphql-operations'
+import type { SendTestWebhookResult, SendTestWebhookVariables } from '../../../../graphql-operations'
 import { mockAuthenticatedUser } from '../../testing/util'
-import { ActionProps, MonitorAction } from '../FormActionArea'
+import type { ActionProps, MonitorAction } from '../FormActionArea'
 
 import { SEND_TEST_WEBHOOK, WebhookAction } from './WebhookAction'
 
@@ -23,7 +24,7 @@ describe('WebhookAction', () => {
 
     test('open and submit', () => {
         const setActionSpy = sinon.spy()
-        const { getByTestId } = render(
+        const { getByTestId } = renderWithBrandedContext(
             <MockedTestProvider>
                 <WebhookAction {...props} setAction={setActionSpy} />
             </MockedTestProvider>
@@ -51,7 +52,7 @@ describe('WebhookAction', () => {
 
     test('open and edit', () => {
         const setActionSpy = sinon.spy()
-        const { getByTestId } = render(
+        const { getByTestId } = renderWithBrandedContext(
             <MockedTestProvider>
                 <WebhookAction
                     {...props}
@@ -89,7 +90,7 @@ describe('WebhookAction', () => {
 
     test('open and delete', () => {
         const setActionSpy = sinon.spy()
-        const { getByTestId } = render(
+        const { getByTestId } = renderWithBrandedContext(
             <MockedTestProvider>
                 <WebhookAction
                     {...props}
@@ -113,7 +114,7 @@ describe('WebhookAction', () => {
 
     test('enable and disable', () => {
         const setActionSpy = sinon.spy()
-        const { getByTestId } = render(
+        const { getByTestId } = renderWithBrandedContext(
             <MockedTestProvider>
                 <WebhookAction
                     {...props}
@@ -156,7 +157,7 @@ describe('WebhookAction', () => {
 
     test('open, edit, cancel, open again', () => {
         const setActionSpy = sinon.spy()
-        const { getByTestId } = render(
+        const { getByTestId } = renderWithBrandedContext(
             <MockedTestProvider>
                 <WebhookAction
                     {...props}
@@ -209,7 +210,7 @@ describe('WebhookAction', () => {
         }
 
         test('disabled if no webhook url set', () => {
-            const { getByTestId } = render(
+            const { getByTestId } = renderWithBrandedContext(
                 <MockedTestProvider>
                     <WebhookAction {...props} />
                 </MockedTestProvider>
@@ -220,7 +221,7 @@ describe('WebhookAction', () => {
         })
 
         test('disabled if no monitor name set', () => {
-            const { getByTestId } = render(
+            const { getByTestId } = renderWithBrandedContext(
                 <MockedTestProvider>
                     <WebhookAction {...props} monitorName="" />
                 </MockedTestProvider>
@@ -239,7 +240,7 @@ describe('WebhookAction', () => {
                 result: { data: { triggerTestWebhookAction: { alwaysNil: null } } },
             }
 
-            const { getByTestId, queryByTestId } = render(
+            const { getByTestId, queryByTestId } = renderWithBrandedContext(
                 <MockedTestProvider mocks={[mockedResponse]}>
                     <WebhookAction {...props} action={mockAction} />
                 </MockedTestProvider>
@@ -269,7 +270,7 @@ describe('WebhookAction', () => {
                 error: new Error('An error occurred'),
             }
 
-            const { getByTestId, queryByTestId } = render(
+            const { getByTestId, queryByTestId } = renderWithBrandedContext(
                 <MockedTestProvider mocks={[mockedResponse]}>
                     <WebhookAction {...props} action={mockAction} />
                 </MockedTestProvider>

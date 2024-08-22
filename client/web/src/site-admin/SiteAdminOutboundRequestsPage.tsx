@@ -1,20 +1,21 @@
-import React, { ReactNode, useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState, type ReactNode } from 'react'
 
 import { mdiChevronDown } from '@mdi/js'
 import { VisuallyHidden } from '@reach/visually-hidden'
 import classNames from 'classnames'
 import copy from 'copy-to-clipboard'
-import { RouteComponentProps } from 'react-router'
 import { of } from 'rxjs'
 import { delay, map } from 'rxjs/operators'
 
 import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
 import { useQuery } from '@sourcegraph/http-client/src'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import {
     Button,
     Code,
     Container,
+    ErrorAlert,
     Icon,
     Link,
     LoadingSpinner,
@@ -25,32 +26,31 @@ import {
     Position,
     Text,
     Tooltip,
-    ErrorAlert,
 } from '@sourcegraph/wildcard'
 
 import {
     FilteredConnection,
-    FilteredConnectionFilter,
-    FilteredConnectionQueryArguments,
+    type Filter,
+    type FilteredConnectionQueryArguments,
 } from '../components/FilteredConnection'
 import { PageTitle } from '../components/PageTitle'
-import { OutboundRequestsResult, OutboundRequestsVariables } from '../graphql-operations'
+import type { OutboundRequestsResult, OutboundRequestsVariables } from '../graphql-operations'
 
 import { OUTBOUND_REQUESTS, OUTBOUND_REQUESTS_PAGE_POLL_INTERVAL_MS } from './backend'
 import { parseProductReference } from './SiteAdminFeatureFlagsPage'
 
 import styles from './SiteAdminOutboundRequestsPage.module.scss'
 
-export interface SiteAdminOutboundRequestsPageProps extends RouteComponentProps, TelemetryProps {}
+export interface SiteAdminOutboundRequestsPageProps extends TelemetryProps, TelemetryV2Props {}
 
 export type OutboundRequest = OutboundRequestsResult['outboundRequests']['nodes'][0]
 
-const filters: FilteredConnectionFilter[] = [
+const filters: Filter[] = [
     {
         id: 'filters',
         label: 'Filter',
         type: 'select',
-        values: [
+        options: [
             {
                 label: 'All',
                 value: 'all',
@@ -75,14 +75,15 @@ const filters: FilteredConnectionFilter[] = [
 
 export const SiteAdminOutboundRequestsPage: React.FunctionComponent<
     React.PropsWithChildren<SiteAdminOutboundRequestsPageProps>
-> = ({ history, telemetryService }) => {
+> = ({ telemetryService, telemetryRecorder }) => {
     const [items, setItems] = useState<OutboundRequest[]>([])
 
     useEffect(() => {
         telemetryService.logPageView('SiteAdminOutboundRequests')
-    }, [telemetryService])
+        telemetryRecorder.recordEvent('admin.outboundRequests', 'view')
+    }, [telemetryService, telemetryRecorder])
 
-    const lastId = items[items.length - 1]?.id ?? null
+    const lastId = items.at(-1)?.id ?? null
     const { data, loading, error, stopPolling, refetch, startPolling } = useQuery<
         OutboundRequestsResult,
         OutboundRequestsVariables
@@ -90,6 +91,15 @@ export const SiteAdminOutboundRequestsPage: React.FunctionComponent<
         variables: { after: lastId },
         pollInterval: OUTBOUND_REQUESTS_PAGE_POLL_INTERVAL_MS,
     })
+    const [polling, setPolling] = useState(true)
+    const togglePolling = useCallback(() => {
+        if (polling) {
+            stopPolling()
+        } else {
+            startPolling(OUTBOUND_REQUESTS_PAGE_POLL_INTERVAL_MS)
+        }
+        setPolling(!polling)
+    }, [polling, startPolling, stopPolling])
 
     useEffect(() => {
         if (data?.outboundRequests?.nodes?.length && (!lastId || data?.outboundRequests.nodes[0].id > lastId)) {
@@ -108,7 +118,7 @@ export const SiteAdminOutboundRequestsPage: React.FunctionComponent<
             // See http://www.petecorey.com/blog/2019/09/23/apollo-quirks-polling-after-refetching-with-new-variables/
             stopPolling()
             setItems(newItems)
-            refetch({ after: newItems[newItems.length - 1]?.id ?? null })
+            refetch({ after: newItems.at(-1)?.id ?? null })
                 .then(() => {})
                 .catch(() => {})
             startPolling(OUTBOUND_REQUESTS_PAGE_POLL_INTERVAL_MS)
@@ -138,6 +148,9 @@ export const SiteAdminOutboundRequestsPage: React.FunctionComponent<
     return (
         <div className="site-admin-outbound-requests-page">
             <PageTitle title="Outbound requests - Admin" />
+            <Button variant="secondary" onClick={togglePolling} className="float-right">
+                {polling ? 'Pause updating' : 'Resume updating'}
+            </Button>
             <PageHeader
                 path={[{ text: 'Outbound requests' }]}
                 headingElement="h2"
@@ -145,7 +158,7 @@ export const SiteAdminOutboundRequestsPage: React.FunctionComponent<
                     <>
                         This is the log of recent external requests sent by the Sourcegraph instance. Handy for seeing
                         what's happening between Sourcegraph and other services.{' '}
-                        <strong>The list updates every five seconds.</strong>
+                        {polling ? <strong>The list updates every five seconds.</strong> : null}
                     </>
                 }
                 className="mb-3"
@@ -164,8 +177,6 @@ export const SiteAdminOutboundRequestsPage: React.FunctionComponent<
                         queryConnection={queryOutboundRequests}
                         nodeComponent={OutboundRequestNode}
                         filters={filters}
-                        history={history}
-                        location={history.location}
                     />
                 ) : (
                     <>

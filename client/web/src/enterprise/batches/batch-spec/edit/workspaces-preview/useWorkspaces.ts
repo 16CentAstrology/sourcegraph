@@ -2,9 +2,9 @@ import { dataOrThrowErrors } from '@sourcegraph/http-client'
 
 import {
     useShowMorePagination,
-    UseShowMorePaginationResult,
+    type UseShowMorePaginationResult,
 } from '../../../../../components/FilteredConnection/hooks/useShowMorePagination'
-import {
+import type {
     Scalars,
     BatchSpecWorkspacesPreviewResult,
     BatchSpecWorkspacesPreviewVariables,
@@ -30,7 +30,10 @@ export interface WorkspacePreviewFilters {
 export const useWorkspaces = (
     batchSpecID: Scalars['ID'],
     filters?: WorkspacePreviewFilters
-): UseShowMorePaginationResult<PreviewHiddenBatchSpecWorkspaceFields | PreviewVisibleBatchSpecWorkspaceFields> =>
+): UseShowMorePaginationResult<
+    BatchSpecWorkspacesPreviewResult,
+    PreviewHiddenBatchSpecWorkspaceFields | PreviewVisibleBatchSpecWorkspaceFields
+> =>
     useShowMorePagination<
         BatchSpecWorkspacesPreviewResult,
         BatchSpecWorkspacesPreviewVariables,
@@ -39,12 +42,10 @@ export const useWorkspaces = (
         query: WORKSPACES,
         variables: {
             batchSpec: batchSpecID,
-            after: null,
-            first: WORKSPACES_PER_PAGE_COUNT,
             search: filters?.search ?? null,
         },
         options: {
-            useURL: false,
+            pageSize: WORKSPACES_PER_PAGE_COUNT,
             fetchPolicy: 'cache-and-network',
         },
         getConnection: result => {

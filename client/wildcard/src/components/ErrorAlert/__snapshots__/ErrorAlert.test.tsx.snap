@@ -1,10 +1,10 @@
-// Jest Snapshot v1, https://goo.gl/fbAQLP
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`ErrorAlert should add a prefix if given 1`] = `
+exports[`ErrorAlert > should add a prefix if given 1`] = `
 <DocumentFragment>
   <div
     aria-live="assertive"
-    class=""
+    class="alert alertDanger"
     role="alert"
   >
     <strong>
@@ -20,11 +20,11 @@ exports[`ErrorAlert should add a prefix if given 1`] = `
 </DocumentFragment>
 `;
 
-exports[`ErrorAlert should render a Go multierror nicely 1`] = `
+exports[`ErrorAlert > should render a Go multierror nicely 1`] = `
 <DocumentFragment>
   <div
     aria-live="assertive"
-    class=""
+    class="alert alertDanger"
     role="alert"
   >
      
@@ -50,11 +50,11 @@ exports[`ErrorAlert should render a Go multierror nicely 1`] = `
 </DocumentFragment>
 `;
 
-exports[`ErrorAlert should render an Error object as an alert 1`] = `
+exports[`ErrorAlert > should render an Error object as an alert 1`] = `
 <DocumentFragment>
   <div
     aria-live="assertive"
-    class=""
+    class="alert alertDanger"
     role="alert"
   >
      

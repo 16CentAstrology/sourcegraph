@@ -1,20 +1,20 @@
 import * as React from 'react'
 
-import { RouteComponentProps } from 'react-router'
-import { Observable, Subject, Subscription } from 'rxjs'
+import type { Location, NavigateFunction } from 'react-router-dom'
+import { Subject, Subscription, type Observable } from 'rxjs'
 import { distinctUntilChanged, map, startWith } from 'rxjs/operators'
 
 import { createAggregateError } from '@sourcegraph/common'
 import { gql } from '@sourcegraph/http-client'
-import { CardHeader, Card } from '@sourcegraph/wildcard'
+import { Card, CardHeader } from '@sourcegraph/wildcard'
 
 import { queryGraphQL } from '../../backend/graphql'
 import { FilteredConnection } from '../../components/FilteredConnection'
-import { GitCommitFields, RepositoryComparisonCommitsResult, Scalars } from '../../graphql-operations'
-import { GitCommitNode, GitCommitNodeProps } from '../commits/GitCommitNode'
+import type { GitCommitFields, RepositoryComparisonCommitsResult, Scalars } from '../../graphql-operations'
+import { GitCommitNode, type GitCommitNodeProps } from '../commits/GitCommitNode'
 import { gitCommitFragment } from '../commits/RepositoryCommitsPage'
 
-import { RepositoryCompareAreaPageProps } from './RepositoryCompareArea'
+import type { RepositoryCompareAreaPageProps } from './RepositoryCompareArea'
 
 type RepositoryComparisonRepository = Extract<RepositoryComparisonCommitsResult['node'], { __typename?: 'Repository' }>
 
@@ -22,7 +22,7 @@ function queryRepositoryComparisonCommits(args: {
     repo: Scalars['ID']
     base: string | null
     head: string | null
-    first?: number
+    first?: number | null
     path?: string
 }): Observable<RepositoryComparisonRepository['comparison']['commits']> {
     return queryGraphQL<RepositoryComparisonCommitsResult>(
@@ -48,11 +48,11 @@ function queryRepositoryComparisonCommits(args: {
         args
     ).pipe(
         map(({ data, errors }) => {
-            if (!data || !data.node) {
+            if (!data?.node) {
                 throw createAggregateError(errors)
             }
             const repo = data.node as RepositoryComparisonRepository
-            if (!repo.comparison || !repo.comparison.commits || errors) {
+            if (!repo.comparison?.commits || errors) {
                 throw createAggregateError(errors)
             }
             return repo.comparison.commits
@@ -60,9 +60,12 @@ function queryRepositoryComparisonCommits(args: {
     )
 }
 
-interface Props extends RepositoryCompareAreaPageProps, RouteComponentProps<{}> {
+interface Props extends RepositoryCompareAreaPageProps {
     /** An optional path of a specific file being compared */
     path: string | null
+
+    location: Location
+    navigate: NavigateFunction
 }
 
 /** A page with a list of commits in the comparison. */
@@ -102,7 +105,7 @@ export class RepositoryCompareCommitsPage extends React.PureComponent<Props> {
                     <CardHeader>Commits</CardHeader>
                     <FilteredConnection<
                         GitCommitFields,
-                        Pick<GitCommitNodeProps, 'className' | 'compact' | 'wrapperElement'>
+                        Pick<GitCommitNodeProps, 'className' | 'compact' | 'wrapperElement' | 'telemetryRecorder'>
                     >
                         listClassName="list-group list-group-flush"
                         noun="commit"
@@ -114,13 +117,12 @@ export class RepositoryCompareCommitsPage extends React.PureComponent<Props> {
                             className: 'list-group-item',
                             compact: true,
                             wrapperElement: 'li',
+                            telemetryRecorder: this.props.telemetryRecorder,
                         }}
                         defaultFirst={50}
                         hideSearch={true}
                         noSummaryIfAllNodesVisible={true}
                         updates={this.updates}
-                        history={this.props.history}
-                        location={this.props.location}
                     />
                 </Card>
             </div>
@@ -128,7 +130,7 @@ export class RepositoryCompareCommitsPage extends React.PureComponent<Props> {
     }
 
     private queryCommits = (args: {
-        first?: number
+        first?: number | null
     }): Observable<RepositoryComparisonRepository['comparison']['commits']> =>
         queryRepositoryComparisonCommits({
             ...args,

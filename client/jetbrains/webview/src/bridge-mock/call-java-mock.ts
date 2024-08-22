@@ -54,8 +54,7 @@ function handleRequest(
                 JSON.stringify({
                     instanceURL,
                     accessToken,
-                    customRequestHeadersAsString: 'Client-ID,99999,X-Test-Header,Some value',
-                    isGlobbingEnabled: true,
+                    customRequestHeadersAsString: '',
                     pluginVersion: '1.2.3',
                     anonymousUserId: 'test',
                 })
@@ -175,10 +174,10 @@ function setOverlay(content: string | null): void {
 }
 
 function escapeHTML(unsafe: string): string {
-    return unsafe.replace(
+    return unsafe.replaceAll(
         // eslint-disable-next-line no-control-regex
         /[\u0000-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u00FF]/g,
-        // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
+
         char => '&#' + ('000' + char.charCodeAt(0)).slice(-4) + ';'
     )
 }

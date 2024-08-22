@@ -6,6 +6,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	"github.com/sourcegraph/sourcegraph/dev/sg/internal/category"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/rfc"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -22,28 +23,37 @@ var rfcCommand = &cli.Command{
 	}()),
 	UsageText: `
 # List all Public RFCs
-sg rfc list
+sg rfc --public list
 
 # List all Private RFCs
-sg rfc --private list
+sg rfc list
+
+# List all Private RFCs that match one of some statuses
+sg rfc list -s approved -s implemented -s done
 
 # Search for a Public RFC
-sg rfc search "search terms"
+sg rfc --public search "search terms"
 
 # Search for a Private RFC
-sg rfc --private search "search terms"
+sg rfc search "search terms"
 
-# Open a specific Public RFC
+# Open a specific Private RFC
 sg rfc open 420
 
-# Open a specific private RFC
-sg rfc --private open 420
+# Open a specific Public RFC
+sg rfc --public open 420
+
+# Create a new public RFC
+sg rfc --public create "title"
+
+# Create a new private RFC. Possible types: [solution]
+sg rfc create --type <type> "title"
 `,
-	Category: CategoryCompany,
+	Category: category.Company,
 	Flags: []cli.Flag{
 		&cli.BoolFlag{
-			Name:     "private",
-			Usage:    "perform the RFC action on the private RFC drive",
+			Name:     "public",
+			Usage:    "perform the RFC action on the public RFC drive",
 			Required: false,
 			Value:    false,
 		},
@@ -53,27 +63,41 @@ sg rfc --private open 420
 			Name:      "list",
 			ArgsUsage: " ",
 			Usage:     "List Sourcegraph RFCs",
+			Flags: []cli.Flag{
+				&cli.StringSliceFlag{
+					Name:    "status",
+					Aliases: []string{"s"},
+					Usage:   "Only show RFCs with the given status(es)",
+				},
+			},
 			Action: func(c *cli.Context) error {
-				driveSpec := rfc.PublicDrive
-				if c.Bool("private") {
-					driveSpec = rfc.PrivateDrive
+				driveSpec := rfc.PrivateDrive
+				if c.Bool("public") {
+					driveSpec = rfc.PublicDrive
 				}
-				return rfc.List(c.Context, driveSpec, std.Out)
+				return rfc.List(c.Context, driveSpec, std.Out, c.StringSlice("status"))
 			},
 		},
 		{
 			Name:      "search",
 			ArgsUsage: "[query]",
 			Usage:     "Search Sourcegraph RFCs",
+			Flags: []cli.Flag{
+				&cli.StringSliceFlag{
+					Name:    "status",
+					Aliases: []string{"s"},
+					Usage:   "Only show RFCs with the given status(es)",
+				},
+			},
 			Action: func(c *cli.Context) error {
-				driveSpec := rfc.PublicDrive
-				if c.Bool("private") {
-					driveSpec = rfc.PrivateDrive
+				driveSpec := rfc.PrivateDrive
+				if c.Bool("public") {
+					driveSpec = rfc.PublicDrive
 				}
 				if c.Args().Len() == 0 {
 					return errors.New("no search query given")
 				}
-				return rfc.Search(c.Context, strings.Join(c.Args().Slice(), " "), driveSpec, std.Out)
+				return rfc.Search(c.Context, strings.Join(c.Args().Slice(), " "), driveSpec, std.Out, c.StringSlice("status"))
 			},
 		},
 		{
@@ -81,14 +105,52 @@ sg rfc --private open 420
 			ArgsUsage: "[number]",
 			Usage:     "Open a Sourcegraph RFC - find and list RFC numbers with 'sg rfc list' or 'sg rfc search'",
 			Action: func(c *cli.Context) error {
-				driveSpec := rfc.PublicDrive
-				if c.Bool("private") {
-					driveSpec = rfc.PrivateDrive
+				driveSpec := rfc.PrivateDrive
+				if c.Bool("public") {
+					driveSpec = rfc.PublicDrive
 				}
 				if c.Args().Len() == 0 {
 					return errors.New("no RFC given")
 				}
 				return rfc.Open(c.Context, c.Args().First(), driveSpec, std.Out)
+			},
+		},
+		{
+			Name:      "create",
+			ArgsUsage: "--type <type> [title...]",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "type",
+					Usage: "the type of the RFC to create (valid: solution)",
+					Value: rfc.ProblemSolutionDriveTemplate.Name,
+				},
+			},
+			Usage: "Create Sourcegraph RFCs",
+			Action: func(c *cli.Context) error {
+				driveSpec := rfc.PrivateDrive
+				if c.Bool("public") {
+					driveSpec = rfc.PublicDrive
+				}
+
+				rfcType := c.String("type")
+
+				var template rfc.Template
+				// Search for the rfcType and assign it to template
+				for _, tpl := range rfc.AllTemplates {
+					if tpl.Name == rfcType {
+						template = tpl
+						break
+					}
+				}
+				if template.Name == "" {
+					return errors.New(fmt.Sprintf("Unknown RFC type: %s", rfcType))
+				}
+
+				if c.Args().Len() == 0 {
+					return errors.New("no title given")
+				}
+				return rfc.Create(c.Context, template, strings.Join(c.Args().Slice(), " "),
+					driveSpec, std.Out)
 			},
 		},
 	},

@@ -1,24 +1,24 @@
-import { forwardRef, HTMLAttributes, useContext, useRef, useState } from 'react'
+import { forwardRef, type HTMLAttributes, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import classNames from 'classnames'
+import { lastValueFrom } from 'rxjs'
 import { useMergeRefs } from 'use-callback-ref'
 
 import { isDefined } from '@sourcegraph/common'
 import { useQuery } from '@sourcegraph/http-client'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { useSettingsCascade } from '@sourcegraph/shared/src/settings/settings'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { Link, useDebounce, useDeepMemo, Text } from '@sourcegraph/wildcard'
 
-import {
-    SeriesDisplayOptionsInput,
-    GetInsightViewResult,
-    GetInsightViewVariables,
-} from '../../../../../../graphql-operations'
+import type { GetInsightViewResult, GetInsightViewVariables } from '../../../../../../graphql-operations'
 import { useSeriesToggle } from '../../../../../../insights/utils/use-series-toggle'
+import { defaultPatternTypeFromSettings } from '../../../../../../util/settings'
 import {
-    BackendInsight,
-    BackendInsightData,
+    type BackendInsight,
     CodeInsightsBackendContext,
-    InsightFilters,
+    type InsightFilters,
+    isComputeInsight,
     useSaveInsightAsNewView,
 } from '../../../../core'
 import { GET_INSIGHT_VIEW_GQL } from '../../../../core/backend/gql-backend'
@@ -33,21 +33,20 @@ import { InsightContext } from '../InsightContext'
 import {
     BackendInsightErrorAlert,
     DrillDownFiltersPopover,
-    DrillDownInsightCreationFormValues,
+    type DrillDownInsightCreationFormValues,
     BackendInsightChart,
     InsightIncompleteAlert,
-    parseSeriesLimit,
 } from './components'
 
 import styles from './BackendInsight.module.scss'
 
-interface BackendInsightProps extends TelemetryProps, HTMLAttributes<HTMLElement> {
+interface BackendInsightProps extends TelemetryProps, TelemetryV2Props, HTMLAttributes<HTMLElement> {
     insight: BackendInsight
     resizing?: boolean
 }
 
 export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((props, ref) => {
-    const { telemetryService, insight, resizing, children, className, ...attributes } = props
+    const { telemetryService, telemetryRecorder, insight, resizing, children, className, ...attributes } = props
 
     const { currentDashboard } = useContext(InsightContext)
     const { updateInsight } = useContext(CodeInsightsBackendContext)
@@ -65,13 +64,12 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
     // Live valid filters from filter form. They are updated whenever the user is changing
     // filter value in filters fields.
     const [filters, setFilters] = useState<InsightFilters>(originalInsightFilters)
-    const [insightData, setInsightData] = useState<BackendInsightData | undefined>()
     const [zeroYAxisMin, setZeroYAxisMin] = useState(false)
     const [isFiltersOpen, setIsFiltersOpen] = useState(false)
 
     const debouncedFilters = useDebounce(useDeepMemo<InsightFilters>(filters), 500)
 
-    const { error, loading, stopPolling, startPolling } = useQuery<GetInsightViewResult, GetInsightViewVariables>(
+    const { data, error, loading, stopPolling, startPolling } = useQuery<GetInsightViewResult, GetInsightViewVariables>(
         GET_INSIGHT_VIEW_GQL,
         {
             skip: !wasEverVisible,
@@ -84,19 +82,30 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
                     searchContexts: [debouncedFilters.context],
                 },
                 seriesDisplayOptions: {
-                    limit: parseSeriesLimit(debouncedFilters.seriesDisplayOptions.limit),
+                    numSamples: debouncedFilters.seriesDisplayOptions.numSamples,
+                    limit: debouncedFilters.seriesDisplayOptions.limit,
                     sortOptions: debouncedFilters.seriesDisplayOptions.sortOptions,
                 },
             },
-            onCompleted: data => {
-                // This query requests a list of 1 insight view if there is an error and the insightView
-                // will be null and error is populated
-                const node = data.insightViews.nodes[0]
-
-                seriesToggleState.setSelectedSeriesIds([])
-                setInsightData(isDefined(node) ? createBackendInsightData({ ...insight, filters }, node) : undefined)
-            },
         }
+    )
+
+    const defaultPatternType = defaultPatternTypeFromSettings(useSettingsCascade())
+
+    const insightData = useMemo(() => {
+        if (!data) {
+            return
+        }
+
+        const node = data.insightViews.nodes[0]
+        return isDefined(node) ? createBackendInsightData({ ...insight, filters }, node, defaultPatternType) : undefined
+    }, [data, filters, insight, defaultPatternType])
+
+    // Reset item selection items on every data change
+    useLayoutEffect(
+        () => seriesToggleState.setSelectedSeriesIds([]),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [data, seriesToggleState.setSelectedSeriesIds]
     )
 
     const isFetchingHistoricalData = insightData?.isFetchingHistoricalData
@@ -114,15 +123,14 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
     }
 
     async function handleFilterSave(filters: InsightFilters): Promise<void> {
-        const seriesDisplayOptions: SeriesDisplayOptionsInput = {
-            limit: parseSeriesLimit(filters.seriesDisplayOptions.limit),
-            sortOptions: filters.seriesDisplayOptions.sortOptions,
-        }
-        const insightWithNewFilters = { ...insight, filters, seriesDisplayOptions }
+        const insightWithNewFilters = { ...insight, filters }
 
-        await updateInsight({ insightId: insight.id, nextInsightData: insightWithNewFilters }).toPromise()
+        await lastValueFrom(updateInsight({ insightId: insight.id, nextInsightData: insightWithNewFilters }), {
+            defaultValue: undefined,
+        })
 
         telemetryService.log('CodeInsightsSearchBasedFilterUpdating')
+        telemetryRecorder.recordEvent('insights.searchBasedfilter', 'update', { metadata: { location: 0 } })
         setOriginalInsightFilters(filters)
         setIsFiltersOpen(false)
     }
@@ -138,12 +146,14 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
         })
 
         telemetryService.log('CodeInsightsSearchBasedFilterInsightCreation')
+        telemetryRecorder.recordEvent('insights.createFromFilter.searchBased', 'submit', { metadata: { location: 0 } })
         setOriginalInsightFilters(filters)
         setIsFiltersOpen(false)
     }
 
     const { trackMouseLeave, trackMouseEnter, trackDatumClicks } = useCodeInsightViewPings({
         telemetryService,
+        telemetryRecorder,
         insightType: getTrackingTypeByInsightType(insight.type),
     })
 
@@ -192,6 +202,9 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
                             anchor={cardElementRef}
                             initialFiltersValue={filters}
                             originalFiltersValue={originalInsightFilters}
+                            // It doesn't make sense to have max series per point for compute insights
+                            // because there is always only one point per series
+                            isNumSamplesFilterAvailable={!isComputeInsight(insight)}
                             onFilterChange={setFilters}
                             onFilterSave={handleFilterSave}
                             onInsightCreate={handleInsightFilterCreation}
@@ -202,6 +215,7 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
                             currentDashboard={currentDashboard}
                             zeroYAxisMin={zeroYAxisMin}
                             onToggleZeroYAxisMin={() => setZeroYAxisMin(!zeroYAxisMin)}
+                            telemetryRecorder={telemetryRecorder}
                         />
                     </>
                 )}
@@ -230,3 +244,4 @@ export const BackendInsightView = forwardRef<HTMLElement, BackendInsightProps>((
         </InsightCard>
     )
 })
+BackendInsightView.displayName = 'BackendInsightView'

@@ -33,22 +33,6 @@
     {
       "Name": "update_codeintel_scip_symbols_schema_versions_insert",
       "Definition": "CREATE OR REPLACE FUNCTION public.update_codeintel_scip_symbols_schema_versions_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN\n    INSERT INTO codeintel_scip_symbols_schema_versions\n    SELECT\n        upload_id,\n        MIN(schema_version) as min_schema_version,\n        MAX(schema_version) as max_schema_version\n    FROM newtab\n    GROUP BY upload_id\n    ON CONFLICT (upload_id) DO UPDATE SET\n        -- Update with min(old_min, new_min) and max(old_max, new_max)\n        min_schema_version = LEAST(codeintel_scip_symbols_schema_versions.min_schema_version, EXCLUDED.min_schema_version),\n        max_schema_version = GREATEST(codeintel_scip_symbols_schema_versions.max_schema_version, EXCLUDED.max_schema_version);\n    RETURN NULL;\nEND $function$\n"
-    },
-    {
-      "Name": "update_lsif_data_definitions_schema_versions_insert",
-      "Definition": "CREATE OR REPLACE FUNCTION public.update_lsif_data_definitions_schema_versions_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN\n    INSERT INTO\n        lsif_data_definitions_schema_versions\n    SELECT\n        dump_id,\n        MIN(schema_version) as min_schema_version,\n        MAX(schema_version) as max_schema_version\n    FROM\n        newtab\n    GROUP BY\n        dump_id\n    ON CONFLICT (dump_id) DO UPDATE SET\n        -- Update with min(old_min, new_min) and max(old_max, new_max)\n        min_schema_version = LEAST(lsif_data_definitions_schema_versions.min_schema_version, EXCLUDED.min_schema_version),\n        max_schema_version = GREATEST(lsif_data_definitions_schema_versions.max_schema_version, EXCLUDED.max_schema_version);\n\n    RETURN NULL;\nEND $function$\n"
-    },
-    {
-      "Name": "update_lsif_data_documents_schema_versions_insert",
-      "Definition": "CREATE OR REPLACE FUNCTION public.update_lsif_data_documents_schema_versions_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN\n    INSERT INTO\n        lsif_data_documents_schema_versions\n    SELECT\n        dump_id,\n        MIN(schema_version) as min_schema_version,\n        MAX(schema_version) as max_schema_version\n    FROM\n        newtab\n    GROUP BY\n        dump_id\n    ON CONFLICT (dump_id) DO UPDATE SET\n        -- Update with min(old_min, new_min) and max(old_max, new_max)\n        min_schema_version = LEAST(lsif_data_documents_schema_versions.min_schema_version, EXCLUDED.min_schema_version),\n        max_schema_version = GREATEST(lsif_data_documents_schema_versions.max_schema_version, EXCLUDED.max_schema_version);\n\n    RETURN NULL;\nEND $function$\n"
-    },
-    {
-      "Name": "update_lsif_data_implementations_schema_versions_insert",
-      "Definition": "CREATE OR REPLACE FUNCTION public.update_lsif_data_implementations_schema_versions_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN\n    INSERT INTO\n        lsif_data_implementations_schema_versions\n    SELECT\n        dump_id,\n        MIN(schema_version) as min_schema_version,\n        MAX(schema_version) as max_schema_version\n    FROM\n        newtab\n    GROUP BY\n        dump_id\n    ON CONFLICT (dump_id) DO UPDATE SET\n        -- Update with min(old_min, new_min) and max(old_max, new_max)\n        min_schema_version = LEAST   (lsif_data_implementations_schema_versions.min_schema_version, EXCLUDED.min_schema_version),\n        max_schema_version = GREATEST(lsif_data_implementations_schema_versions.max_schema_version, EXCLUDED.max_schema_version);\n\n    RETURN NULL;\nEND $function$\n"
-    },
-    {
-      "Name": "update_lsif_data_references_schema_versions_insert",
-      "Definition": "CREATE OR REPLACE FUNCTION public.update_lsif_data_references_schema_versions_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$ BEGIN\n    INSERT INTO\n        lsif_data_references_schema_versions\n    SELECT\n        dump_id,\n        MIN(schema_version) as min_schema_version,\n        MAX(schema_version) as max_schema_version\n    FROM\n        newtab\n    GROUP BY\n        dump_id\n    ON CONFLICT (dump_id) DO UPDATE SET\n        -- Update with min(old_min, new_min) and max(old_max, new_max)\n        min_schema_version = LEAST(lsif_data_references_schema_versions.min_schema_version, EXCLUDED.min_schema_version),\n        max_schema_version = GREATEST(lsif_data_references_schema_versions.max_schema_version, EXCLUDED.max_schema_version);\n\n    RETURN NULL;\nEND $function$\n"
     }
   ],
   "Sequences": [
@@ -155,6 +139,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": ""
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 3,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         }
       ],
       "Indexes": [
@@ -179,7 +176,15 @@
           "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "codeintel_last_reconcile_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -224,6 +229,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": "An auto-generated identifier. This column is used as a foreign key target to reduce occurrences of the full document path value."
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 5,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         },
         {
           "Name": "upload_id",
@@ -278,6 +296,13 @@
           "RefTableName": "codeintel_scip_documents",
           "IsDeferrable": false,
           "ConstraintDefinition": "FOREIGN KEY (document_id) REFERENCES codeintel_scip_documents(id)"
+        },
+        {
+          "Name": "codeintel_scip_document_lookup_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
         }
       ],
       "Triggers": [
@@ -322,6 +347,19 @@
           "Comment": "A lower-bound on the `schema_version` values of the records in the table [`codeintel_scip_document_lookup`](#table-publiccodeintel_scip_document_lookup) where the `upload_id` column matches the associated SCIP index."
         },
         {
+          "Name": "tenant_id",
+          "Index": 4,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
+        },
+        {
           "Name": "upload_id",
           "Index": 1,
           "TypeName": "integer",
@@ -347,7 +385,15 @@
           "ConstraintDefinition": "PRIMARY KEY (upload_id)"
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "codeintel_scip_document_lookup_schema_versions_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -405,6 +451,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": "The schema version of this row - used to determine presence and encoding of (future) denormalized data."
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 6,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         }
       ],
       "Indexes": [
@@ -429,7 +488,15 @@
           "ConstraintDefinition": "PRIMARY KEY (id)"
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "codeintel_scip_documents_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -474,6 +541,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": "The time that the log entry was inserted."
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 4,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         }
       ],
       "Indexes": [
@@ -488,76 +568,25 @@
           "ConstraintDefinition": "PRIMARY KEY (id)"
         },
         {
-          "Name": "codeintel_scip_documents_dereference_logs_last_removal_time_doc",
+          "Name": "codeintel_scip_documents_dereference_logs_last_removal_time_des",
           "IsPrimaryKey": false,
           "IsUnique": false,
           "IsExclusion": false,
           "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX codeintel_scip_documents_dereference_logs_last_removal_time_doc ON codeintel_scip_documents_dereference_logs USING btree (last_removal_time, document_id)",
+          "IndexDefinition": "CREATE INDEX codeintel_scip_documents_dereference_logs_last_removal_time_des ON codeintel_scip_documents_dereference_logs USING btree (last_removal_time DESC, document_id)",
           "ConstraintType": "",
           "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "codeintel_scip_documents_schema_versions",
-      "Comment": "Tracks the range of `schema_versions` values associated with each document referenced from the [`codeintel_scip_document_lookup`](#table-publiccodeintel_scip_document_lookup) table.",
-      "Columns": [
+      "Constraints": [
         {
-          "Name": "max_schema_version",
-          "Index": 3,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "An upper-bound on the `schema_version` values of the document records referenced from the table [`codeintel_scip_document_lookup`](#table-publiccodeintel_scip_document_lookup) where the `upload_id` column matches the associated SCIP index."
-        },
-        {
-          "Name": "min_schema_version",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A lower-bound on the `schema_version` values of the document records referenced from the table [`codeintel_scip_document_lookup`](#table-publiccodeintel_scip_document_lookup) where the `upload_id` column matches the associated SCIP index."
-        },
-        {
-          "Name": "upload_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated SCIP index."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "codeintel_scip_documents_schema_versions_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
+          "Name": "codeintel_scip_documents_dereference_logs_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
           "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX codeintel_scip_documents_schema_versions_pkey ON codeintel_scip_documents_schema_versions USING btree (upload_id)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (upload_id)"
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
         }
       ],
-      "Constraints": null,
       "Triggers": []
     },
     {
@@ -589,6 +618,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": "The version of the SCIP protocol used to encode this index."
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 8,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         },
         {
           "Name": "text_document_encoding",
@@ -666,9 +708,27 @@
           "IndexDefinition": "CREATE UNIQUE INDEX codeintel_scip_metadata_pkey ON codeintel_scip_metadata USING btree (id)",
           "ConstraintType": "p",
           "ConstraintDefinition": "PRIMARY KEY (id)"
+        },
+        {
+          "Name": "codeintel_scip_metadata_upload_id",
+          "IsPrimaryKey": false,
+          "IsUnique": false,
+          "IsExclusion": false,
+          "IsDeferrable": false,
+          "IndexDefinition": "CREATE INDEX codeintel_scip_metadata_upload_id ON codeintel_scip_metadata USING btree (upload_id)",
+          "ConstraintType": "",
+          "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "codeintel_scip_metadata_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -713,6 +773,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": "The identifier of the segment that forms the prefix of this symbol, if any."
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 5,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         },
         {
           "Name": "upload_id",
@@ -760,7 +833,15 @@
           "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "codeintel_scip_symbol_names_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -846,6 +927,19 @@
           "Comment": "The identifier of the segment that terminates the name of this symbol. See the table [`codeintel_scip_symbol_names`](#table-publiccodeintel_scip_symbol_names) on how to reconstruct the full symbol name."
         },
         {
+          "Name": "tenant_id",
+          "Index": 10,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
+        },
+        {
           "Name": "type_definition_ranges",
           "Index": 8,
           "TypeName": "bytea",
@@ -901,6 +995,13 @@
           "RefTableName": "codeintel_scip_document_lookup",
           "IsDeferrable": false,
           "ConstraintDefinition": "FOREIGN KEY (document_lookup_id) REFERENCES codeintel_scip_document_lookup(id) ON DELETE CASCADE"
+        },
+        {
+          "Name": "codeintel_scip_symbols_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
         }
       ],
       "Triggers": [
@@ -941,6 +1042,19 @@
           "Comment": "A lower-bound on the `schema_version` values of the records in the table [`codeintel_scip_symbols`](#table-publiccodeintel_scip_symbols) where the `upload_id` column matches the associated SCIP index."
         },
         {
+          "Name": "tenant_id",
+          "Index": 4,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
+        },
+        {
           "Name": "upload_id",
           "Index": 1,
           "TypeName": "integer",
@@ -966,892 +1080,15 @@
           "ConstraintDefinition": "PRIMARY KEY (upload_id)"
         }
       ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "lsif_data_definitions",
-      "Comment": "Associates (document, range) pairs with the import monikers attached to the range.",
-      "Columns": [
+      "Constraints": [
         {
-          "Name": "data",
-          "Index": 4,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to an array of [LocationData](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L106:6) types."
-        },
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table (state=completed)."
-        },
-        {
-          "Name": "identifier",
-          "Index": 3,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The moniker identifier."
-        },
-        {
-          "Name": "num_locations",
-          "Index": 6,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The number of locations stored in the data field."
-        },
-        {
-          "Name": "schema_version",
-          "Index": 5,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The schema version of this row - used to determine presence and encoding of data."
-        },
-        {
-          "Name": "scheme",
-          "Index": 2,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The moniker scheme."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_definitions_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
+          "Name": "codeintel_scip_symbols_schema_versions_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
           "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_definitions_pkey ON lsif_data_definitions USING btree (dump_id, scheme, identifier)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id, scheme, identifier)"
-        },
-        {
-          "Name": "lsif_data_definitions_dump_id_schema_version",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_definitions_dump_id_schema_version ON lsif_data_definitions USING btree (dump_id, schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
         }
       ],
-      "Constraints": null,
-      "Triggers": [
-        {
-          "Name": "lsif_data_definitions_schema_versions_insert",
-          "Definition": "CREATE TRIGGER lsif_data_definitions_schema_versions_insert AFTER INSERT ON lsif_data_definitions REFERENCING NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION update_lsif_data_definitions_schema_versions_insert()"
-        }
-      ]
-    },
-    {
-      "Name": "lsif_data_definitions_schema_versions",
-      "Comment": "Tracks the range of schema_versions for each upload in the lsif_data_definitions table.",
-      "Columns": [
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table."
-        },
-        {
-          "Name": "max_schema_version",
-          "Index": 3,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "An upper-bound on the `lsif_data_definitions.schema_version` where `lsif_data_definitions.dump_id = dump_id`."
-        },
-        {
-          "Name": "min_schema_version",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A lower-bound on the `lsif_data_definitions.schema_version` where `lsif_data_definitions.dump_id = dump_id`."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_definitions_schema_versions_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_definitions_schema_versions_pkey ON lsif_data_definitions_schema_versions USING btree (dump_id)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id)"
-        },
-        {
-          "Name": "lsif_data_definitions_schema_versions_dump_id_schema_version_bo",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_definitions_schema_versions_dump_id_schema_version_bo ON lsif_data_definitions_schema_versions USING btree (dump_id, min_schema_version, max_schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "lsif_data_documents",
-      "Comment": "Stores reference, hover text, moniker, and diagnostic data about a particular text document witin a dump.",
-      "Columns": [
-        {
-          "Name": "data",
-          "Index": 3,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [DocumentData](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L13:6) type. This field is being migrated across ranges, hovers, monikers, packages, and diagnostics columns and will be removed in a future release of Sourcegraph."
-        },
-        {
-          "Name": "diagnostics",
-          "Index": 10,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [Diagnostics](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L18:2) field of the DocumentDatatype."
-        },
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table (state=completed)."
-        },
-        {
-          "Name": "hovers",
-          "Index": 7,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [HoversResults](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L15:2) field of the DocumentDatatype."
-        },
-        {
-          "Name": "monikers",
-          "Index": 8,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [Monikers](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L16:2) field of the DocumentDatatype."
-        },
-        {
-          "Name": "num_diagnostics",
-          "Index": 5,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The number of diagnostics stored in the data field."
-        },
-        {
-          "Name": "packages",
-          "Index": 9,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [PackageInformation](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L17:2) field of the DocumentDatatype."
-        },
-        {
-          "Name": "path",
-          "Index": 2,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The path of the text document relative to the associated dump root."
-        },
-        {
-          "Name": "ranges",
-          "Index": 6,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [Ranges](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L14:2) field of the DocumentDatatype."
-        },
-        {
-          "Name": "schema_version",
-          "Index": 4,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The schema version of this row - used to determine presence and encoding of data."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_documents_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_documents_pkey ON lsif_data_documents USING btree (dump_id, path)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id, path)"
-        },
-        {
-          "Name": "lsif_data_documents_dump_id_schema_version",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_documents_dump_id_schema_version ON lsif_data_documents USING btree (dump_id, schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": [
-        {
-          "Name": "lsif_data_documents_schema_versions_insert",
-          "Definition": "CREATE TRIGGER lsif_data_documents_schema_versions_insert AFTER INSERT ON lsif_data_documents REFERENCING NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION update_lsif_data_documents_schema_versions_insert()"
-        }
-      ]
-    },
-    {
-      "Name": "lsif_data_documents_schema_versions",
-      "Comment": "Tracks the range of schema_versions for each upload in the lsif_data_documents table.",
-      "Columns": [
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table."
-        },
-        {
-          "Name": "max_schema_version",
-          "Index": 3,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "An upper-bound on the `lsif_data_documents.schema_version` where `lsif_data_documents.dump_id = dump_id`."
-        },
-        {
-          "Name": "min_schema_version",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A lower-bound on the `lsif_data_documents.schema_version` where `lsif_data_documents.dump_id = dump_id`."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_documents_schema_versions_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_documents_schema_versions_pkey ON lsif_data_documents_schema_versions USING btree (dump_id)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id)"
-        },
-        {
-          "Name": "lsif_data_documents_schema_versions_dump_id_schema_version_boun",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_documents_schema_versions_dump_id_schema_version_boun ON lsif_data_documents_schema_versions USING btree (dump_id, min_schema_version, max_schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "lsif_data_implementations",
-      "Comment": "Associates (document, range) pairs with the implementation monikers attached to the range.",
-      "Columns": [
-        {
-          "Name": "data",
-          "Index": 4,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to an array of [LocationData](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L106:6) types."
-        },
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table (state=completed)."
-        },
-        {
-          "Name": "identifier",
-          "Index": 3,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The moniker identifier."
-        },
-        {
-          "Name": "num_locations",
-          "Index": 6,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The number of locations stored in the data field."
-        },
-        {
-          "Name": "schema_version",
-          "Index": 5,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The schema version of this row - used to determine presence and encoding of data."
-        },
-        {
-          "Name": "scheme",
-          "Index": 2,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The moniker scheme."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_implementations_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_implementations_pkey ON lsif_data_implementations USING btree (dump_id, scheme, identifier)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id, scheme, identifier)"
-        },
-        {
-          "Name": "lsif_data_implementations_dump_id_schema_version",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_implementations_dump_id_schema_version ON lsif_data_implementations USING btree (dump_id, schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": [
-        {
-          "Name": "lsif_data_implementations_schema_versions_insert",
-          "Definition": "CREATE TRIGGER lsif_data_implementations_schema_versions_insert AFTER INSERT ON lsif_data_implementations REFERENCING NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION update_lsif_data_implementations_schema_versions_insert()"
-        }
-      ]
-    },
-    {
-      "Name": "lsif_data_implementations_schema_versions",
-      "Comment": "Tracks the range of schema_versions for each upload in the lsif_data_implementations table.",
-      "Columns": [
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table."
-        },
-        {
-          "Name": "max_schema_version",
-          "Index": 3,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "An upper-bound on the `lsif_data_implementations.schema_version` where `lsif_data_implementations.dump_id = dump_id`."
-        },
-        {
-          "Name": "min_schema_version",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A lower-bound on the `lsif_data_implementations.schema_version` where `lsif_data_implementations.dump_id = dump_id`."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_implementations_schema_versions_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_implementations_schema_versions_pkey ON lsif_data_implementations_schema_versions USING btree (dump_id)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id)"
-        },
-        {
-          "Name": "lsif_data_implementations_schema_versions_dump_id_schema_versio",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_implementations_schema_versions_dump_id_schema_versio ON lsif_data_implementations_schema_versions USING btree (dump_id, min_schema_version, max_schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "lsif_data_metadata",
-      "Comment": "Stores the number of result chunks associated with a dump.",
-      "Columns": [
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table (state=completed)."
-        },
-        {
-          "Name": "num_result_chunks",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A bound of populated indexes in the lsif_data_result_chunks table for the associated dump. This value is used to hash identifiers into the result chunk index to which they belong."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_metadata_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_metadata_pkey ON lsif_data_metadata USING btree (dump_id)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id)"
-        }
-      ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "lsif_data_references",
-      "Comment": "Associates (document, range) pairs with the export monikers attached to the range.",
-      "Columns": [
-        {
-          "Name": "data",
-          "Index": 4,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to an array of [LocationData](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L106:6) types."
-        },
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table (state=completed)."
-        },
-        {
-          "Name": "identifier",
-          "Index": 3,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The moniker identifier."
-        },
-        {
-          "Name": "num_locations",
-          "Index": 6,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The number of locations stored in the data field."
-        },
-        {
-          "Name": "schema_version",
-          "Index": 5,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The schema version of this row - used to determine presence and encoding of data."
-        },
-        {
-          "Name": "scheme",
-          "Index": 2,
-          "TypeName": "text",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The moniker scheme."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_references_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_references_pkey ON lsif_data_references USING btree (dump_id, scheme, identifier)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id, scheme, identifier)"
-        },
-        {
-          "Name": "lsif_data_references_dump_id_schema_version",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_references_dump_id_schema_version ON lsif_data_references USING btree (dump_id, schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": [
-        {
-          "Name": "lsif_data_references_schema_versions_insert",
-          "Definition": "CREATE TRIGGER lsif_data_references_schema_versions_insert AFTER INSERT ON lsif_data_references REFERENCING NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION update_lsif_data_references_schema_versions_insert()"
-        }
-      ]
-    },
-    {
-      "Name": "lsif_data_references_schema_versions",
-      "Comment": "Tracks the range of schema_versions for each upload in the lsif_data_references table.",
-      "Columns": [
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table."
-        },
-        {
-          "Name": "max_schema_version",
-          "Index": 3,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "An upper-bound on the `lsif_data_references.schema_version` where `lsif_data_references.dump_id = dump_id`."
-        },
-        {
-          "Name": "min_schema_version",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A lower-bound on the `lsif_data_references.schema_version` where `lsif_data_references.dump_id = dump_id`."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_references_schema_versions_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_references_schema_versions_pkey ON lsif_data_references_schema_versions USING btree (dump_id)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id)"
-        },
-        {
-          "Name": "lsif_data_references_schema_versions_dump_id_schema_version_bou",
-          "IsPrimaryKey": false,
-          "IsUnique": false,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE INDEX lsif_data_references_schema_versions_dump_id_schema_version_bou ON lsif_data_references_schema_versions USING btree (dump_id, min_schema_version, max_schema_version)",
-          "ConstraintType": "",
-          "ConstraintDefinition": ""
-        }
-      ],
-      "Constraints": null,
-      "Triggers": []
-    },
-    {
-      "Name": "lsif_data_result_chunks",
-      "Comment": "Associates result set identifiers with the (document path, range identifier) pairs that compose the set.",
-      "Columns": [
-        {
-          "Name": "data",
-          "Index": 3,
-          "TypeName": "bytea",
-          "IsNullable": true,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "A gob-encoded payload conforming to the [ResultChunkData](https://sourcegraph.com/github.com/sourcegraph/sourcegraph@3.26/-/blob/enterprise/lib/codeintel/semantic/types.go#L76:6) type."
-        },
-        {
-          "Name": "dump_id",
-          "Index": 1,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The identifier of the associated dump in the lsif_uploads table (state=completed)."
-        },
-        {
-          "Name": "idx",
-          "Index": 2,
-          "TypeName": "integer",
-          "IsNullable": false,
-          "Default": "",
-          "CharacterMaximumLength": 0,
-          "IsIdentity": false,
-          "IdentityGeneration": "",
-          "IsGenerated": "NEVER",
-          "GenerationExpression": "",
-          "Comment": "The unique result chunk index within the associated dump. Every result set identifier present should hash to this index (modulo lsif_data_metadata.num_result_chunks)."
-        }
-      ],
-      "Indexes": [
-        {
-          "Name": "lsif_data_result_chunks_pkey",
-          "IsPrimaryKey": true,
-          "IsUnique": true,
-          "IsExclusion": false,
-          "IsDeferrable": false,
-          "IndexDefinition": "CREATE UNIQUE INDEX lsif_data_result_chunks_pkey ON lsif_data_result_chunks USING btree (dump_id, idx)",
-          "ConstraintType": "p",
-          "ConstraintDefinition": "PRIMARY KEY (dump_id, idx)"
-        }
-      ],
-      "Constraints": null,
       "Triggers": []
     },
     {
@@ -2072,6 +1309,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": ""
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 6,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         }
       ],
       "Indexes": [
@@ -2106,7 +1356,15 @@
           "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "rockskip_ancestry_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -2144,6 +1402,19 @@
           "Index": 2,
           "TypeName": "text",
           "IsNullable": false,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 4,
+          "TypeName": "integer",
+          "IsNullable": true,
           "Default": "",
           "CharacterMaximumLength": 0,
           "IsIdentity": false,
@@ -2195,7 +1466,15 @@
           "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "rockskip_repos_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
       "Triggers": []
     },
     {
@@ -2279,6 +1558,19 @@
           "IsGenerated": "NEVER",
           "GenerationExpression": "",
           "Comment": ""
+        },
+        {
+          "Name": "tenant_id",
+          "Index": 7,
+          "TypeName": "integer",
+          "IsNullable": true,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
         }
       ],
       "Indexes": [
@@ -2313,7 +1605,112 @@
           "ConstraintDefinition": ""
         }
       ],
-      "Constraints": null,
+      "Constraints": [
+        {
+          "Name": "rockskip_symbols_tenant_id_fkey",
+          "ConstraintType": "f",
+          "RefTableName": "tenants",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON UPDATE CASCADE ON DELETE CASCADE"
+        }
+      ],
+      "Triggers": []
+    },
+    {
+      "Name": "tenants",
+      "Comment": "The table that holds all tenants known to the instance. In enterprise instances, this table will only contain the \"default\" tenant.",
+      "Columns": [
+        {
+          "Name": "created_at",
+          "Index": 3,
+          "TypeName": "timestamp with time zone",
+          "IsNullable": false,
+          "Default": "now()",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
+        },
+        {
+          "Name": "id",
+          "Index": 1,
+          "TypeName": "bigint",
+          "IsNullable": false,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": "The ID of the tenant. To keep tenants globally addressable, and be able to move them aronud instances more easily, the ID is NOT a serial and has to be specified explicitly. The creator of the tenant is responsible for choosing a unique ID, if it cares."
+        },
+        {
+          "Name": "name",
+          "Index": 2,
+          "TypeName": "text",
+          "IsNullable": false,
+          "Default": "",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": "The name of the tenant. This may be displayed to the user and must be unique."
+        },
+        {
+          "Name": "updated_at",
+          "Index": 4,
+          "TypeName": "timestamp with time zone",
+          "IsNullable": false,
+          "Default": "now()",
+          "CharacterMaximumLength": 0,
+          "IsIdentity": false,
+          "IdentityGeneration": "",
+          "IsGenerated": "NEVER",
+          "GenerationExpression": "",
+          "Comment": ""
+        }
+      ],
+      "Indexes": [
+        {
+          "Name": "tenants_name_key",
+          "IsPrimaryKey": false,
+          "IsUnique": true,
+          "IsExclusion": false,
+          "IsDeferrable": false,
+          "IndexDefinition": "CREATE UNIQUE INDEX tenants_name_key ON tenants USING btree (name)",
+          "ConstraintType": "u",
+          "ConstraintDefinition": "UNIQUE (name)"
+        },
+        {
+          "Name": "tenants_pkey",
+          "IsPrimaryKey": true,
+          "IsUnique": true,
+          "IsExclusion": false,
+          "IsDeferrable": false,
+          "IndexDefinition": "CREATE UNIQUE INDEX tenants_pkey ON tenants USING btree (id)",
+          "ConstraintType": "p",
+          "ConstraintDefinition": "PRIMARY KEY (id)"
+        }
+      ],
+      "Constraints": [
+        {
+          "Name": "tenant_name_length",
+          "ConstraintType": "c",
+          "RefTableName": "",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "CHECK (char_length(name) \u003c= 32 AND char_length(name) \u003e= 3)"
+        },
+        {
+          "Name": "tenant_name_valid_chars",
+          "ConstraintType": "c",
+          "RefTableName": "",
+          "IsDeferrable": false,
+          "ConstraintDefinition": "CHECK (name ~ '^[a-z](?:[a-z0-9\\_-])*[a-z0-9]$'::text)"
+        }
+      ],
       "Triggers": []
     }
   ],

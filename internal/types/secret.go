@@ -57,6 +57,8 @@ func (e *ExternalService) RedactedConfig(ctx context.Context) (string, error) {
 	case *schema.GitLabConnection:
 		es.redactString(c.Token, "token")
 		es.redactString(c.TokenOauthRefresh, "token.oauth.refresh")
+	case *schema.AzureDevOpsConnection:
+		es.redactString(c.Token, "token")
 	case *schema.GerritConnection:
 		es.redactString(c.Password, "password")
 	case *schema.BitbucketServerConnection:
@@ -64,6 +66,7 @@ func (e *ExternalService) RedactedConfig(ctx context.Context) (string, error) {
 		es.redactString(c.Token, "token")
 	case *schema.BitbucketCloudConnection:
 		es.redactString(c.AppPassword, "appPassword")
+		es.redactString(c.AccessToken, "accessToken")
 	case *schema.AWSCodeCommitConnection:
 		es.redactString(c.SecretAccessKey, "secretAccessKey")
 		es.redactString(c.GitCredentials.Password, "gitCredentials", "password")
@@ -92,9 +95,7 @@ func (e *ExternalService) RedactedConfig(ctx context.Context) (string, error) {
 	case *schema.RubyPackagesConnection:
 		es.redactString(c.Repository, "repository")
 	case *schema.JVMPackagesConnection:
-		if c.Maven != nil {
-			es.redactString(c.Maven.Credentials, "maven", "credentials")
-		}
+		es.redactString(c.Maven.Credentials, "maven", "credentials")
 	case *schema.PagureConnection:
 		es.redactString(c.Token, "token")
 	case *schema.NpmPackagesConnection:
@@ -182,10 +183,21 @@ func (e *ExternalService) UnredactConfig(ctx context.Context, old *ExternalServi
 		es.unredactString(c.Token, o.Token, "token")
 	case *schema.BitbucketCloudConnection:
 		o := oldCfg.(*schema.BitbucketCloudConnection)
-		es.unredactString(c.AppPassword, o.AppPassword, "appPassword")
 		if c.Url != o.Url {
-			return errCodeHostIdentityChanged{"apiUrl", "appPassword"}
+			var redactedProperty string
+			if c.AppPassword == RedactedSecret {
+				redactedProperty = "appPassword"
+			}
+			if c.AccessToken == RedactedSecret {
+				redactedProperty = "accessToken"
+			}
+
+			if redactedProperty != "" {
+				return errCodeHostIdentityChanged{"apiUrl", redactedProperty}
+			}
 		}
+		es.unredactString(c.AppPassword, o.AppPassword, "appPassword")
+		es.unredactString(c.AccessToken, o.AccessToken, "accessToken")
 	case *schema.AWSCodeCommitConnection:
 		o := oldCfg.(*schema.AWSCodeCommitConnection)
 		es.unredactString(c.SecretAccessKey, o.SecretAccessKey, "secretAccessKey")
@@ -202,6 +214,12 @@ func (e *ExternalService) UnredactConfig(ctx context.Context, old *ExternalServi
 			return errCodeHostIdentityChanged{"p4.port", "p4.passwd"}
 		}
 		es.unredactString(c.P4Passwd, o.P4Passwd, "p4.passwd")
+	case *schema.GerritConnection:
+		o := oldCfg.(*schema.GerritConnection)
+		es.unredactString(c.Password, o.Password, "password")
+		if c.Url != o.Url {
+			return errCodeHostIdentityChanged{"url", "password"}
+		}
 	case *schema.GitoliteConnection:
 		// Nothing to redact
 	case *schema.GoModulesConnection:
@@ -221,32 +239,35 @@ func (e *ExternalService) UnredactConfig(ctx context.Context, old *ExternalServi
 		es.unredactString(c.Repository, o.Repository, "repository")
 	case *schema.JVMPackagesConnection:
 		o := oldCfg.(*schema.JVMPackagesConnection)
-		if c.Maven != nil && o.Maven != nil {
-			// credentials didn't change check if repositories did
-			if c.Maven.Credentials == RedactedSecret {
-				oldRepos := o.Maven.Repositories
-				sort.Strings(oldRepos)
+		// credentials didn't change check if repositories did
+		if c.Maven.Credentials == RedactedSecret {
+			oldRepos := o.Maven.Repositories
+			sort.Strings(oldRepos)
 
-				newRepos := c.Maven.Repositories
-				sort.Strings(newRepos)
+			newRepos := c.Maven.Repositories
+			sort.Strings(newRepos)
 
-				// if we only remove a known repo, it's fine
-				if len(newRepos) < len(oldRepos) {
-					for _, r := range newRepos {
-						// we have a new repo in the list, return error
-						if !slices.Contains(oldRepos, r) {
-							return errCodeHostIdentityChanged{"repositories", "credentials"}
-						}
+			// if we only remove a known repo, it's fine
+			if len(newRepos) < len(oldRepos) {
+				for _, r := range newRepos {
+					// we have a new repo in the list, return error
+					if !slices.Contains(oldRepos, r) {
+						return errCodeHostIdentityChanged{"repositories", "credentials"}
 					}
-				} else if !slices.Equal(oldRepos, newRepos) {
-					return errCodeHostIdentityChanged{"repositories", "credentials"}
 				}
+			} else if !slices.Equal(oldRepos, newRepos) {
+				return errCodeHostIdentityChanged{"repositories", "credentials"}
 			}
-
 		}
 		es.unredactString(c.Maven.Credentials, o.Maven.Credentials, "maven", "credentials")
 	case *schema.PagureConnection:
 		o := oldCfg.(*schema.PagureConnection)
+		if c.Token == RedactedSecret && c.Url != o.Url {
+			return errCodeHostIdentityChanged{"url", "token"}
+		}
+		es.unredactString(c.Token, o.Token, "token")
+	case *schema.AzureDevOpsConnection:
+		o := oldCfg.(*schema.AzureDevOpsConnection)
 		if c.Token == RedactedSecret && c.Url != o.Url {
 			return errCodeHostIdentityChanged{"url", "token"}
 		}
@@ -383,6 +404,7 @@ func (es *edits) unredactURLs(new, old []string) (err error) {
 
 	return nil
 }
+
 func (es *edits) unredactURL(new, old string, path ...any) error {
 	if new == "" || old == "" {
 		return nil

@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from '@storybook/addons'
-import { Meta, Story, DecoratorFn } from '@storybook/react'
+import type { Meta, StoryFn, Decorator } from '@storybook/react'
 import { subDays } from 'date-fns'
 import { of } from 'rxjs'
 
@@ -9,12 +9,12 @@ import {
     ChangesetReviewState,
     ChangesetSpecType,
     ChangesetState,
-    BatchChangeFields,
+    type BatchChangeFields,
     BatchSpecState,
     BatchChangeState,
     BatchSpecSource,
 } from '../../../graphql-operations'
-import {
+import type {
     queryChangesets as _queryChangesets,
     queryExternalChangesetWithFileDiffs,
     fetchBatchChangeByNamespace,
@@ -22,17 +22,12 @@ import {
 
 import { BatchChangeClosePage } from './BatchChangeClosePage'
 
-const decorator: DecoratorFn = story => <div className="p-3 container">{story()}</div>
+const decorator: Decorator = story => <div className="p-3 container">{story()}</div>
 
 const config: Meta = {
     title: 'web/batches/close/BatchChangeClosePage',
     decorators: [decorator],
-    parameters: {
-        chromatic: {
-            viewports: [320, 576, 978, 1440],
-            disableSnapshot: false,
-        },
-    },
+    parameters: {},
 }
 
 export default config
@@ -48,9 +43,15 @@ const batchChangeDefaults: BatchChangeFields = {
         merged: 2,
         draft: 1,
         open: 2,
-        total: 10,
+        total: 29,
         archived: 18,
         unpublished: 4,
+        isCompleted: false,
+        percentComplete: 30,
+        failed: 0,
+        retrying: 0,
+        scheduled: 0,
+        processing: 0,
     },
     createdAt: subDays(now, 5).toISOString(),
     creator: {
@@ -202,6 +203,7 @@ const queryChangesets: typeof _queryChangesets = () =>
                     },
                     forkTarget: null,
                 },
+                commitVerification: null,
             },
             {
                 __typename: 'ExternalChangeset',
@@ -240,6 +242,7 @@ const queryChangesets: typeof _queryChangesets = () =>
                     },
                     forkTarget: null,
                 },
+                commitVerification: null,
             },
         ],
     })
@@ -259,7 +262,7 @@ const queryEmptyExternalChangesetWithFileDiffs: typeof queryExternalChangesetWit
         },
     })
 
-export const Overview: Story = args => {
+export const Overview: StoryFn = args => {
     const viewerCanAdminister = args.viewerCanAdminister
     const batchChange: BatchChangeFields = useMemo(
         () => ({
@@ -270,14 +273,13 @@ export const Overview: Story = args => {
     )
     const fetchBatchChange: typeof fetchBatchChangeByNamespace = useCallback(() => of(batchChange), [batchChange])
     return (
-        <WebStory>
+        <WebStory path="/:batchChangeName" initialEntries={['/c123']}>
             {props => (
                 <BatchChangeClosePage
                     {...props}
                     queryChangesets={queryChangesets}
                     queryExternalChangesetWithFileDiffs={queryEmptyExternalChangesetWithFileDiffs}
                     namespaceID="n123"
-                    batchChangeName="c123"
                     fetchBatchChangeByNamespace={fetchBatchChange}
                 />
             )}
@@ -287,11 +289,13 @@ export const Overview: Story = args => {
 Overview.argTypes = {
     viewerCanAdminister: {
         control: { type: 'boolean' },
-        defaultValue: true,
     },
 }
+Overview.args = {
+    viewerCanAdminister: true,
+}
 
-export const NoOpenChangesets: Story = () => {
+export const NoOpenChangesets: StoryFn = () => {
     const batchChange: BatchChangeFields = useMemo(() => batchChangeDefaults, [])
     const fetchBatchChange: typeof fetchBatchChangeByNamespace = useCallback(() => of(batchChange), [batchChange])
     const queryEmptyChangesets = useCallback(
@@ -308,14 +312,13 @@ export const NoOpenChangesets: Story = () => {
         []
     )
     return (
-        <WebStory>
+        <WebStory path="/:batchChangeName" initialEntries={['/c123']}>
             {props => (
                 <BatchChangeClosePage
                     {...props}
                     queryChangesets={queryEmptyChangesets}
                     queryExternalChangesetWithFileDiffs={queryEmptyExternalChangesetWithFileDiffs}
                     namespaceID="n123"
-                    batchChangeName="c123"
                     fetchBatchChangeByNamespace={fetchBatchChange}
                 />
             )}

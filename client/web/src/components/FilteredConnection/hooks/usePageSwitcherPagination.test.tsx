@@ -1,16 +1,18 @@
-import { MockedResponse } from '@apollo/client/testing'
+import type { MockedResponse } from '@apollo/client/testing'
 import { fireEvent } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 
 import { dataOrThrowErrors, getDocumentNode } from '@sourcegraph/http-client'
 import { MockedTestProvider, waitForNextApolloResponse } from '@sourcegraph/shared/src/testing/apollo'
 import { Text } from '@sourcegraph/wildcard'
-import { RenderWithBrandedContextResult, renderWithBrandedContext } from '@sourcegraph/wildcard/src/testing'
+import { renderWithBrandedContext, type RenderWithBrandedContextResult } from '@sourcegraph/wildcard/src/testing'
 
-import { usePageSwitcherPagination } from './usePageSwitcherPagination'
+import { useUrlSearchParamsForConnectionState } from './connectionState'
+import { usePageSwitcherPagination, type PaginatedConnectionQueryArguments } from './usePageSwitcherPagination'
 
 type TestPageSwitcherPaginationQueryFields = any
 type TestPageSwitcherPaginationQueryResult = any
-type TestPageSwitcherPaginationQueryVariables = any
+interface TestPageSwitcherPaginationQueryVariables extends PaginatedConnectionQueryArguments {}
 const TEST_PAGINATED_CONNECTION_QUERY = `
     query TestPageSwitcherPaginationQuery($first: Int, $last: Int, $after: String, $before: String) {
         savedSearchesByNamespace(
@@ -42,7 +44,8 @@ const TEST_PAGINATED_CONNECTION_QUERY = `
 
 const PAGE_SIZE = 3
 
-const TestComponent = ({ useURL }: { useURL: boolean }) => {
+const TestComponent = () => {
+    const connectionState = useUrlSearchParamsForConnectionState([])
     const { connection, loading, goToNextPage, goToPreviousPage, goToFirstPage, goToLastPage } =
         usePageSwitcherPagination<
             TestPageSwitcherPaginationQueryResult,
@@ -56,9 +59,9 @@ const TestComponent = ({ useURL }: { useURL: boolean }) => {
                 return data.savedSearchesByNamespace
             },
             options: {
-                useURL,
                 pageSize: PAGE_SIZE,
             },
+            state: connectionState,
         })
 
     return (
@@ -188,7 +191,7 @@ const generateMockCursorResponsesForEveryPage = (
                 nodes: nodesOnPage,
                 totalCount: nodes.length,
                 startCursor: nodesOnPage.length > 0 ? getCursorForId(nodesOnPage[0].id) : null,
-                endCursor: nodesOnPage.length > 0 ? getCursorForId(nodesOnPage[nodesOnPage.length - 1].id) : null,
+                endCursor: nodesOnPage.length > 0 ? getCursorForId(nodesOnPage.at(-1).id) : null,
                 hasNextPage: pageIndex < totalPages - 1,
                 hasPreviousPage: pageIndex > 0,
             }),
@@ -206,7 +209,7 @@ const generateMockCursorResponsesForEveryPage = (
                 nodes: nodesOnPage,
                 totalCount: reverseNodes.length,
                 startCursor: nodesOnPage.length > 0 ? getCursorForId(nodesOnPage[0].id) : null,
-                endCursor: nodesOnPage.length > 0 ? getCursorForId(nodesOnPage[nodesOnPage.length - 1].id) : null,
+                endCursor: nodesOnPage.length > 0 ? getCursorForId(nodesOnPage.at(-1).id) : null,
                 hasNextPage: pageIndex > 0,
                 hasPreviousPage: pageIndex < totalPages - 1,
             }),
@@ -219,12 +222,11 @@ const generateMockCursorResponsesForEveryPage = (
 describe('usePageSwitcherPagination', () => {
     const renderWithMocks = async (
         mocks: MockedResponse<TestPageSwitcherPaginationQueryResult>[],
-        useURL: boolean = true,
         initialRoute = '/'
     ) => {
         const renderResult = renderWithBrandedContext(
             <MockedTestProvider mocks={mocks}>
-                <TestComponent useURL={useURL} />
+                <TestComponent />
             </MockedTestProvider>,
             { route: initialRoute }
         )
@@ -251,7 +253,7 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe('')
+        expect(page.locationRef.current?.search).toBe('')
     })
 
     it('supports forward pagination', async () => {
@@ -270,7 +272,7 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe(`?after=${getCursorForId('3')}`)
+        expect(page.locationRef.current?.search).toBe(`?after=${getCursorForId('3')}`)
 
         await goToNextPage(page)
 
@@ -285,7 +287,7 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe(`?after=${getCursorForId('6')}`)
+        expect(page.locationRef.current?.search).toBe(`?after=${getCursorForId('6')}`)
 
         await goToNextPage(page)
 
@@ -298,11 +300,11 @@ describe('usePageSwitcherPagination', () => {
         expect(() => page.getByText('Next page')).toThrowError(/Unable to find an element/)
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe(`?after=${getCursorForId('9')}`)
+        expect(page.locationRef.current?.search).toBe(`?after=${getCursorForId('9')}`)
     })
 
     it('supports restoration from forward pagination URL', async () => {
-        const page = await renderWithMocks(cursorMocks, true, `/?after=${getCursorForId('6')}`)
+        const page = await renderWithMocks(cursorMocks, `/?after=${getCursorForId('6')}`)
 
         expect(page.getAllByRole('listitem').length).toBe(3)
         expect(page.getAllByRole('listitem')[0]).toHaveTextContent('result 7')
@@ -317,7 +319,7 @@ describe('usePageSwitcherPagination', () => {
     })
 
     it('supports jumping to the first page', async () => {
-        const page = await renderWithMocks(cursorMocks, true, '/?last=3')
+        const page = await renderWithMocks(cursorMocks, '/?last=3')
 
         await goToFirstPage(page)
 
@@ -332,7 +334,7 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe('')
+        expect(page.locationRef.current?.search).toBe('')
     })
 
     it('supports jumping to the last page', async () => {
@@ -351,11 +353,11 @@ describe('usePageSwitcherPagination', () => {
         expect(() => page.getByText('Next page')).toThrowError(/Unable to find an element/)
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe('?last=3')
+        expect(page.locationRef.current?.search).toBe('?last=3')
     })
 
     it('supports restoration from last page URL', async () => {
-        const page = await renderWithMocks(cursorMocks, true, '/?last=3')
+        const page = await renderWithMocks(cursorMocks, '/?last=3')
 
         expect(page.getAllByRole('listitem').length).toBe(3)
         expect(page.getAllByRole('listitem')[0]).toHaveTextContent('result 8')
@@ -386,7 +388,7 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe(`?before=${getCursorForId('8')}`)
+        expect(page.locationRef.current?.search).toBe(`?before=${getCursorForId('8')}`)
 
         await goToPreviousPage(page)
 
@@ -401,7 +403,7 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe(`?before=${getCursorForId('5')}`)
+        expect(page.locationRef.current?.search).toBe(`?before=${getCursorForId('5')}`)
 
         await goToPreviousPage(page)
 
@@ -414,11 +416,11 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
 
-        expect(page.history.location.search).toBe(`?before=${getCursorForId('2')}`)
+        expect(page.locationRef.current?.search).toBe(`?before=${getCursorForId('2')}`)
     })
 
     it('supports restoration from backward pagination URL', async () => {
-        const page = await renderWithMocks(cursorMocks, true, `?before=${getCursorForId('5')}`)
+        const page = await renderWithMocks(cursorMocks, `?before=${getCursorForId('5')}`)
 
         expect(page.getAllByRole('listitem').length).toBe(3)
         expect(page.getAllByRole('listitem')[0]).toHaveTextContent('result 2')
@@ -430,24 +432,5 @@ describe('usePageSwitcherPagination', () => {
         expect(page.getByText('Previous page')).toBeVisible()
         expect(page.getByText('Next page')).toBeVisible()
         expect(page.getByText('Last page')).toBeVisible()
-    })
-
-    it('does not change the URL when useURL is disabled', async () => {
-        const page = await renderWithMocks(cursorMocks, false, `/?after=${getCursorForId('6')}`)
-
-        expect(page.getAllByRole('listitem').length).toBe(3)
-        expect(page.getAllByRole('listitem')[0]).toHaveTextContent('result 1')
-        expect(page.getAllByRole('listitem')[1]).toHaveTextContent('result 2')
-        expect(page.getAllByRole('listitem')[2]).toHaveTextContent('result 3')
-        expect(page.getByText('Total count: 10')).toBeVisible()
-
-        expect(page.getByText('First page')).toBeVisible()
-        expect(() => page.getByText('Previous page')).toThrowError(/Unable to find an element/)
-        expect(page.getByText('Next page')).toBeVisible()
-        expect(page.getByText('Last page')).toBeVisible()
-
-        await goToLastPage(page)
-
-        expect(page.history.location.search).toBe(`?after=${getCursorForId('6')}`)
     })
 })

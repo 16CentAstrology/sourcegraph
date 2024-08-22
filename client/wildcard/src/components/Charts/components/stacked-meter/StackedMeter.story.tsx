@@ -1,4 +1,4 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 import ParentSize from '@visx/responsive/lib/components/ParentSizeModern'
 
 import { BrandedStory } from '../../../../stories'
@@ -8,13 +8,11 @@ import { StackedMeter } from '.'
 const StoryConfig: Meta = {
     title: 'wildcard/Charts',
     decorators: [story => <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>],
-    parameters: {
-        chromatic: { disableSnapshots: false, enableDarkMode: true },
-    },
+    parameters: {},
 }
 export default StoryConfig
 
-export const StackedMeterDemo: Story = () => {
+export const StackedMeterDemo: StoryFn = () => {
     const data = [
         {
             language: 'JavaScript',

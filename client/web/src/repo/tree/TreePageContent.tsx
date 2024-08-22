@@ -1,422 +1,238 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useMemo } from 'react'
 
+import { mdiCog, mdiFileOutline, mdiGlasses, mdiInformationOutline, mdiSourceCommit } from '@mdi/js'
 import classNames from 'classnames'
-import { formatISO, subYears } from 'date-fns'
-import * as H from 'history'
 import { escapeRegExp } from 'lodash'
-import { Observable } from 'rxjs'
-import { map, switchMap } from 'rxjs/operators'
 
-import { memoizeObservable, numberWithCommas, pluralize } from '@sourcegraph/common'
-import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
-import { ExtensionsControllerProps } from '@sourcegraph/shared/src/extensions/controller'
-import { SearchPatternType, TreeFields } from '@sourcegraph/shared/src/graphql-operations'
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import { metadataToTag, TagList, topicToTag } from '@sourcegraph/branded'
+import { encodeURIPathComponent, numberWithCommas, pluralize } from '@sourcegraph/common'
+import { gql, useQuery } from '@sourcegraph/http-client'
+import { TeamAvatar } from '@sourcegraph/shared/src/components/TeamAvatar'
+import { UserAvatar } from '@sourcegraph/shared/src/components/UserAvatar'
+import { SearchPatternType, type TreeFields } from '@sourcegraph/shared/src/graphql-operations'
+import type { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { buildSearchURLQuery } from '@sourcegraph/shared/src/util/url'
-import { Button, Card, CardHeader, Link, Tooltip, Text } from '@sourcegraph/wildcard'
+import { Badge, ButtonLink, Card, CardHeader, Icon, Link, Text, Tooltip } from '@sourcegraph/wildcard'
 
-import { requestGraphQL } from '../../backend/graphql'
-import { FilteredConnection } from '../../components/FilteredConnection'
-import { useShowMorePagination } from '../../components/FilteredConnection/hooks/useShowMorePagination'
+import type { AuthenticatedUser } from '../../auth'
 import {
     ConnectionContainer,
+    ConnectionError,
     ConnectionList,
     ConnectionLoading,
     ConnectionSummary,
-    ShowMoreButton,
     SummaryContainer,
-    ConnectionError,
 } from '../../components/FilteredConnection/ui'
-import {
-    BlobFileFields,
-    CommitAtTimeResult,
-    CommitAtTimeVariables,
-    DiffSinceResult,
-    DiffSinceVariables,
-    GitCommitFields,
-    RepositoryContributorNodeFields,
+import { useFeatureFlag } from '../../featureFlags/useFeatureFlag'
+import type {
+    TreeHistoryFields,
+    TreePageOwnershipNodeFields,
+    TreePageOwnershipResult,
+    TreePageOwnershipVariables,
+    TreePageRepositoryContributorNodeFields,
     TreePageRepositoryContributorsResult,
     TreePageRepositoryContributorsVariables,
-    Scalars,
-    TreeCommitsResult,
     TreePageRepositoryFields,
-    TreeCommitsVariables,
 } from '../../graphql-operations'
 import { PersonLink } from '../../person/PersonLink'
 import { quoteIfNeeded, searchQueryForRepoRevision } from '../../search'
-import { UserAvatar } from '../../user/UserAvatar'
-import { fetchBlob } from '../blob/backend'
-import { GitCommitNode, GitCommitNodeProps } from '../commits/GitCommitNode'
-import { gitCommitFragment } from '../commits/RepositoryCommitsPage'
-import { BATCH_COUNT } from '../RepositoriesPopover'
+import { buildSearchURLQueryFromQueryState, useNavbarQueryState } from '../../stores'
+import { canWriteRepoMetadata } from '../../util/rbac'
+import { OWNER_FIELDS, RECENT_CONTRIBUTOR_FIELDS, RECENT_VIEW_FIELDS } from '../blob/own/grapqlQueries'
+import { getRefType, RepoCommitsButton } from '../utils'
 
-import { DiffStat, FilesCard, ReadmePreviewCard } from './TreePagePanels'
+import { FilesCard, ReadmePreviewCard } from './TreePagePanels'
 
+import menuStyles from './TreePage.module.scss'
 import styles from './TreePageContent.module.scss'
 import contributorsStyles from './TreePageContentContributors.module.scss'
 import panelStyles from './TreePagePanels.module.scss'
 
-export type TreeCommitsRepositoryCommit = NonNullable<
-    Extract<TreeCommitsResult['node'], { __typename: 'Repository' }>['commit']
->
+const COUNT = 20
 
-export const fetchTreeCommits = memoizeObservable(
-    (args: {
-        repo: Scalars['ID']
-        revspec: string
-        first?: number
-        filePath?: string
-        after?: string
-    }): Observable<TreeCommitsRepositoryCommit['ancestors']> =>
-        requestGraphQL<TreeCommitsResult, TreeCommitsVariables>(
-            gql`
-                query TreeCommits($repo: ID!, $revspec: String!, $first: Int, $filePath: String, $after: String) {
-                    node(id: $repo) {
-                        __typename
-                        ... on Repository {
-                            commit(rev: $revspec) {
-                                ancestors(first: $first, path: $filePath, after: $after) {
-                                    nodes {
-                                        ...GitCommitFields
-                                    }
-                                    pageInfo {
-                                        hasNextPage
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                ${gitCommitFragment}
-            `,
-            {
-                ...args,
-                first: args.first || null,
-                filePath: args.filePath || null,
-                after: args.after || null,
-            }
-        ).pipe(
-            map(dataOrThrowErrors),
-            map(data => {
-                if (!data.node) {
-                    throw new Error('Repository not found')
-                }
-                if (data.node.__typename !== 'Repository') {
-                    throw new Error('Node is not a Repository')
-                }
-                if (!data.node.commit) {
-                    throw new Error('Commit not found')
-                }
-                return data.node.commit.ancestors
-            })
-        ),
-    args => `${args.repo}:${args.revspec}:${String(args.first)}:${String(args.filePath)}:${String(args.after)}`
+const ExtraInfoSectionItem: React.FunctionComponent<React.PropsWithChildren<{}>> = ({ children }) => (
+    <div className={styles.extraInfoSectionItem}>{children}</div>
 )
 
-export const fetchCommit = (args: {
-    repo: Scalars['String']
-    revspec: Scalars['String']
-    beforespec: Scalars['String'] | null
-}): Observable<GitCommitFields> =>
-    requestGraphQL<CommitAtTimeResult, CommitAtTimeVariables>(
-        gql`
-            query CommitAtTime($repo: String!, $revspec: String!, $beforespec: String) {
-                repository(name: $repo) {
-                    commit(rev: $revspec) {
-                        ancestors(first: 1, before: $beforespec) {
-                            nodes {
-                                ...GitCommitFields
-                            }
-                        }
-                    }
-                }
-            }
-            ${gitCommitFragment}
-        `,
-        args
-    ).pipe(
-        map(dataOrThrowErrors),
-        map(data => {
-            const nodes = data.repository?.commit?.ancestors.nodes
-            if (!nodes || nodes.length === 0) {
-                throw new Error(`no commit found before ${args.beforespec} from revspec ${args.revspec}`)
-            }
-            return nodes[0]
-        })
-    )
+const ExtraInfoSectionItemHeader: React.FunctionComponent<
+    React.PropsWithChildren<{ title: string; tooltip?: React.ReactNode }>
+> = ({ title, tooltip, children }) => (
+    <div className="d-flex align-items-center justify-content-between mb-2">
+        <div className="d-flex align-items-center">
+            <Text className="mr-1 mb-0" weight="bold">
+                {title}
+            </Text>
+            <Tooltip content={tooltip}>
+                <Icon
+                    svgPath={mdiInformationOutline}
+                    aria-label={title}
+                    className={classNames('text-muted', styles.extraInfoSectionItemHeaderIcon)}
+                />
+            </Tooltip>
+        </div>
+        {children}
+    </div>
+)
 
-export const fetchDiffStats = (args: {
-    repo: Scalars['String']
-    revspec: Scalars['String']
-    beforespec: Scalars['String']
-    filePath: Scalars['String']
-}): Observable<DiffStat[]> =>
-    fetchCommit({
-        repo: args.repo,
-        revspec: args.revspec,
-        beforespec: null,
-    }).pipe(
-        switchMap(headCommit => {
-            const headDate = new Date(Date.parse(headCommit.author.date))
-            const absBeforespec = `${headDate.getUTCFullYear()}-${
-                headDate.getUTCMonth() + 1
-            }-${headDate.getUTCDate()} ${args.beforespec}`
-            return fetchCommit({
-                repo: args.repo,
-                revspec: args.revspec,
-                beforespec: absBeforespec,
-            })
-        }),
-        switchMap((base: GitCommitFields) =>
-            requestGraphQL<DiffSinceResult, DiffSinceVariables>(
-                gql`
-                    query DiffSince($repo: String!, $basespec: String!, $headspec: String!, $filePath: String!) {
-                        repository(name: $repo) {
-                            comparison(base: $basespec, head: $headspec) {
-                                fileDiffs(paths: [$filePath]) {
-                                    nodes {
-                                        newPath
-                                        stat {
-                                            added
-                                            deleted
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                `,
-                {
-                    repo: args.repo,
-                    basespec: base.oid,
-                    headspec: args.revspec,
-                    filePath: args.filePath,
-                }
-            )
-        ),
-        map(dataOrThrowErrors),
-        map(
-            (data): DiffStat[] =>
-                data.repository?.comparison.fileDiffs.nodes
-                    ?.filter(node => node.newPath)
-                    .map(node => ({
-                        path: node.newPath!,
-                        ...node.stat,
-                    })) || []
-        ),
-        map((fileDiffStats: DiffStat[]) => {
-            const aggregatedDiffStats: { [path: string]: DiffStat } = {}
-            for (const diffStat of fileDiffStats) {
-                // strip filePath prefix from fileDiffStat.path
-                const strippedPath =
-                    args.filePath === '.' ? diffStat.path : diffStat.path.slice(args.filePath.length + 1)
-                let subdirName = strippedPath
-                if (subdirName.includes('/')) {
-                    subdirName = subdirName.slice(0, subdirName.indexOf('/'))
-                }
-                if (!aggregatedDiffStats[subdirName]) {
-                    aggregatedDiffStats[subdirName] = { path: subdirName, added: 0, deleted: 0 }
-                }
-                aggregatedDiffStats[subdirName].added += diffStat.added
-                aggregatedDiffStats[subdirName].deleted += diffStat.deleted
-            }
-            return Array.from(Object.values(aggregatedDiffStats))
-        })
-    )
-
-interface TreePageContentProps extends ExtensionsControllerProps, ThemeProps, TelemetryProps, PlatformContextProps {
-    filePath: string
-    tree: TreeFields
+const ExtraInfoSection: React.FC<{
     repo: TreePageRepositoryFields
-    commitID: string
-    location: H.Location
-    revision: string
-}
+    className?: string
+    hasWritePermissions?: boolean
+}> = ({ repo, className, hasWritePermissions }) => {
+    const [enableRepositoryMetadata] = useFeatureFlag('repository-metadata', true)
 
-export const TreePageContent: React.FunctionComponent<React.PropsWithChildren<TreePageContentProps>> = ({
-    filePath,
-    tree,
-    repo,
-    commitID,
-    revision,
-    ...props
-}) => {
-    const [showOlderCommits, setShowOlderCommits] = useState(false)
-    const [readmeInfo, setReadmeInfo] = useState<
-        | undefined
-        | {
-              blob: BlobFileFields
-              entry: TreeFields['entries'][number]
-          }
-    >()
-    useEffect(() => {
-        const readmeEntry = (() => {
-            for (const readmeName of ['README.md', 'README']) {
-                for (const entry of tree.entries) {
-                    if (!entry.isDirectory && entry.name === readmeName) {
-                        return entry
-                    }
-                }
-            }
-            return null
-        })()
-        if (!readmeEntry) {
-            setReadmeInfo(undefined)
-            return
-        }
+    const queryState = useNavbarQueryState(state => state.queryState)
 
-        const subscription = fetchBlob({
-            repoName: repo.name,
-            revision,
-            filePath: readmeEntry?.path,
-            disableTimeout: true,
-        }).subscribe(blob => {
-            if (blob) {
-                setReadmeInfo({
-                    blob,
-                    entry: readmeEntry,
-                })
-            } else {
-                setReadmeInfo(undefined)
-            }
-        })
-        return () => subscription.unsubscribe()
-    }, [repo.name, revision, filePath, tree.entries])
-
-    const [diffStats, setDiffStats] = useState<DiffStat[]>()
-    useEffect(() => {
-        const subscription = fetchDiffStats({
-            repo: repo.name,
-            revspec: revision,
-            beforespec: '1 month',
-            filePath: filePath || '.',
-        }).subscribe(results => {
-            setDiffStats(results)
-        })
-        return () => subscription.unsubscribe()
-    }, [repo.name, revision, filePath])
-
-    const queryCommits = useCallback(
-        (args: { first?: number }): Observable<TreeCommitsRepositoryCommit['ancestors']> => {
-            const after: string | undefined = showOlderCommits ? undefined : formatISO(subYears(Date.now(), 1))
-            return fetchTreeCommits({
-                ...args,
-                repo: repo.id,
-                revspec: revision || '',
-                filePath,
-                after,
-            })
-        },
-        [filePath, repo.id, revision, showOlderCommits]
+    const metadataTags = useMemo(
+        () => repo.metadata.map(item => metadataToTag(item, queryState, true, buildSearchURLQueryFromQueryState)),
+        [repo.metadata, queryState]
     )
 
-    const onShowOlderCommitsClicked = useCallback((event: React.MouseEvent): void => {
-        event.preventDefault()
-        setShowOlderCommits(true)
-    }, [])
-
-    const emptyElement = showOlderCommits ? (
-        <>No commits in this tree.</>
-    ) : (
-        <div className="test-tree-page-no-recent-commits">
-            <Text className="mb-2">No commits in this tree in the past year.</Text>
-            <Button
-                className="test-tree-page-show-all-commits"
-                onClick={onShowOlderCommitsClicked}
-                variant="secondary"
-                size="sm"
-            >
-                Show all commits
-            </Button>
-        </div>
-    )
-
-    const TotalCountSummary: React.FunctionComponent<React.PropsWithChildren<{ totalCount: number }>> = ({
-        totalCount,
-    }) => (
-        <div className="p-2">
-            {showOlderCommits ? (
-                <>
-                    {totalCount} total {pluralize('commit', totalCount)} in this tree.
-                </>
-            ) : (
-                <>
-                    <Text className="mb-2">
-                        {totalCount} {pluralize('commit', totalCount)} in this tree in the past year.
-                    </Text>
-                    <Button onClick={onShowOlderCommitsClicked} variant="secondary" size="sm">
-                        Show all commits
-                    </Button>
-                </>
-            )}
-        </div>
+    const topicTags = useMemo(
+        () => repo.topics.map(topic => topicToTag(topic, queryState, true, buildSearchURLQueryFromQueryState)),
+        [repo.topics, queryState]
     )
 
     return (
-        <>
-            {readmeInfo && (
-                <ReadmePreviewCard
-                    readmeHTML={readmeInfo.blob.richHTML}
-                    readmeURL={readmeInfo.entry.url}
-                    location={props.location}
-                    className="mb-4"
-                />
+        <Card className={className}>
+            <ExtraInfoSectionItem>
+                <ExtraInfoSectionItemHeader title="Description" tooltip="Synchronized from the code host" />
+                {repo.description && <Text>{repo.description}</Text>}
+            </ExtraInfoSectionItem>
+            {/* Not all code hosts support the concept of "topics", hence we only show topics if we have them */}
+            {topicTags.length > 0 && (
+                <ExtraInfoSectionItem>
+                    <ExtraInfoSectionItemHeader title="Topics" tooltip={<>Topics synced from the code host</>} />
+                    <TagList tags={topicTags} />
+                </ExtraInfoSectionItem>
             )}
-            <section className={classNames('test-tree-entries container mb-3 px-0', styles.section)}>
-                <FilesCard diffStats={diffStats} entries={tree.entries} className={styles.files} />
-
-                <Card className={styles.commits}>
-                    <CardHeader className={panelStyles.cardColHeaderWrapper}>
-                        {tree.isRoot ? <Link to={`${tree.url}/-/commits`}>Commits</Link> : 'Commits'}
-                    </CardHeader>
-
-                    <FilteredConnection<
-                        GitCommitFields,
-                        Pick<GitCommitNodeProps, 'className' | 'compact' | 'messageSubjectClassName' | 'wrapperElement'>
+            {enableRepositoryMetadata && (
+                <ExtraInfoSectionItem>
+                    <ExtraInfoSectionItemHeader
+                        title="Metadata"
+                        tooltip={
+                            <>
+                                Repository metadata allows you to search, filter and navigate between repositories.
+                                Users with the Repository metadata write role can add repository metadata via the web,
+                                cli or API. Learn more about{' '}
+                                <Link to="/help/admin/repo/metadata" className={styles.linkDark}>
+                                    Repository Metadata
+                                </Link>
+                                .
+                            </>
+                        }
                     >
-                        location={props.location}
-                        listClassName="list-group list-group-flush"
-                        noun="commit in this tree"
-                        pluralNoun="commits in this tree"
-                        queryConnection={queryCommits}
-                        nodeComponent={GitCommitNode}
-                        nodeComponentProps={{
-                            className: classNames('list-group-item px-2 py-1', styles.gitCommitNode),
-                            messageSubjectClassName: styles.gitCommitNodeMessageSubject,
-                            compact: true,
-                            wrapperElement: 'li',
-                        }}
-                        updateOnChange={`${repo.name}:${revision}:${filePath}:${String(showOlderCommits)}`}
-                        defaultFirst={20}
-                        useURLQuery={false}
-                        hideSearch={true}
-                        emptyElement={emptyElement}
-                        totalCountSummaryComponent={TotalCountSummary}
-                        loaderClassName={contributorsStyles.filteredConnectionLoading}
-                        showMoreClassName="mb-0"
-                        summaryClassName={contributorsStyles.filteredConnectionSummary}
-                    />
-                </Card>
-
-                <Card className={styles.contributors}>
-                    <CardHeader className={panelStyles.cardColHeaderWrapper}>
-                        {tree.isRoot ? (
-                            <Link to={`${tree.url}/-/stats/contributors`}>Contributors</Link>
-                        ) : (
-                            'Contributors'
+                        {hasWritePermissions && (
+                            <Tooltip content="Edit repository metadata">
+                                <ButtonLink
+                                    to={`/${encodeURIPathComponent(repo.name)}/-/metadata`}
+                                    className={classNames('p-0', styles.extraInfoSectionItemHeaderIcon)}
+                                >
+                                    <Icon
+                                        svgPath={mdiCog}
+                                        aria-label="Edit repository metadata"
+                                        className="text-muted"
+                                    />
+                                </ButtonLink>
+                            </Tooltip>
                         )}
-                    </CardHeader>
-                    <Contributors
-                        filePath={filePath}
-                        tree={tree}
-                        repo={repo}
-                        commitID={commitID}
+                    </ExtraInfoSectionItemHeader>
+                    {metadataTags.length ? <TagList tags={metadataTags} /> : <Text className="text-muted">None</Text>}
+                </ExtraInfoSectionItem>
+            )}
+        </Card>
+    )
+}
+
+interface TreePageContentProps extends TelemetryProps, PlatformContextProps {
+    filePath: string
+    tree: TreeFields
+    treeWithHistory?: TreeHistoryFields[]
+    repo: TreePageRepositoryFields
+    commitID: string
+    revision: string
+    isPackage: boolean
+    authenticatedUser: AuthenticatedUser | null
+    showOwnership: boolean
+}
+
+export const TreePageContent: React.FunctionComponent<React.PropsWithChildren<TreePageContentProps>> = props => {
+    const { filePath, tree, treeWithHistory, repo, revision, isPackage, showOwnership } = props
+
+    const isRoot = filePath === ''
+
+    const readmeEntry = useMemo(() => {
+        for (const entry of tree.entries) {
+            const name = entry.name.toLocaleLowerCase()
+            if (!entry.isDirectory && (name === 'readme.md' || name === 'readme' || name === 'readme.txt')) {
+                return entry
+            }
+        }
+        return null
+    }, [tree.entries])
+
+    const [enableOwnershipPanels] = useFeatureFlag('enable-ownership-panels', true)
+    const hasRepoMetaWritePermissions = canWriteRepoMetadata(props.authenticatedUser)
+
+    return (
+        <>
+            {!isRoot && (
+                <div className={menuStyles.menu}>
+                    <RepoCommitsButton
+                        repoName={repo.name}
+                        repoType={repo.sourceType}
                         revision={revision}
-                        {...props}
+                        filePath={filePath}
+                        svgPath={mdiSourceCommit}
+                        className={menuStyles.text}
                     />
-                </Card>
+                </div>
+            )}
+
+            {(readmeEntry || isRoot) && (
+                <section className={classNames('container mb-3 px-0', styles.section)}>
+                    {readmeEntry && (
+                        <ReadmePreviewCard
+                            entry={readmeEntry}
+                            repoName={repo.name}
+                            revision={revision}
+                            className={styles.files}
+                        />
+                    )}
+                    {isRoot && (
+                        <ExtraInfoSection
+                            repo={repo}
+                            className={styles.extraInfo}
+                            hasWritePermissions={hasRepoMetaWritePermissions}
+                        />
+                    )}
+                </section>
+            )}
+
+            <section
+                className={classNames(
+                    'test-tree-entries container mb-3 px-0',
+                    styles.section,
+                    !readmeEntry ? 'mt-3' : undefined
+                )}
+            >
+                <FilesCard historyEntries={treeWithHistory} entries={tree.entries} className={styles.files} />
+
+                {!isPackage && (
+                    <div className={styles.contributors}>
+                        {enableOwnershipPanels && showOwnership && (
+                            <Card>
+                                <CardHeader className={panelStyles.cardColHeaderWrapper}>Own</CardHeader>
+                                <Ownership {...props} />
+                            </Card>
+                        )}
+                        <Card className={enableOwnershipPanels && showOwnership ? 'mt-3' : undefined}>
+                            <CardHeader className={panelStyles.cardColHeaderWrapper}>Contributors</CardHeader>
+                            <Contributors {...props} />
+                        </Card>
+                    </div>
+                )}
             </section>
         </>
     )
@@ -432,6 +248,7 @@ const CONTRIBUTORS_QUERY = gql`
     ) {
         node(id: $repo) {
             ... on Repository {
+                sourceType
                 contributors(first: $first, revisionRange: $revisionRange, afterDate: $afterDate, path: $path) {
                     ...TreePageRepositoryContributorConnectionFields
                 }
@@ -463,72 +280,53 @@ const CONTRIBUTORS_QUERY = gql`
             }
         }
         count
-        commits(first: 1) {
-            nodes {
-                oid
-                abbreviatedOID
-                url
-                subject
-                author {
-                    date
-                }
-            }
-        }
     }
 `
 
 interface ContributorsProps extends TreePageContentProps {}
 
-const Contributors: React.FunctionComponent<ContributorsProps> = ({ repo, filePath }) => {
+const Contributors: React.FC<ContributorsProps> = ({ repo, filePath }) => {
     const spec: QuerySpec = {
         revisionRange: '',
         after: '',
         path: filePath,
     }
 
-    const { connection, error, loading, hasNextPage, fetchMore } = useShowMorePagination<
+    const { data, error, loading } = useQuery<
         TreePageRepositoryContributorsResult,
-        TreePageRepositoryContributorsVariables,
-        RepositoryContributorNodeFields
-    >({
-        query: CONTRIBUTORS_QUERY,
+        TreePageRepositoryContributorsVariables
+    >(CONTRIBUTORS_QUERY, {
         variables: {
-            first: BATCH_COUNT,
+            first: COUNT,
             repo: repo.id,
             revisionRange: spec.revisionRange,
             afterDate: spec.after,
             path: filePath,
         },
-        getConnection: result => {
-            const { node } = dataOrThrowErrors(result)
-            if (!node) {
-                throw new Error(`Node ${repo.id} not found`)
-            }
-            if (!('contributors' in node)) {
-                throw new Error('Failed to fetch contributors for this repo')
-            }
-            return node.contributors
-        },
-        options: {
-            fetchPolicy: 'cache-first',
-        },
     })
+
+    const node = data?.node && data?.node.__typename === 'Repository' ? data.node : null
+    const connection = node?.contributors
 
     return (
         <ConnectionContainer>
             {error && <ConnectionError errors={[error.message]} />}
             {connection && connection.nodes.length > 0 && (
-                <ConnectionList className="list-group list-group-flush test-filtered-contributors-connection">
-                    {connection.nodes.map(node => (
-                        <RepositoryContributorNode
-                            key={`${node.person.displayName}:${node.count}`}
-                            node={node}
-                            repoName={repo.name}
-                            // TODO: what does `globbing` do?
-                            globbing={true}
-                            {...spec}
-                        />
-                    ))}
+                <ConnectionList
+                    className={classNames('test-filtered-contributors-connection', styles.table)}
+                    as="table"
+                >
+                    <tbody>
+                        {connection.nodes.map(node => (
+                            <RepositoryContributorNode
+                                key={node.person.email}
+                                node={node}
+                                repoName={repo.name}
+                                sourceType={repo.sourceType}
+                                {...spec}
+                            />
+                        ))}
+                    </tbody>
                 </ConnectionList>
             )}
             {loading && (
@@ -536,20 +334,192 @@ const Contributors: React.FunctionComponent<ContributorsProps> = ({ repo, filePa
                     <ConnectionLoading />
                 </div>
             )}
-            <SummaryContainer className={styles.contributorsSummary}>
+            <SummaryContainer className={styles.tableSummary}>
                 {connection && (
-                    <ConnectionSummary
-                        compact={true}
-                        connection={connection}
-                        first={BATCH_COUNT}
-                        noun="contributor"
-                        pluralNoun="contributors"
-                        hasNextPage={hasNextPage}
-                    />
+                    <>
+                        <ConnectionSummary
+                            compact={true}
+                            connection={connection}
+                            noun="contributor"
+                            pluralNoun="contributors"
+                            hasNextPage={connection.pageInfo.hasNextPage}
+                        />
+                        {connection.pageInfo.hasNextPage && (
+                            <small>
+                                <Link
+                                    to={`${repo.url}/-/stats/contributors?${
+                                        filePath ? 'path=' + encodeURIComponent(filePath) : ''
+                                    }`}
+                                >
+                                    Show more
+                                </Link>
+                            </small>
+                        )}
+                    </>
                 )}
-                {hasNextPage && <ShowMoreButton className="m-0 p-1 border-0" onClick={fetchMore} />}
             </SummaryContainer>
         </ConnectionContainer>
+    )
+}
+
+const OWNERS_QUERY = gql`
+    ${OWNER_FIELDS}
+    ${RECENT_CONTRIBUTOR_FIELDS}
+    ${RECENT_VIEW_FIELDS}
+
+    query TreePageOwnership($repo: ID!, $first: Int, $revision: String!, $filePath: String!) {
+        node(id: $repo) {
+            ... on Repository {
+                commit(rev: $revision) {
+                    path(path: $filePath) {
+                        ... on GitTree {
+                            ownership(first: $first) {
+                                ...TreePageOwnershipConnectionFields
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fragment TreePageOwnershipConnectionFields on OwnershipConnection {
+        totalCount
+        pageInfo {
+            hasNextPage
+        }
+        nodes {
+            ...TreePageOwnershipNodeFields
+        }
+    }
+
+    fragment TreePageOwnershipNodeFields on Ownership {
+        owner {
+            ...OwnerFields
+        }
+        reasons {
+            ...RecentContributorOwnershipSignalFields
+            ...RecentViewOwnershipSignalFields
+        }
+    }
+`
+
+interface OwnershipProps extends TreePageContentProps {}
+
+const Ownership: React.FC<OwnershipProps> = ({ repo, filePath }) => {
+    const { data, error, loading } = useQuery<TreePageOwnershipResult, TreePageOwnershipVariables>(OWNERS_QUERY, {
+        variables: {
+            first: 5,
+            repo: repo.id,
+            revision: '',
+            filePath,
+        },
+    })
+
+    const node = data?.node && data?.node.__typename === 'Repository' ? data.node : null
+    const connection =
+        node?.commit?.path?.__typename === 'GitTree' &&
+        node?.commit?.path?.ownership?.__typename === 'OwnershipConnection'
+            ? node.commit.path.ownership
+            : null
+    return (
+        <div>
+            <ConnectionContainer>
+                {error && <ConnectionError errors={[error.message]} />}
+                {connection && connection.nodes.length > 0 && (
+                    <ConnectionList
+                        className={classNames('test-filtered-contributors-connection', styles.table)}
+                        as="table"
+                    >
+                        <tbody>
+                            {connection.nodes.map((node: TreePageOwnershipNodeFields) => (
+                                <OwnerNode
+                                    key={
+                                        node.owner.__typename === 'Person'
+                                            ? node.owner.email
+                                            : node.owner.__typename === 'Team'
+                                            ? node.owner.name
+                                            : null
+                                    }
+                                    node={node}
+                                />
+                            ))}
+                        </tbody>
+                    </ConnectionList>
+                )}
+                {loading && (
+                    <div className={contributorsStyles.filteredConnectionLoading}>
+                        <ConnectionLoading />
+                    </div>
+                )}
+                <SummaryContainer className={styles.tableSummary}>
+                    {connection && (
+                        <small>
+                            <Link to={`${repo.url}/-/own?${filePath ? 'path=' + encodeURIComponent(filePath) : ''}`}>
+                                Show more
+                            </Link>
+                        </small>
+                    )}
+                </SummaryContainer>
+            </ConnectionContainer>
+        </div>
+    )
+}
+
+interface OwnerNodeProps {
+    node: TreePageOwnershipNodeFields
+}
+
+const OwnerNode: React.FC<OwnerNodeProps> = ({ node }) => {
+    const owner = node?.owner
+    const primaryReason =
+        node.reasons.find(reason => reason.__typename === 'AssignedOwner') ||
+        node.reasons.find(reason => reason.__typename === 'RecentContributorOwnershipSignal') ||
+        node.reasons[0]
+    return (
+        <tr className={classNames('list-group-item', contributorsStyles.repositoryContributorNode)}>
+            <td className={contributorsStyles.person}>
+                {/* TODO(#51791): Unify the component with FileOwnershipEntry. */}
+                {owner.__typename === 'Person' && (
+                    <>
+                        <UserAvatar user={owner} className="mx-2" inline={true} />
+                        <PersonLink person={owner} />
+                    </>
+                )}
+                {owner.__typename === 'Team' && (
+                    <>
+                        <TeamAvatar
+                            team={{ ...owner, displayName: owner.teamDisplayName }}
+                            className="mx-2"
+                            inline={true}
+                        />
+                        <Link to={`/teams/${owner.name}`}>{owner.teamDisplayName || owner.name}</Link>
+                    </>
+                )}
+            </td>
+            <td className={contributorsStyles.commits}>
+                {primaryReason?.__typename === 'AssignedOwner' && (
+                    <Badge tooltip="Owner assigned through sourcegraph" className={styles.badge} variant="merged">
+                        owner
+                    </Badge>
+                )}
+                {primaryReason?.__typename === 'RecentContributorOwnershipSignal' && (
+                    <Badge tooltip={primaryReason.description} className={styles.badge} variant="secondary">
+                        <Icon aria-label={primaryReason.title} svgPath={mdiFileOutline} /> changes
+                    </Badge>
+                )}
+                {primaryReason?.__typename === 'RecentViewOwnershipSignal' && (
+                    <Badge tooltip={primaryReason.description} className={styles.badge} variant="secondary">
+                        <Icon aria-label={primaryReason.title} svgPath={mdiGlasses} /> views
+                    </Badge>
+                )}
+                {node.reasons.length > 1 && (
+                    <Badge tooltip="Multiple ownership inference signals" className={styles.badge} variant="secondary">
+                        +{node.reasons.length - 1}
+                    </Badge>
+                )}
+            </td>
+        </tr>
     )
 }
 
@@ -560,21 +530,21 @@ interface QuerySpec {
 }
 
 interface RepositoryContributorNodeProps extends QuerySpec {
-    node: RepositoryContributorNodeFields
+    node: TreePageRepositoryContributorNodeFields
     repoName: string
-    globbing: boolean
+    sourceType: string
 }
 
-const RepositoryContributorNode: React.FunctionComponent<React.PropsWithChildren<RepositoryContributorNodeProps>> = ({
+const RepositoryContributorNode: React.FC<RepositoryContributorNodeProps> = ({
     node,
     repoName,
     revisionRange,
     after,
     path,
-    globbing,
+    sourceType,
 }) => {
     const query: string = [
-        searchQueryForRepoRevision(repoName, globbing),
+        searchQueryForRepoRevision(repoName),
         'type:diff',
         `author:${quoteIfNeeded(node.person.email)}`,
         after ? `after:${quoteIfNeeded(after)}` : '',
@@ -583,29 +553,28 @@ const RepositoryContributorNode: React.FunctionComponent<React.PropsWithChildren
         .join(' ')
         .replace(/\s+/, ' ')
 
+    const refType = getRefType(sourceType)
+
     return (
-        <li className={classNames('list-group-item py-2', contributorsStyles.repositoryContributorNode)}>
-            <div className={contributorsStyles.person}>
+        <tr className={classNames('list-group-item', contributorsStyles.repositoryContributorNode)}>
+            <td className={contributorsStyles.person}>
                 <UserAvatar inline={true} className="mr-2" user={node.person.user ? node.person.user : node.person} />
-                <PersonLink userClassName="font-weight-bold" person={node.person} />
-            </div>
-            <div className={contributorsStyles.commits}>
+                <PersonLink person={node.person} />
+            </td>
+            <td className={contributorsStyles.commits}>
                 <Tooltip
                     content={
                         revisionRange?.includes('..')
-                            ? 'All commits will be shown (revision end ranges are not yet supported)'
+                            ? `All ${refType}s will be shown (revision end ranges are not yet supported)`
                             : null
                     }
                     placement="left"
                 >
-                    <Link
-                        to={`/search?${buildSearchURLQuery(query, SearchPatternType.standard, false)}`}
-                        className="font-weight-bold"
-                    >
-                        {numberWithCommas(node.count)} {pluralize('commit', node.count)}
+                    <Link to={`/search?${buildSearchURLQuery(query, SearchPatternType.standard, false)}`}>
+                        {numberWithCommas(node.count)} {pluralize(refType, node.count)}
                     </Link>
                 </Tooltip>
-            </div>
-        </li>
+            </td>
+        </tr>
     )
 }

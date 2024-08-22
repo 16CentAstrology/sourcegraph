@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_FIFOList_All_OK(t *testing.T) {
-	SetupForTest(t)
+	kv := SetupForTest(t)
 
 	type testcase struct {
 		key     string
@@ -36,10 +39,22 @@ func Test_FIFOList_All_OK(t *testing.T) {
 			inserts: bytes("a1", "a2"),
 			want:    bytes("a2", "a1"),
 		},
+		{
+			key:     "d",
+			size:    0,
+			inserts: bytes("a1", "a2", "a3"),
+			want:    bytes(),
+		},
+		{
+			key:     "f",
+			size:    -1,
+			inserts: bytes("a1", "a2", "a3"),
+			want:    bytes(),
+		},
 	}
 
 	for _, c := range cases {
-		r := NewFIFOList(c.key, c.size)
+		r := NewFIFOList(kv, c.key, c.size)
 		t.Run(fmt.Sprintf("size %d with %d entries", c.size, len(c.inserts)), func(t *testing.T) {
 			for _, b := range c.inserts {
 				if err := r.Insert(b); err != nil {
@@ -58,14 +73,14 @@ func Test_FIFOList_All_OK(t *testing.T) {
 				t.Errorf("expected %d items, got %d instead", s, len(c.want))
 			}
 			if !reflect.DeepEqual(c.want, got) {
-				t.Errorf("Expected %v, but got %v", _str(c.want...), _str(got...))
+				t.Errorf("Expected %v, but got %v", str(c.want...), str(got...))
 			}
 		})
 	}
 }
 
 func Test_FIFOList_Slice_OK(t *testing.T) {
-	SetupForTest(t)
+	kv := SetupForTest(t)
 
 	type testcase struct {
 		key     string
@@ -102,6 +117,14 @@ func Test_FIFOList_Slice_OK(t *testing.T) {
 			to:      2,
 		},
 		{
+			key:     "d",
+			size:    0,
+			inserts: bytes("a1", "a2", "a3"),
+			want:    bytes(),
+			from:    0,
+			to:      -1,
+		},
+		{
 			key:     "e",
 			size:    3,
 			inserts: bytes("a1", "a2", "a3", "a4", "a5", "a6"),
@@ -109,10 +132,18 @@ func Test_FIFOList_Slice_OK(t *testing.T) {
 			from:    2,
 			to:      -1,
 		},
+		{
+			key:     "f",
+			size:    -1,
+			inserts: bytes("a1", "a2", "a3"),
+			want:    bytes(),
+			from:    0,
+			to:      -1,
+		},
 	}
 
 	for _, c := range cases {
-		r := NewFIFOList(c.key, c.size)
+		r := NewFIFOList(kv, c.key, c.size)
 		t.Run(fmt.Sprintf("size %d with %d entries, [%d,%d]", c.size, len(c.inserts), c.from, c.to), func(t *testing.T) {
 			for _, b := range c.inserts {
 				if err := r.Insert(b); err != nil {
@@ -124,14 +155,51 @@ func Test_FIFOList_Slice_OK(t *testing.T) {
 				t.Errorf("expected no error, got %q", err)
 			}
 			if !reflect.DeepEqual(c.want, got) {
-				t.Errorf("Expected %v, but got %v", _str(c.want...), _str(got...))
+				t.Errorf("Expected %v, but got %v", str(c.want...), str(got...))
 			}
 		})
 	}
 }
 
-func Test_FIOListContextCancellation(t *testing.T) {
-	r := NewFIFOList("a", 3)
+func Test_NewFIFOListDynamic(t *testing.T) {
+	kv := SetupForTest(t)
+	maxSize := 3
+	r := NewFIFOListDynamic(kv, "a", func() int { return maxSize })
+	for range 10 {
+		err := r.Insert([]byte("a"))
+		if err != nil {
+			t.Errorf("expected no error, got %q", err)
+		}
+	}
+
+	got, err := r.Slice(context.Background(), 0, -1)
+	if err != nil {
+		t.Errorf("expected no error, got %q", err)
+	}
+	if want := bytes("a", "a", "a"); !reflect.DeepEqual(want, got) {
+		t.Errorf("expected %v, but got %v", str(want...), str(got...))
+	}
+
+	maxSize = 2
+	for range 10 {
+		err := r.Insert([]byte("b"))
+		if err != nil {
+			t.Errorf("expected no error, got %q", err)
+		}
+	}
+
+	got, err = r.Slice(context.Background(), 0, -1)
+	if err != nil {
+		t.Errorf("expected no error, got %q", err)
+	}
+	if want := bytes("b", "b"); !reflect.DeepEqual(want, got) {
+		t.Errorf("expected %v, but got %v", str(want...), str(got...))
+	}
+}
+
+func Test_FIFOListContextCancellation(t *testing.T) {
+	kv := SetupForTest(t)
+	r := NewFIFOList(kv, "a", 3)
 	err := r.Insert([]byte("a"))
 	if err != nil {
 		t.Errorf("expected no error, got %q", err)
@@ -144,7 +212,20 @@ func Test_FIOListContextCancellation(t *testing.T) {
 	}
 }
 
-func _str(bs ...[]byte) []string {
+func Test_FIFOListIsEmpty(t *testing.T) {
+	kv := SetupForTest(t)
+	r := NewFIFOList(kv, "a", 3)
+	empty, err := r.IsEmpty()
+	require.NoError(t, err)
+	assert.True(t, empty)
+	err = r.Insert([]byte("a"))
+	require.NoError(t, err)
+	empty, err = r.IsEmpty()
+	require.NoError(t, err)
+	assert.False(t, empty)
+}
+
+func str(bs ...[]byte) []string {
 	strs := make([]string, 0, len(bs))
 	for _, b := range bs {
 		strs = append(strs, string(b))

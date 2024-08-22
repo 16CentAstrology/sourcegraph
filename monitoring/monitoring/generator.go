@@ -1,6 +1,7 @@
 package monitoring
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -37,7 +38,11 @@ type GenerateOptions struct {
 	// GrafanaHeaders are additional HTTP headers to add to all requests to the target Grafana instance
 	GrafanaHeaders map[string]string
 	// GrafanaFolder is the folder on the destination Grafana instance to upload the dashboards to
+	// It should match the name of the folder at GrafanaFolderID, if GrafanaFolderID is provided
 	GrafanaFolder string
+	// GrafanaFolderID can optionally be provided if GrafanaFolder is provided, the generator
+	// will use this instead of looking for and creating the folder.
+	GrafanaFolderID int
 
 	// Output directory for generated Prometheus assets
 	PrometheusDir string
@@ -82,7 +87,7 @@ func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard)
 	var grafanaClient *grafanasdk.Client
 	var grafanaFolderID int
 	if opts.GrafanaURL != "" && opts.Reload {
-		gclog := logger.Scoped("grafana.client", "grafana client setup")
+		gclog := logger.Scoped("grafana.client")
 
 		var err error
 		grafanaClient, err = grafanaclient.New(opts.GrafanaURL, opts.GrafanaCredentials, opts.GrafanaHeaders)
@@ -99,9 +104,13 @@ func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard)
 			}
 
 			// try to find existing folder
-			if folder, err := grafanaClient.GetFolderByUID(ctx, opts.GrafanaFolder); err == nil {
-				gclog.Debug("Existing folder found", log.Int("folder.ID", folder.ID))
-				grafanaFolderID = folder.ID
+			grafanaFolderID = opts.GrafanaFolderID
+			if grafanaFolderID == 0 {
+				// if the ID is not provided, look for it
+				if folder, err := grafanaClient.GetFolderByUID(ctx, opts.GrafanaFolder); err == nil {
+					gclog.Debug("Existing folder found", log.Int("folder.ID", folder.ID))
+					grafanaFolderID = folder.ID
+				}
 			}
 
 			// folderId is not found, create it
@@ -125,20 +134,20 @@ func Generate(logger log.Logger, opts GenerateOptions, dashboards ...*Dashboard)
 
 	// Set up disk directories
 	if opts.GrafanaDir != "" {
-		os.MkdirAll(opts.GrafanaDir, os.ModePerm)
+		_ = os.MkdirAll(opts.GrafanaDir, os.ModePerm)
 	}
 	if opts.PrometheusDir != "" {
-		os.MkdirAll(opts.PrometheusDir, os.ModePerm)
+		_ = os.MkdirAll(opts.PrometheusDir, os.ModePerm)
 	}
 	if opts.DocsDir != "" {
-		os.MkdirAll(opts.DocsDir, os.ModePerm)
+		_ = os.MkdirAll(opts.DocsDir, os.ModePerm)
 	}
 
 	// Generate the goods
 	var generatedAssets []string
 	var err error
 	if len(opts.MultiInstanceDashboardGroupings) > 0 {
-		l := logger.Scoped("multi-instance", "multi-instance dashboards")
+		l := logger.Scoped("multi-instance")
 		l.Info("generating multi-instance")
 		generatedAssets, err = generateMultiInstance(ctx, l, grafanaClient, grafanaFolderID, dashboards, opts)
 	} else {
@@ -204,7 +213,7 @@ func generateAll(
 		// Logger for dashboard
 		dlog := logger.With(log.String("dashboard", dashboard.Name))
 
-		glog := dlog.Scoped("grafana", "grafana dashboard generation").
+		glog := dlog.Scoped("grafana").
 			With(log.String("instance", opts.GrafanaURL))
 
 		glog.Debug("Rendering Grafana assets")
@@ -243,7 +252,7 @@ func generateAll(
 
 		// Prepare Prometheus assets
 		if opts.PrometheusDir != "" {
-			plog := dlog.Scoped("prometheus", "prometheus rules generation")
+			plog := dlog.Scoped("prometheus")
 
 			plog.Debug("Rendering Prometheus assets")
 			promAlertsFile, err := dashboard.RenderPrometheusRules(opts.InjectLabelMatchers)
@@ -283,7 +292,7 @@ func generateAll(
 
 	// Reload all Prometheus rules
 	if opts.PrometheusDir != "" && opts.PrometheusURL != "" && opts.Reload {
-		rlog := logger.Scoped("prometheus", "prometheus alerts generation").
+		rlog := logger.Scoped("prometheus").
 			With(log.String("instance", opts.PrometheusURL))
 		// Reload all Prometheus rules
 		rlog.Debug("Reloading Prometheus instance")
@@ -313,7 +322,11 @@ func generateAll(
 			{path: filepath.Join(opts.DocsDir, alertsDocsFile), data: docs.alertDocs.Bytes()},
 			{path: filepath.Join(opts.DocsDir, dashboardsDocsFile), data: docs.dashboards.Bytes()},
 		} {
-			err = os.WriteFile(docOut.path, docOut.data, os.ModePerm)
+			// By default, due to how we assemble content, we might end up with two \n chars at the end,
+			// which will yield linter errors. So instead, drop spaces at the end of the file and manually
+			// add the last \n.
+			b := append(bytes.TrimSpace(docOut.data), byte('\n'))
+			err = os.WriteFile(docOut.path, b, os.ModePerm)
 			if err != nil {
 				return generatedAssets, errors.Wrapf(err, "Could not write docs to path %q", docOut.path)
 			}

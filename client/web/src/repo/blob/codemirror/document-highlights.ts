@@ -8,23 +8,23 @@
  * facet.
  */
 import {
-    Extension,
+    type Extension,
     Facet,
     RangeSet,
     RangeSetBuilder,
-    RangeValue,
-    StateEffectType,
-    StateField,
-    Text,
+    type RangeValue,
+    type StateEffectType,
+    type StateField,
+    type Text,
 } from '@codemirror/state'
-import { Decoration, DecorationSet, EditorView, ViewPlugin } from '@codemirror/view'
-import { from, fromEvent, Observable, Subscription } from 'rxjs'
+import { Decoration, type DecorationSet, EditorView, ViewPlugin } from '@codemirror/view'
+import { from, fromEvent, type Observable, type Subscription } from 'rxjs'
 import { switchMap, filter, mergeAll, map, tap, distinctUntilChanged } from 'rxjs/operators'
 
-import { DocumentHighlight } from '@sourcegraph/codeintellify'
-import { Position } from '@sourcegraph/extension-api-types'
-import { createUpdateableField } from '@sourcegraph/shared/src/components/CodeMirrorEditor'
-import { UIPositionSpec } from '@sourcegraph/shared/src/util/url'
+import type { DocumentHighlight } from '@sourcegraph/codeintellify'
+import type { Position } from '@sourcegraph/extension-api-types'
+import { createUpdateableField } from '@sourcegraph/shared/src/components/codemirror/utils'
+import type { UIPositionSpec } from '@sourcegraph/shared/src/util/url'
 
 import { offsetToUIPosition, positionToOffset, preciseWordAtCoords, sortRangeValuesByStart } from './utils'
 
@@ -97,7 +97,10 @@ export const documentHighlightsSource = Facet.define<DocumentHighlightsSource>({
  * Together with {@link DocumentHighlightsManager} provides an extenion that
  * fetches document higlights from Sourcegraph extensions.
  */
-function documentHighlights(sources: Facet<DocumentHighlightsSource>, sink: Facet<DocumentHighlight[]>): Extension {
+function documentHighlights(
+    sources: Facet<DocumentHighlightsSource>,
+    sink: Facet<DocumentHighlight[], DocumentHighlight[]>
+): Extension {
     // This field is used to provide inputs for the documentHighlights facet.
     // The facet gets updated whenever the field changes. The view plugin
     // listens to mouse events, sents queries to the extensions host and

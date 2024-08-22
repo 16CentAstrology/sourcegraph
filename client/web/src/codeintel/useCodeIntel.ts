@@ -1,24 +1,26 @@
-import { ErrorLike } from '@sourcegraph/common'
-import { LanguageSpec } from '@sourcegraph/shared/src/codeintel/legacy-extensions/language-specs/language-spec'
+import type { ErrorLike } from '@sourcegraph/common'
 
-import { ConnectionQueryArguments } from '../components/FilteredConnection'
-import { UsePreciseCodeIntelForPositionVariables } from '../graphql-operations'
+import type { UsePreciseCodeIntelForPositionVariables } from '../graphql-operations'
 
-import { Location } from './location'
-import { SettingsGetter } from './settings'
+import type { LocationsGroup } from './location'
+import type { SettingsGetter } from './settings'
 
 export interface CodeIntelData {
     references: {
         endCursor: string | null
-        nodes: Location[]
+        nodes: LocationsGroup
     }
     implementations: {
         endCursor: string | null
-        nodes: Location[]
+        nodes: LocationsGroup
+    }
+    prototypes: {
+        endCursor: string | null
+        nodes: LocationsGroup
     }
     definitions: {
         endCursor: string | null
-        nodes: Location[]
+        nodes: LocationsGroup
     }
 }
 
@@ -34,15 +36,19 @@ export interface UseCodeIntelResult {
     implementationsHasNextPage: boolean
     fetchMoreImplementations: () => void
     fetchMoreImplementationsLoading: boolean
+
+    prototypesHasNextPage: boolean
+    fetchMorePrototypes: () => void
+    fetchMorePrototypesLoading: boolean
 }
 
 export interface UseCodeIntelParameters {
-    variables: UsePreciseCodeIntelForPositionVariables & ConnectionQueryArguments
+    variables: UsePreciseCodeIntelForPositionVariables
 
     searchToken: string
     fileContent: string
 
-    spec: LanguageSpec
+    languages: string[]
 
     isFork: boolean
     isArchived: boolean

@@ -4,11 +4,12 @@ import { mdiFileDownload } from '@mdi/js'
 import { kebabCase } from 'lodash'
 
 import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { useIsLightTheme } from '@sourcegraph/shared/src/theme'
 import { Link, Icon, Text, Tooltip, Button, AnchorLink } from '@sourcegraph/wildcard'
 
-import { BatchChangeFields } from '../../graphql-operations'
-import { eventLogger } from '../../tracking/eventLogger'
+import type { BatchChangeFields } from '../../graphql-operations'
 
 import { MonacoBatchSpecEditor } from './batch-spec/edit/editor/MonacoBatchSpecEditor'
 
@@ -24,18 +25,14 @@ const isJSON = (string: string): boolean => {
 
 export const getFileName = (name: string): string => `${kebabCase(name)}.batch.yaml`
 
-export interface BatchSpecProps extends ThemeProps {
+export interface BatchSpecProps extends TelemetryV2Props {
     name: string
     originalInput: BatchChangeFields['currentSpec']['originalInput']
     className?: string
 }
 
-export const BatchSpec: React.FunctionComponent<BatchSpecProps> = ({
-    originalInput,
-    isLightTheme,
-    className,
-    name,
-}) => {
+export const BatchSpec: React.FunctionComponent<BatchSpecProps> = ({ originalInput, className, name }) => {
+    const isLightTheme = useIsLightTheme()
     // JSON is valid YAML, so the input might be JSON. In that case, we'll highlight and indent it
     // as JSON. This is especially nice when the input is a "minified" (no extraneous whitespace)
     // JSON document that's difficult to read unless indented.
@@ -62,7 +59,18 @@ interface BatchSpecDownloadLinkProps extends Omit<BatchSpecProps, 'isLightTheme'
 }
 
 export const BatchSpecDownloadLink: React.FunctionComponent<React.PropsWithChildren<BatchSpecDownloadLinkProps>> =
-    React.memo(function BatchSpecDownloadLink({ children, className, name, originalInput, asButton }) {
+    React.memo(function BatchSpecDownloadLink({
+        children,
+        className,
+        name,
+        originalInput,
+        asButton,
+        telemetryRecorder,
+    }) {
+        const onClick: () => void = () => {
+            EVENT_LOGGER.log('batch_change_editor:download_for_src_cli:clicked')
+            telemetryRecorder.recordEvent('batchChange.editor.downloadForCLI', 'click')
+        }
         const component = asButton ? (
             <Button
                 variant="primary"
@@ -72,7 +80,7 @@ export const BatchSpecDownloadLink: React.FunctionComponent<React.PropsWithChild
                 target="_blank"
                 rel="noopener noreferrer"
                 className={className}
-                onClick={() => eventLogger.log('batch_change_editor:download_for_src_cli:clicked')}
+                onClick={onClick}
             >
                 {children}
             </Button>
@@ -81,7 +89,7 @@ export const BatchSpecDownloadLink: React.FunctionComponent<React.PropsWithChild
                 download={getFileName(name)}
                 to={'data:text/plain;charset=utf-8,' + encodeURIComponent(originalInput)}
                 className={className}
-                onClick={() => eventLogger.log('batch_change_editor:download_for_src_cli:clicked')}
+                onClick={onClick}
             >
                 {children}
             </Link>

@@ -9,31 +9,29 @@ import (
 	"sync"
 	"time"
 
-	"github.com/inconshreveable/log15"
-	"github.com/neelance/parallel"
-	"github.com/opentracing/opentracing-go"
-	"github.com/opentracing/opentracing-go/ext"
+	"github.com/inconshreveable/log15" //nolint:logging // TODO move all logging to sourcegraph/log
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/sourcegraph/conc/pool"
 	"github.com/sourcegraph/log"
 
 	searchlogs "github.com/sourcegraph/sourcegraph/cmd/frontend/internal/search/logs"
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
-	"github.com/sourcegraph/sourcegraph/internal/goroutine"
 	"github.com/sourcegraph/sourcegraph/internal/honey"
 	searchhoney "github.com/sourcegraph/sourcegraph/internal/honey/search"
 	"github.com/sourcegraph/sourcegraph/internal/rcache"
+	"github.com/sourcegraph/sourcegraph/internal/redispool"
 	"github.com/sourcegraph/sourcegraph/internal/search"
+	searchclient "github.com/sourcegraph/sourcegraph/internal/search/client"
 	"github.com/sourcegraph/sourcegraph/internal/search/job/jobutil"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
 	"github.com/sourcegraph/sourcegraph/internal/search/result"
 	"github.com/sourcegraph/sourcegraph/internal/search/streaming"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
-	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
@@ -81,12 +79,12 @@ func (c *SearchResultsResolver) repositoryResolvers(ctx context.Context, ids []a
 		return nil, nil
 	}
 
-	gsClient := gitserver.NewClient(c.db)
+	gsClient := gitserver.NewClient("graphql.search.results.repositories")
 	resolvers := make([]*RepositoryResolver, 0, len(ids))
 	err := c.db.Repos().StreamMinimalRepos(ctx, database.ReposListOptions{
 		IDs: ids,
 	}, func(repo *types.MinimalRepo) {
-		resolvers = append(resolvers, NewRepositoryResolver(c.db, gsClient, repo.ToRepo()))
+		resolvers = append(resolvers, NewMinimalRepositoryResolver(c.db, gsClient, repo.ID, repo.Name))
 	})
 	if err != nil {
 		return nil, err
@@ -115,7 +113,7 @@ func (c *SearchResultsResolver) Missing(ctx context.Context) ([]*RepositoryResol
 }
 
 func (c *SearchResultsResolver) Timedout(ctx context.Context) ([]*RepositoryResolver, error) {
-	return c.repositoryResolvers(ctx, c.repoIDsByStatus(search.RepoStatusTimedout))
+	return c.repositoryResolvers(ctx, c.repoIDsByStatus(search.RepoStatusTimedOut))
 }
 
 func (c *SearchResultsResolver) IndexUnavailable() bool {
@@ -131,19 +129,14 @@ func (sr *SearchResultsResolver) Results() []SearchResultResolver {
 }
 
 func matchesToResolvers(db database.DB, matches []result.Match) []SearchResultResolver {
-	type repoKey struct {
-		Name types.MinimalRepo
-		Rev  string
-	}
-	repoResolvers := make(map[repoKey]*RepositoryResolver, 10)
-	gsClient := gitserver.NewClient(db)
-	getRepoResolver := func(repoName types.MinimalRepo, rev string) *RepositoryResolver {
-		if existing, ok := repoResolvers[repoKey{repoName, rev}]; ok {
+	repoResolvers := make(map[types.MinimalRepo]*RepositoryResolver, 10)
+	gsClient := gitserver.NewClient("graphql.search.results")
+	getRepoResolver := func(repoName types.MinimalRepo) *RepositoryResolver {
+		if existing, ok := repoResolvers[repoName]; ok {
 			return existing
 		}
-		resolver := NewRepositoryResolver(db, gsClient, repoName.ToRepo())
-		resolver.RepoMatch.Rev = rev
-		repoResolvers[repoKey{repoName, rev}] = resolver
+		resolver := NewMinimalRepositoryResolver(db, gsClient, repoName.ID, repoName.Name)
+		repoResolvers[repoName] = resolver
 		return resolver
 	}
 
@@ -154,15 +147,17 @@ func matchesToResolvers(db database.DB, matches []result.Match) []SearchResultRe
 			resolvers = append(resolvers, &FileMatchResolver{
 				db:           db,
 				FileMatch:    *v,
-				RepoResolver: getRepoResolver(v.Repo, ""),
+				RepoResolver: getRepoResolver(v.Repo),
 			})
 		case *result.RepoMatch:
-			resolvers = append(resolvers, getRepoResolver(v.RepoName(), v.Rev))
+			resolvers = append(resolvers, getRepoResolver(v.RepoName()))
 		case *result.CommitMatch:
 			resolvers = append(resolvers, &CommitSearchResultResolver{
 				db:          db,
 				CommitMatch: *v,
 			})
+		case *result.OwnerMatch:
+			// todo(own): add OwnerSearchResultResolver
 		}
 	}
 	return resolvers
@@ -177,7 +172,7 @@ func (sr *SearchResultsResolver) ResultCount() int32 { return sr.MatchCount() }
 
 func (sr *SearchResultsResolver) ApproximateResultCount() string {
 	count := sr.MatchCount()
-	if sr.LimitHit() || sr.Stats.Status.Any(search.RepoStatusCloning|search.RepoStatusTimedout) {
+	if sr.LimitHit() || sr.Stats.Status.Any(search.RepoStatusCloning|search.RepoStatusTimedOut) {
 		return fmt.Sprintf("%d+", count)
 	}
 	return strconv.Itoa(int(count))
@@ -192,8 +187,8 @@ func (sr *SearchResultsResolver) ElapsedMilliseconds() int32 {
 }
 
 func (sr *SearchResultsResolver) DynamicFilters(ctx context.Context) []*searchFilterResolver {
-	tr, _ := trace.New(ctx, "DynamicFilters", "", trace.Tag{Key: "resolver", Value: "SearchResultsResolver"})
-	defer tr.Finish()
+	tr, _ := trace.New(ctx, "DynamicFilters", attribute.String("resolver", "SearchResultsResolver"))
+	defer tr.End()
 
 	var filters streaming.SearchFilters
 	filters.Update(streaming.SearchEvent{
@@ -225,48 +220,54 @@ func (sf *searchFilterResolver) Count() int32 {
 }
 
 func (sf *searchFilterResolver) LimitHit() bool {
-	return sf.filter.IsLimitHit
+	// TODO(camdencheek): calculate exhaustiveness correctly
+	return true
 }
 
 func (sf *searchFilterResolver) Kind() string {
-	return sf.filter.Kind
+	return string(sf.filter.Kind)
 }
 
 // blameFileMatch blames the specified file match to produce the time at which
 // the first line match inside of it was authored.
 func (sr *SearchResultsResolver) blameFileMatch(ctx context.Context, fm *result.FileMatch) (t time.Time, err error) {
-	span, ctx := ot.StartSpanFromContext(ctx, "blameFileMatch") //nolint:staticcheck // OT is deprecated
-	defer func() {
-		if err != nil {
-			ext.Error.Set(span, true)
-			span.SetTag("err", err.Error())
-		}
-		span.Finish()
-	}()
+	tr, ctx := trace.New(ctx, "SearchResultsResolver.blameFileMatch")
+	defer tr.EndWithErr(&err)
 
 	// Blame the first line match.
 	if len(fm.ChunkMatches) == 0 {
 		// No line match
 		return time.Time{}, nil
 	}
+
 	hm := fm.ChunkMatches[0]
-	hunks, err := gitserver.NewClient(sr.db).BlameFile(ctx, authz.DefaultSubRepoPermsChecker, fm.Repo.Name, fm.Path, &gitserver.BlameOptions{
+	hr, err := gitserver.NewClient("graphql.search.results.blame").StreamBlameFile(ctx, fm.Repo.Name, fm.Path, &gitserver.BlameOptions{
 		NewestCommit: fm.CommitID,
-		StartLine:    hm.Ranges[0].Start.Line,
-		EndLine:      hm.Ranges[0].Start.Line,
+		Range: &gitserver.BlameRange{
+			StartLine: hm.Ranges[0].Start.Line,
+			EndLine:   hm.Ranges[0].Start.Line,
+		},
 	})
 	if err != nil {
 		return time.Time{}, err
 	}
+	defer hr.Close()
 
-	return hunks[0].Author.Date, nil
+	// We are only interested in the first hunk, so we consume one and then return
+	// which calls hr.Close above.
+	hunk, err := hr.Read()
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return hunk.Author.Date, nil
 }
 
 func (sr *SearchResultsResolver) Sparkline(ctx context.Context) (sparkline []int32, err error) {
 	var (
-		days     = 30                 // number of days the sparkline represents
-		maxBlame = 100                // maximum number of file results to blame for date/time information.
-		run      = parallel.NewRun(8) // number of concurrent blame ops
+		days     = 30  // number of days the sparkline represents
+		maxBlame = 100 // maximum number of file results to blame for date/time information.
+		p        = pool.New().WithMaxGoroutines(8)
 	)
 
 	var (
@@ -299,8 +300,8 @@ loop:
 	for _, r := range sr.Matches {
 		r := r // shadow so it doesn't change in the goroutine
 		switch m := r.(type) {
-		case *result.RepoMatch:
-			// We don't care about repo results here.
+		case *result.RepoMatch, *result.OwnerMatch:
+			// We don't care about repo or owner results here.
 			continue
 		case *result.CommitMatch:
 			// Diff searches are cheap, because we implicitly have author date info.
@@ -316,12 +317,8 @@ loop:
 				continue loop
 			}
 
-			run.Acquire()
-			goroutine.Go(func() {
-				defer run.Release()
-
+			p.Go(func() {
 				// Blame the file match in order to retrieve date informatino.
-				var err error
 				t, err := sr.blameFileMatch(ctx, m)
 				if err != nil {
 					log15.Warn("failed to blame fileMatch during sparkline generation", "error", err)
@@ -333,9 +330,7 @@ loop:
 			panic("SearchResults.Sparkline unexpected union type state")
 		}
 	}
-	if span := opentracing.SpanFromContext(ctx); span != nil {
-		span.SetTag("blame_ops", blameOps)
-	}
+	p.Wait()
 	return sparkline, nil
 }
 
@@ -370,7 +365,7 @@ func logPrometheusBatch(status, alertType, requestSource, requestName string, el
 
 func logBatch(ctx context.Context, searchInputs *search.Inputs, srr *SearchResultsResolver, err error) {
 	var status, alertType string
-	status = DetermineStatusForLogs(srr.SearchAlert, srr.Stats, err)
+	status = searchclient.DetermineStatusForLogs(srr.SearchAlert, srr.Stats, err)
 	if srr.SearchAlert != nil {
 		alertType = srr.SearchAlert.PrometheusType
 	}
@@ -391,6 +386,7 @@ func logBatch(ctx context.Context, searchInputs *search.Inputs, srr *SearchResul
 			Status:        status,
 			AlertType:     alertType,
 			DurationMs:    srr.elapsed.Milliseconds(),
+			LatencyMs:     nil, // no latency for batch requests
 			ResultSize:    n,
 			Error:         err,
 		})
@@ -422,25 +418,6 @@ func (r *searchResolver) resultsToResolver(matches result.Matches, alert *search
 	}
 }
 
-// DetermineStatusForLogs determines the final status of a search for logging
-// purposes.
-func DetermineStatusForLogs(alert *search.Alert, stats streaming.Stats, err error) string {
-	switch {
-	case err == context.DeadlineExceeded:
-		return "timeout"
-	case err != nil:
-		return "error"
-	case stats.Status.All(search.RepoStatusTimedout) && stats.Status.Len() == len(stats.Repos):
-		return "timeout"
-	case stats.Status.Any(search.RepoStatusTimedout):
-		return "partial_timeout"
-	case alert != nil:
-		return "alert"
-	default:
-		return "success"
-	}
-}
-
 type searchResultsStats struct {
 	logger                  log.Logger
 	JApproximateResultCount string
@@ -458,7 +435,7 @@ func (srs *searchResultsStats) ApproximateResultCount() string { return srs.JApp
 func (srs *searchResultsStats) Sparkline() []int32             { return srs.JSparkline }
 
 var (
-	searchResultsStatsCache   = rcache.NewWithTTL("search_results_stats", 3600) // 1h
+	searchResultsStatsCache   = rcache.NewWithTTL(redispool.Cache, "search_results_stats", 3600) // 1h
 	searchResultsStatsCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "src_graphql_search_results_stats_cache_hit",
 		Help: "Counts cache hits and misses for search results stats (e.g. sparklines).",
@@ -474,7 +451,7 @@ func (r *searchResolver) Stats(ctx context.Context) (stats *searchResultsStats, 
 		if err := json.Unmarshal(jsonRes, &stats); err != nil {
 			return nil, err
 		}
-		stats.logger = r.logger.Scoped("searchResultsStats", "provides status on search results")
+		stats.logger = r.logger.Scoped("searchResultsStats")
 		stats.sr = r
 		return stats, nil
 	}
@@ -506,7 +483,7 @@ func (r *searchResolver) Stats(ctx context.Context) (stats *searchResultsStats, 
 		}
 
 		status := v.Stats.Status
-		if !status.Any(search.RepoStatusCloning) && !status.Any(search.RepoStatusTimedout) {
+		if !status.Any(search.RepoStatusCloning) && !status.Any(search.RepoStatusTimedOut) {
 			break // zero results, but no cloning or timed out repos. No point in retrying.
 		}
 
@@ -514,7 +491,7 @@ func (r *searchResolver) Stats(ctx context.Context) (stats *searchResultsStats, 
 		status.Filter(search.RepoStatusCloning, func(api.RepoID) {
 			cloning++
 		})
-		status.Filter(search.RepoStatusTimedout, func(api.RepoID) {
+		status.Filter(search.RepoStatusTimedOut, func(api.RepoID) {
 			timedout++
 		})
 
@@ -535,7 +512,7 @@ func (r *searchResolver) Stats(ctx context.Context) (stats *searchResultsStats, 
 		return nil, err // sparkline generation failed, so don't cache.
 	}
 	stats = &searchResultsStats{
-		logger:                  r.logger.Scoped("searchResultsStats", "provides status on search results"),
+		logger:                  r.logger.Scoped("searchResultsStats"),
 		JApproximateResultCount: v.ApproximateResultCount(),
 		JSparkline:              sparkline,
 		sr:                      r,

@@ -1,21 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import classNames from 'classnames'
+import DOMPurify from 'dompurify'
 import { range } from 'lodash'
 import { of } from 'rxjs'
 import { catchError } from 'rxjs/operators'
-import sanitizeHtml from 'sanitize-html'
 
 import { highlightNode, logger } from '@sourcegraph/common'
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
+import type { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
 import { highlightCode } from '@sourcegraph/shared/src/search'
-import { CommitMatch } from '@sourcegraph/shared/src/search/stream'
+import type { CommitMatch } from '@sourcegraph/shared/src/search/stream'
 import { LoadingSpinner, Link, Code, Markdown } from '@sourcegraph/wildcard'
 
-import { LastSyncedIcon } from './LastSyncedIcon'
-
 import styles from './CommitSearchResultMatch.module.scss'
-import searchResultStyles from './SearchResult.module.scss'
+import resultStyles from './ResultContainer.module.scss'
 
 interface CommitSearchResultMatchProps extends PlatformContextProps<'requestGraphQL'> {
     item: CommitMatch
@@ -47,7 +45,7 @@ export const CommitSearchResultMatch: React.FunctionComponent<CommitSearchResult
                 // Return the rendered markdown if highlighting fails.
                 catchError(error => {
                     logger.log(error)
-                    return of('<pre>' + sanitizeHtml(item.content) + '</pre>')
+                    return of('<pre>' + DOMPurify.sanitize(item.content) + '</pre>')
                 })
             )
             .subscribe(highlightedCommitContent => {
@@ -76,39 +74,39 @@ export const CommitSearchResultMatch: React.FunctionComponent<CommitSearchResult
     const openInNewTabProps = openInNewTab ? { target: '_blank', rel: 'noopener noreferrer' } : undefined
 
     return (
-        <div className={styles.commitSearchResultMatch}>
-            {item.repoLastFetched && (
-                <LastSyncedIcon className={styles.lastSyncedIcon} lastSyncedTime={item.repoLastFetched} />
+        <Link
+            key={item.url}
+            to={item.url}
+            className={classNames(resultStyles.searchResultMatch, resultStyles.clickable, resultStyles.focusableBlock)}
+            {...openInNewTabProps}
+        >
+            {highlightedCommitContent !== undefined ? (
+                <Code>
+                    <Markdown
+                        ref={containerElement}
+                        testId="search-result-match-code-excerpt"
+                        className={classNames(styles.markdown, styles.codeExcerpt)}
+                        dangerousInnerHTML={highlightedCommitContent}
+                    />
+                </Code>
+            ) : (
+                <>
+                    <LoadingSpinner className={styles.loader} />
+                    <table>
+                        <tbody>
+                            {range(numLines).map(index => (
+                                <tr key={`${item.url}#${index}`}>
+                                    {/* create empty space to fill viewport (as if the blob content were already fetched, otherwise we'll overfetch) */}
+                                    <td className={styles.lineHidden}>
+                                        <Code>{index}</Code>
+                                    </td>
+                                    <td className="code"> </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </>
             )}
-            <Link key={item.url} to={item.url} className={searchResultStyles.searchResultMatch} {...openInNewTabProps}>
-                {highlightedCommitContent !== undefined ? (
-                    <Code>
-                        <Markdown
-                            ref={containerElement}
-                            testId="search-result-match-code-excerpt"
-                            className={classNames(styles.markdown, styles.codeExcerpt)}
-                            dangerousInnerHTML={highlightedCommitContent}
-                        />
-                    </Code>
-                ) : (
-                    <>
-                        <LoadingSpinner className={styles.loader} />
-                        <table>
-                            <tbody>
-                                {range(numLines).map(index => (
-                                    <tr key={`${item.url}#${index}`}>
-                                        {/* create empty space to fill viewport (as if the blob content were already fetched, otherwise we'll overfetch) */}
-                                        <td className={styles.lineHidden}>
-                                            <Code>{index}</Code>
-                                        </td>
-                                        <td className="code"> </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </>
-                )}
-            </Link>
-        </div>
+        </Link>
     )
 }

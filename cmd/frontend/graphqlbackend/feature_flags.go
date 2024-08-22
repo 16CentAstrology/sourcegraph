@@ -7,6 +7,9 @@ import (
 	"github.com/graph-gophers/graphql-go/relay"
 
 	"github.com/sourcegraph/sourcegraph/internal/actor"
+	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
+
+	sgactor "github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/featureflag"
@@ -40,6 +43,12 @@ type FeatureFlagBooleanResolver struct {
 
 func (f *FeatureFlagBooleanResolver) Name() string { return f.inner.Name }
 func (f *FeatureFlagBooleanResolver) Value() bool  { return f.inner.Bool.Value }
+func (f *FeatureFlagBooleanResolver) CreatedAt() gqlutil.DateTime {
+	return gqlutil.DateTime{Time: f.inner.CreatedAt}
+}
+func (f *FeatureFlagBooleanResolver) UpdatedAt() gqlutil.DateTime {
+	return gqlutil.DateTime{Time: f.inner.UpdatedAt}
+}
 func (f *FeatureFlagBooleanResolver) Overrides(ctx context.Context) ([]*FeatureFlagOverrideResolver, error) {
 	overrides, err := f.db.FeatureFlags().GetOverridesForFlag(ctx, f.inner.Name)
 	if err != nil {
@@ -56,6 +65,12 @@ type FeatureFlagRolloutResolver struct {
 
 func (f *FeatureFlagRolloutResolver) Name() string              { return f.inner.Name }
 func (f *FeatureFlagRolloutResolver) RolloutBasisPoints() int32 { return f.inner.Rollout.Rollout }
+func (f *FeatureFlagRolloutResolver) CreatedAt() gqlutil.DateTime {
+	return gqlutil.DateTime{Time: f.inner.CreatedAt}
+}
+func (f *FeatureFlagRolloutResolver) UpdatedAt() gqlutil.DateTime {
+	return gqlutil.DateTime{Time: f.inner.UpdatedAt}
+}
 func (f *FeatureFlagRolloutResolver) Overrides(ctx context.Context) ([]*FeatureFlagOverrideResolver, error) {
 	overrides, err := f.db.FeatureFlags().GetOverridesForFlag(ctx, f.inner.Name)
 	if err != nil {
@@ -158,7 +173,7 @@ func (r *schemaResolver) OrganizationFeatureFlagValue(ctx context.Context, args 
 		return false, err
 	}
 	// same behavior as if the flag does not exist
-	if err := auth.CheckOrgAccess(ctx, r.db, org); err != nil {
+	if err := auth.CheckOrgAccessOrSiteAdmin(ctx, r.db, org); err != nil {
 		return false, nil
 	}
 
@@ -170,7 +185,7 @@ func (r *schemaResolver) OrganizationFeatureFlagValue(ctx context.Context, args 
 }
 
 func (r *schemaResolver) OrganizationFeatureFlagOverrides(ctx context.Context) ([]*FeatureFlagOverrideResolver, error) {
-	actor := actor.FromContext(ctx)
+	actor := sgactor.FromContext(ctx)
 
 	if !actor.IsAuthenticated() {
 		return nil, errors.New("no current user")
@@ -277,10 +292,6 @@ func (r *schemaResolver) CreateFeatureFlagOverride(ctx context.Context, args str
 	FlagName  string
 	Value     bool
 }) (*FeatureFlagOverrideResolver, error) {
-	if err := auth.CheckCurrentUserIsSiteAdmin(ctx, r.db); err != nil {
-		return nil, err
-	}
-
 	fo := &featureflag.Override{
 		FlagName: args.FlagName,
 		Value:    args.Value,
@@ -288,6 +299,11 @@ func (r *schemaResolver) CreateFeatureFlagOverride(ctx context.Context, args str
 
 	var uid, oid int32
 	if err := UnmarshalNamespaceID(args.Namespace, &uid, &oid); err != nil {
+		return nil, err
+	}
+
+	// Allow users to add their own overrides
+	if err := auth.CheckSiteAdminOrSameUserFromActor(actor.FromContext(ctx), r.db, uid); err != nil {
 		return nil, err
 	}
 

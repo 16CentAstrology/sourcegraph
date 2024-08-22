@@ -1,17 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { mdiCog, mdiAccount, mdiDelete, mdiPlus } from '@mdi/js'
-import * as H from 'history'
-import { RouteComponentProps } from 'react-router'
 import { Subject } from 'rxjs'
 
 import { asError, isErrorLike, pluralize } from '@sourcegraph/common'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { Button, Link, Icon, H2, Text, Tooltip, ErrorAlert } from '@sourcegraph/wildcard'
 
 import { FilteredConnection } from '../components/FilteredConnection'
 import { PageTitle } from '../components/PageTitle'
-import { OrganizationFields } from '../graphql-operations'
+import type { OrganizationFields } from '../graphql-operations'
 import { orgURL } from '../org'
 
 import { deleteOrganization, fetchAllOrganizations } from './backend'
@@ -26,7 +25,6 @@ interface OrgNodeProps {
      * Called when the org is updated by an action in this list item.
      */
     onDidUpdate?: () => void
-    history: H.History
 }
 
 const OrgNode: React.FunctionComponent<React.PropsWithChildren<OrgNodeProps>> = ({ node, onDidUpdate }) => {
@@ -94,22 +92,22 @@ const OrgNode: React.FunctionComponent<React.PropsWithChildren<OrgNodeProps>> = 
     )
 }
 
-interface Props extends RouteComponentProps<{}>, TelemetryProps {}
+interface Props extends TelemetryProps, TelemetryV2Props {}
 
 /**
  * A page displaying the orgs on this site.
  */
 export const SiteAdminOrgsPage: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
     telemetryService,
-    history,
-    location,
+    telemetryRecorder,
 }) => {
     const orgUpdates = useMemo(() => new Subject<void>(), [])
     const onDidUpdateOrg = useCallback((): void => orgUpdates.next(), [orgUpdates])
 
     useEffect(() => {
         telemetryService.logViewEvent('SiteAdminOrgs')
-    }, [telemetryService])
+        telemetryRecorder.recordEvent('admin.orgs', 'view')
+    }, [telemetryService, telemetryRecorder])
 
     return (
         <div className="site-admin-orgs-page">
@@ -133,11 +131,8 @@ export const SiteAdminOrgsPage: React.FunctionComponent<React.PropsWithChildren<
                 nodeComponent={OrgNode}
                 nodeComponentProps={{
                     onDidUpdate: onDidUpdateOrg,
-                    history,
                 }}
                 updates={orgUpdates}
-                history={history}
-                location={location}
             />
         </div>
     )

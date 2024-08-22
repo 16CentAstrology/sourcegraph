@@ -13,14 +13,11 @@ type Extensions struct {
 	DateRange string
 	Grouping  string
 	DB        database.DB
-	Cache     bool
+	Cache     KeyValue
 }
 
 func (e *Extensions) Jetbrains() (*AnalyticsFetcher, error) {
 	nodesQuery, summaryQuery, err := makeEventLogsQueries(
-		e.Ctx,
-		e.DB,
-		e.Cache,
 		e.DateRange,
 		e.Grouping,
 		[]string{"IDESearchSubmitted", "VSCESearchSubmitted"},
@@ -37,14 +34,12 @@ func (e *Extensions) Jetbrains() (*AnalyticsFetcher, error) {
 		nodesQuery:   nodesQuery,
 		summaryQuery: summaryQuery,
 		group:        "Extensions:Jetbrains",
+		cache:        NoopCache{},
 	}, nil
 }
 
 func (e *Extensions) Vscode() (*AnalyticsFetcher, error) {
 	nodesQuery, summaryQuery, err := makeEventLogsQueries(
-		e.Ctx,
-		e.DB,
-		e.Cache,
 		e.DateRange,
 		e.Grouping,
 		[]string{"IDESearchSubmitted", "VSCESearchSubmitted"},
@@ -67,9 +62,6 @@ func (e *Extensions) Vscode() (*AnalyticsFetcher, error) {
 
 func (e *Extensions) Browser() (*AnalyticsFetcher, error) {
 	nodesQuery, summaryQuery, err := makeEventLogsQueries(
-		e.Ctx,
-		e.DB,
-		e.Cache,
 		e.DateRange,
 		e.Grouping,
 		[]string{"goToDefinition.preloaded", "goToDefinition", "findReferences"},

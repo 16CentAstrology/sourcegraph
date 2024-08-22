@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/job"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
@@ -51,10 +52,14 @@ func TestComputeExcludedJob(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			parsedFilters := make([]query.ParsedRepoFilter, len(tc.repoFilters))
 			for i, repoFilter := range tc.repoFilters {
-				parsedFilters[i] = query.ParseRepositoryRevisions(repoFilter)
+				parsedFilter, err := query.ParseRepositoryRevisions(repoFilter)
+				if err != nil {
+					t.Fatalf("unexpected error parsing repo filter %s", repoFilter)
+				}
+				parsedFilters[i] = parsedFilter
 			}
 
-			repoStore := database.NewMockRepoStore()
+			repoStore := dbmocks.NewMockRepoStore()
 			repoStore.CountFunc.SetDefaultHook(func(_ context.Context, opt database.ReposListOptions) (int, error) {
 				// Verify that the include patterns passed to the DB match the repo filters
 				numFilters := len(parsedFilters)
@@ -73,7 +78,7 @@ func TestComputeExcludedJob(t *testing.T) {
 				}
 			})
 
-			db := database.NewMockDB()
+			db := dbmocks.NewMockDB()
 			db.ReposFunc.SetDefaultReturn(repoStore)
 
 			var result streaming.SearchEvent

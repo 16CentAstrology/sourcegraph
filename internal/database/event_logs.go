@@ -12,8 +12,9 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/keegancsmith/sqlf"
 	"github.com/lib/pq"
+	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/sourcegraph/sourcegraph/internal/actor"
+	sgactor "github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database/basestore"
 	"github.com/sourcegraph/sourcegraph/internal/database/batch"
@@ -22,9 +23,11 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/featureflag"
 	"github.com/sourcegraph/sourcegraph/internal/jsonc"
 	"github.com/sourcegraph/sourcegraph/internal/timeutil"
+	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/version"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/lib/pointers"
 )
 
 type EventLogStore interface {
@@ -34,10 +37,28 @@ type EventLogStore interface {
 	// AggregatedCodeIntelInvestigationEvents calculates CodeIntelAggregatedInvestigationEvent for each unique investigation type.
 	AggregatedCodeIntelInvestigationEvents(ctx context.Context) ([]types.CodeIntelAggregatedInvestigationEvent, error)
 
+	// AggregatedCodyUsgae calculates aggregated usage of Cody.
+	AggregatedCodyUsage(ctx context.Context, now time.Time) (*types.CodyAggregatedUsage, error)
+
+	// AggregatedRepoMetadataEvents calculates RepoMetadataAggregatedEvent for each every unique event type related to RepoMetadata.
+	AggregatedRepoMetadataEvents(ctx context.Context, now time.Time, period PeriodType) (*types.RepoMetadataAggregatedEvents, error)
+
 	// AggregatedSearchEvents calculates SearchAggregatedEvent for each every unique event type related to search.
 	AggregatedSearchEvents(ctx context.Context, now time.Time) ([]types.SearchAggregatedEvent, error)
 
+	// BulkInsert should only be used in internal/telemetry/teestore.
+	// BulkInsert does NOT respect context cancellation, as it is assumed that
+	// we never drop events once we attempt to store it.
+	//
+	// Deprecated: Use EventRecorder from internal/telemetryrecorder instead.
+	// Learn more: https://docs-legacy.sourcegraph.com/dev/background-information/telemetry
 	BulkInsert(ctx context.Context, events []*Event) error
+
+	// Insert is a legacy mechanism for inserting a single event.
+	//
+	// Deprecated: Use EventRecorder from internal/telemetryrecorder instead.
+	// Learn more: https://docs-legacy.sourcegraph.com/dev/background-information/telemetry
+	Insert(ctx context.Context, e *Event) error
 
 	// CodeIntelligenceCrossRepositoryWAUs returns the WAU (current week) with any (precise or search-based) cross-repository code intelligence event.
 	CodeIntelligenceCrossRepositoryWAUs(ctx context.Context) (int, error)
@@ -73,6 +94,9 @@ type EventLogStore interface {
 	// CodeIntelligenceWAUs returns the WAU (current week) with any (precise or search-based) code intelligence event.
 	CodeIntelligenceWAUs(ctx context.Context) (int, error)
 
+	// CountBySQL gets a count of event logged based on the query.
+	CountBySQL(ctx context.Context, querySuffix *sqlf.Query) (int, error)
+
 	// CountByUserID gets a count of events logged by a given user.
 	CountByUserID(ctx context.Context, userID int32) (int, error)
 
@@ -104,15 +128,13 @@ type EventLogStore interface {
 	// CountUsersWithSetting returns the number of users wtih the given temporary setting set to the given value.
 	CountUsersWithSetting(ctx context.Context, setting string, value any) (int, error)
 
-	Insert(ctx context.Context, e *Event) error
-
 	// LatestPing returns the most recently recorded ping event.
 	LatestPing(ctx context.Context) (*Event, error)
 
 	// ListAll gets all event logs in descending order of timestamp.
 	ListAll(ctx context.Context, opt EventLogsListOptions) ([]*Event, error)
 
-	// ListExportableEvents gets all event logs that are allowed to be exported.
+	// ListExportableEvents gets a batch of event logs that are allowed to be exported.
 	ListExportableEvents(ctx context.Context, after, limit int) ([]*Event, error)
 
 	ListUniqueUsersAll(ctx context.Context, startDate, endDate time.Time) ([]int32, error)
@@ -129,8 +151,11 @@ type EventLogStore interface {
 	// '%codeintel%' events in the event_logs table.
 	UsersUsageCounts(ctx context.Context) (counts []types.UserUsageCounts, err error)
 
-	Transact(ctx context.Context) (EventLogStore, error)
-	Done(error) error
+	// OwnershipFeatureActivity returns (M|W|D)AUs for the most recent of each period
+	// for each of given event names.
+	OwnershipFeatureActivity(ctx context.Context, now time.Time, eventNames ...string) (map[string]*types.OwnershipUsageStatisticsActiveUsers, error)
+
+	WithTransact(context.Context, func(EventLogStore) error) error
 	With(other basestore.ShareableStore) EventLogStore
 	basestore.ShareableStore
 }
@@ -148,9 +173,10 @@ func (l *eventLogStore) With(other basestore.ShareableStore) EventLogStore {
 	return &eventLogStore{Store: l.Store.With(other)}
 }
 
-func (l *eventLogStore) Transact(ctx context.Context) (EventLogStore, error) {
-	txBase, err := l.Store.Transact(ctx)
-	return &eventLogStore{Store: txBase}, err
+func (l *eventLogStore) WithTransact(ctx context.Context, f func(EventLogStore) error) error {
+	return l.Store.WithTransact(ctx, func(tx *basestore.Store) error {
+		return f(&eventLogStore{Store: tx})
+	})
 }
 
 // SanitizeEventURL makes the given URL is using HTTP/HTTPS scheme and within
@@ -177,32 +203,42 @@ func SanitizeEventURL(raw string) string {
 
 // Event contains information needed for logging an event.
 type Event struct {
-	ID               int32
-	Name             string
-	URL              string
-	UserID           uint32
-	AnonymousUserID  string
-	Argument         json.RawMessage
-	PublicArgument   json.RawMessage
-	Source           string
-	Version          string
-	Timestamp        time.Time
-	EvaluatedFlagSet featureflag.EvaluatedFlagSet
-	CohortID         *string // date in YYYY-MM-DD format
-	FirstSourceURL   *string
-	LastSourceURL    *string
-	Referrer         *string
-	DeviceID         *string
-	InsertID         *string
+	ID                     int64
+	Name                   string
+	URL                    string
+	UserID                 uint32
+	AnonymousUserID        string
+	Argument               json.RawMessage
+	PublicArgument         json.RawMessage
+	Source                 string
+	Version                string
+	Timestamp              time.Time
+	EvaluatedFlagSet       featureflag.EvaluatedFlagSet
+	CohortID               *string // date in YYYY-MM-DD format
+	FirstSourceURL         *string
+	LastSourceURL          *string
+	Referrer               *string
+	DeviceID               *string
+	InsertID               *string
+	Client                 *string
+	BillingProductCategory *string
+	BillingEventID         *string
 }
 
 func (l *eventLogStore) Insert(ctx context.Context, e *Event) error {
+	// We should eventually remove this Insert helper entirely.
+	//lint:ignore SA1019 existing usage of deprecated functionality.
 	return l.BulkInsert(ctx, []*Event{e})
 }
 
 const EventLogsSourcegraphOperatorKey = "sourcegraph_operator"
 
 func (l *eventLogStore) BulkInsert(ctx context.Context, events []*Event) error {
+	var tr trace.Trace
+	tr, ctx = trace.New(ctx, "eventLogs.BulkInsert",
+		attribute.Int("events", len(events)))
+	defer tr.End()
+
 	coalesce := func(v json.RawMessage) json.RawMessage {
 		if v != nil {
 			return v
@@ -219,7 +255,7 @@ func (l *eventLogStore) BulkInsert(ctx context.Context, events []*Event) error {
 		return *in
 	}
 
-	actor := actor.FromContext(ctx)
+	actor := sgactor.FromContext(ctx)
 	rowValues := make(chan []any, len(events))
 	for _, event := range events {
 		featureFlags, err := json.Marshal(event.EvaluatedFlagSet)
@@ -235,10 +271,21 @@ func (l *eventLogStore) BulkInsert(ctx context.Context, events []*Event) error {
 				true,
 				EventLogsSourcegraphOperatorKey,
 			)
-			publicArgument = json.RawMessage(result)
 			if err != nil {
 				return errors.Wrap(err, `edit "public_argument" for Sourcegraph operator`)
 			}
+			publicArgument = json.RawMessage(result)
+		}
+		if tr := trace.FromContext(ctx); tr.SpanContext().IsValid() {
+			result, err := jsonc.Edit(
+				string(publicArgument),
+				tr.SpanContext().TraceID().String(),
+				"interaction.trace_id",
+			)
+			if err != nil {
+				return errors.Wrap(err, `edit "interaction.trace_id" for trace context`)
+			}
+			publicArgument = json.RawMessage(result)
 		}
 
 		rowValues <- []any{
@@ -261,12 +308,21 @@ func (l *eventLogStore) BulkInsert(ctx context.Context, events []*Event) error {
 			event.Referrer,
 			ensureUuid(event.DeviceID),
 			ensureUuid(event.InsertID),
+			event.Client,
+			event.BillingProductCategory,
+			event.BillingEventID,
 		}
 	}
 	close(rowValues)
 
+	// Create a cancel-free context to avoid interrupting the insert when
+	// the parent context is cancelled, and add our own timeout on the insert
+	// to make sure things don't get stuck in an unbounded manner.
+	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
+
 	return batch.InsertValues(
-		ctx,
+		insertCtx,
 		l.Handle(),
 		"event_logs",
 		batch.MaxNumPostgresParameters,
@@ -287,13 +343,16 @@ func (l *eventLogStore) BulkInsert(ctx context.Context, events []*Event) error {
 			"referrer",
 			"device_id",
 			"insert_id",
+			"client",
+			"billing_product_category",
+			"billing_event_id",
 		},
 		rowValues,
 	)
 }
 
 func (l *eventLogStore) getBySQL(ctx context.Context, querySuffix *sqlf.Query) ([]*Event, error) {
-	q := sqlf.Sprintf("SELECT id, name, url, user_id, anonymous_user_id, source, argument, version, timestamp, feature_flags, cohort_id, first_source_url, last_source_url, referrer, device_id, insert_id FROM event_logs %s", querySuffix)
+	q := sqlf.Sprintf("SELECT id, name, url, user_id, anonymous_user_id, source, argument, public_argument, version, timestamp, feature_flags, cohort_id, first_source_url, last_source_url, referrer, device_id, insert_id FROM event_logs %s", querySuffix)
 	rows, err := l.Query(ctx, q)
 	if err != nil {
 		return nil, err
@@ -303,7 +362,7 @@ func (l *eventLogStore) getBySQL(ctx context.Context, querySuffix *sqlf.Query) (
 	for rows.Next() {
 		r := Event{}
 		var rawFlags []byte
-		err := rows.Scan(&r.ID, &r.Name, &r.URL, &r.UserID, &r.AnonymousUserID, &r.Source, &r.Argument, &r.Version, &r.Timestamp, &rawFlags, &r.CohortID, &r.FirstSourceURL, &r.LastSourceURL, &r.Referrer, &r.DeviceID, &r.InsertID)
+		err := rows.Scan(&r.ID, &r.Name, &r.URL, &r.UserID, &r.AnonymousUserID, &r.Source, &r.Argument, &r.PublicArgument, &r.Version, &r.Timestamp, &rawFlags, &r.CohortID, &r.FirstSourceURL, &r.LastSourceURL, &r.Referrer, &r.DeviceID, &r.InsertID)
 		if err != nil {
 			return nil, err
 		}
@@ -325,21 +384,27 @@ func (l *eventLogStore) getBySQL(ctx context.Context, querySuffix *sqlf.Query) (
 type EventLogsListOptions struct {
 	// UserID specifies the user whose events should be included.
 	UserID int32
-
 	*LimitOffset
-
 	EventName *string
+	// AfterID specifies a minimum event ID of listed events.
+	AfterID int
 }
 
 func (l *eventLogStore) ListAll(ctx context.Context, opt EventLogsListOptions) ([]*Event, error) {
 	conds := []*sqlf.Query{sqlf.Sprintf("TRUE")}
+	orderDirection := "DESC"
+	if opt.AfterID > 0 {
+		conds = append(conds, sqlf.Sprintf("id > %d", opt.AfterID))
+		orderDirection = "ASC"
+	}
 	if opt.UserID != 0 {
 		conds = append(conds, sqlf.Sprintf("user_id = %d", opt.UserID))
 	}
 	if opt.EventName != nil {
 		conds = append(conds, sqlf.Sprintf("name = %s", opt.EventName))
 	}
-	return l.getBySQL(ctx, sqlf.Sprintf("WHERE %s ORDER BY timestamp DESC %s", sqlf.Join(conds, "AND"), opt.LimitOffset.SQL()))
+	queryTemplate := fmt.Sprintf("WHERE %%s ORDER BY id %s %%s", orderDirection)
+	return l.getBySQL(ctx, sqlf.Sprintf(queryTemplate, sqlf.Join(conds, "AND"), opt.LimitOffset.SQL()))
 }
 
 func (l *eventLogStore) ListExportableEvents(ctx context.Context, after, limit int) ([]*Event, error) {
@@ -359,15 +424,15 @@ func (l *eventLogStore) LatestPing(ctx context.Context) (*Event, error) {
 }
 
 func (l *eventLogStore) CountByUserID(ctx context.Context, userID int32) (int, error) {
-	return l.countBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d", userID))
+	return l.CountBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d", userID))
 }
 
 func (l *eventLogStore) CountByUserIDAndEventName(ctx context.Context, userID int32, name string) (int, error) {
-	return l.countBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d AND name = %s", userID, name))
+	return l.CountBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d AND name = %s", userID, name))
 }
 
 func (l *eventLogStore) CountByUserIDAndEventNamePrefix(ctx context.Context, userID int32, namePrefix string) (int, error) {
-	return l.countBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d AND name LIKE %s", userID, namePrefix+"%"))
+	return l.CountBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d AND name LIKE %s", userID, namePrefix+"%"))
 }
 
 func (l *eventLogStore) CountByUserIDAndEventNames(ctx context.Context, userID int32, names []string) (int, error) {
@@ -375,11 +440,11 @@ func (l *eventLogStore) CountByUserIDAndEventNames(ctx context.Context, userID i
 	for _, v := range names {
 		items = append(items, sqlf.Sprintf("%s", v))
 	}
-	return l.countBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d AND name IN (%s)", userID, sqlf.Join(items, ",")))
+	return l.CountBySQL(ctx, sqlf.Sprintf("WHERE user_id = %d AND name IN (%s)", userID, sqlf.Join(items, ",")))
 }
 
-// countBySQL gets a count of event logs.
-func (l *eventLogStore) countBySQL(ctx context.Context, querySuffix *sqlf.Query) (int, error) {
+// CountBySQL gets a count of event logs.
+func (l *eventLogStore) CountBySQL(ctx context.Context, querySuffix *sqlf.Query) (int, error) {
 	q := sqlf.Sprintf("SELECT COUNT(*) FROM event_logs %s", querySuffix)
 	r := l.QueryRow(ctx, q)
 	var count int
@@ -537,7 +602,7 @@ func jsonSettingFragment(setting string, value any) string {
 func buildCountUniqueUserConds(opt *CountUniqueUsersOptions) []*sqlf.Query {
 	conds := []*sqlf.Query{sqlf.Sprintf("TRUE")}
 	if opt != nil {
-		conds = buildCommonUsageConds(&opt.CommonUsageOptions, conds)
+		conds = BuildCommonUsageConds(&opt.CommonUsageOptions, conds)
 
 		if opt.EventFilters != nil {
 			if opt.EventFilters.ByEventNamePrefix != "" {
@@ -561,7 +626,7 @@ func buildCountUniqueUserConds(opt *CountUniqueUsersOptions) []*sqlf.Query {
 	return conds
 }
 
-func buildCommonUsageConds(opt *CommonUsageOptions, conds []*sqlf.Query) []*sqlf.Query {
+func BuildCommonUsageConds(opt *CommonUsageOptions, conds []*sqlf.Query) []*sqlf.Query {
 	if opt != nil {
 		if opt.ExcludeSystemUsers {
 			conds = append(conds, sqlf.Sprintf("event_logs.user_id > 0 OR event_logs.anonymous_user_id <> 'backend'"))
@@ -720,7 +785,7 @@ unique_users_by_dwm AS (
 	` + aggregatedUserIDQueryFragment + ` as aggregated_user_id
   FROM event_logs
   LEFT OUTER JOIN users ON users.id = event_logs.user_id
-  WHERE (%s)
+  WHERE (%s) AND anonymous_user_id != 'backend'
   GROUP BY day_period, week_period, month_period, aggregated_user_id, registered
 ),
 unique_users_by_day AS (
@@ -869,6 +934,7 @@ SELECT
   COUNT(*) FILTER (WHERE event_logs.name ='SearchResultsQueried') as search_count,
   COUNT(*) FILTER (WHERE event_logs.name LIKE '%codeintel%') as codeintel_count
 FROM event_logs
+WHERE anonymous_user_id != 'backend'
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2 ASC;
 `
@@ -892,21 +958,25 @@ func (l *eventLogStore) SiteUsageCurrentPeriods(ctx context.Context) (types.Site
 func (l *eventLogStore) siteUsageCurrentPeriods(ctx context.Context, now time.Time, opt *SiteUsageOptions) (summary types.SiteUsageSummary, err error) {
 	conds := []*sqlf.Query{sqlf.Sprintf("TRUE")}
 	if opt != nil {
-		conds = buildCommonUsageConds(&opt.CommonUsageOptions, conds)
+		conds = BuildCommonUsageConds(&opt.CommonUsageOptions, conds)
 	}
 
-	query := sqlf.Sprintf(siteUsageCurrentPeriodsQuery, now, now, now, now, sqlf.Join(conds, ") AND ("))
+	query := sqlf.Sprintf(siteUsageCurrentPeriodsQuery, now, now, now, now, now, now, sqlf.Join(conds, ") AND ("))
 
 	err = l.QueryRow(ctx, query).Scan(
+		&summary.RollingMonth,
 		&summary.Month,
 		&summary.Week,
 		&summary.Day,
+		&summary.UniquesRollingMonth,
 		&summary.UniquesMonth,
 		&summary.UniquesWeek,
 		&summary.UniquesDay,
+		&summary.RegisteredUniquesRollingMonth,
 		&summary.RegisteredUniquesMonth,
 		&summary.RegisteredUniquesWeek,
 		&summary.RegisteredUniquesDay,
+		&summary.IntegrationUniquesRollingMonth,
 		&summary.IntegrationUniquesMonth,
 		&summary.IntegrationUniquesWeek,
 		&summary.IntegrationUniquesDay,
@@ -917,16 +987,21 @@ func (l *eventLogStore) siteUsageCurrentPeriods(ctx context.Context, now time.Ti
 
 var siteUsageCurrentPeriodsQuery = `
 SELECT
+  current_rolling_month,
   current_month,
   current_week,
   current_day,
 
+  COUNT(DISTINCT user_id) FILTER (WHERE rolling_month = current_rolling_month) AS uniques_rolling_month,
   COUNT(DISTINCT user_id) FILTER (WHERE month = current_month) AS uniques_month,
   COUNT(DISTINCT user_id) FILTER (WHERE week = current_week) AS uniques_week,
   COUNT(DISTINCT user_id) FILTER (WHERE day = current_day) AS uniques_day,
+  COUNT(DISTINCT user_id) FILTER (WHERE rolling_month = current_rolling_month AND registered) AS registered_uniques_rolling_month,
   COUNT(DISTINCT user_id) FILTER (WHERE month = current_month AND registered) AS registered_uniques_month,
   COUNT(DISTINCT user_id) FILTER (WHERE week = current_week AND registered) AS registered_uniques_week,
   COUNT(DISTINCT user_id) FILTER (WHERE day = current_day AND registered) AS registered_uniques_day,
+  COUNT(DISTINCT user_id) FILTER (WHERE rolling_month = current_rolling_month AND source = 'CODEHOSTINTEGRATION')
+  	AS integration_uniques_rolling_month,
   COUNT(DISTINCT user_id) FILTER (WHERE month = current_month AND source = 'CODEHOSTINTEGRATION')
   	AS integration_uniques_month,
   COUNT(DISTINCT user_id) FILTER (WHERE week = current_week AND source = 'CODEHOSTINTEGRATION')
@@ -935,23 +1010,26 @@ SELECT
   	AS integration_uniques_day
 FROM (
   -- This sub-query is here to avoid re-doing this work above on each aggregation.
+  -- rolling_month will always be the current_rolling_month, but is retained for clarity of the CTE
   SELECT
     name,
     user_id != 0 as registered,
     ` + aggregatedUserIDQueryFragment + ` AS user_id,
     source,
+    ` + makeDateTruncExpression("rolling_month", "%s::timestamp") + ` as rolling_month,
     ` + makeDateTruncExpression("month", "timestamp") + ` as month,
     ` + makeDateTruncExpression("week", "timestamp") + ` as week,
     ` + makeDateTruncExpression("day", "timestamp") + ` as day,
+    ` + makeDateTruncExpression("rolling_month", "%s::timestamp") + ` as current_rolling_month,
     ` + makeDateTruncExpression("month", "%s::timestamp") + ` as current_month,
     ` + makeDateTruncExpression("week", "%s::timestamp") + ` as current_week,
     ` + makeDateTruncExpression("day", "%s::timestamp") + ` as current_day
   FROM event_logs
   LEFT OUTER JOIN users ON users.id = event_logs.user_id
-  WHERE (timestamp >= ` + makeDateTruncExpression("month", "%s::timestamp") + `) AND (%s)
+  WHERE (timestamp >= ` + makeDateTruncExpression("rolling_month", "%s::timestamp") + `) AND (%s) AND anonymous_user_id != 'backend'
 ) events
 
-GROUP BY current_month, current_week, current_day
+GROUP BY current_rolling_month, rolling_month, current_month, current_week, current_day
 `
 
 func (l *eventLogStore) CodeIntelligencePreciseWAUs(ctx context.Context) (int, error) {
@@ -1123,10 +1201,10 @@ func (l *eventLogStore) CodeIntelligenceRepositoryCountsByLanguage(ctx context.C
 		}
 
 		byLanguage[language] = CodeIntelligenceRepositoryCountsForLanguage{
-			NumRepositoriesWithUploadRecords:      safeDerefIntPtr(numRepositoriesWithUploadRecords),
-			NumRepositoriesWithFreshUploadRecords: safeDerefIntPtr(numRepositoriesWithFreshUploadRecords),
-			NumRepositoriesWithIndexRecords:       safeDerefIntPtr(numRepositoriesWithIndexRecords),
-			NumRepositoriesWithFreshIndexRecords:  safeDerefIntPtr(numRepositoriesWithFreshIndexRecords),
+			NumRepositoriesWithUploadRecords:      pointers.DerefZero(numRepositoriesWithUploadRecords),
+			NumRepositoriesWithFreshUploadRecords: pointers.DerefZero(numRepositoriesWithFreshUploadRecords),
+			NumRepositoriesWithIndexRecords:       pointers.DerefZero(numRepositoriesWithIndexRecords),
+			NumRepositoriesWithFreshIndexRecords:  pointers.DerefZero(numRepositoriesWithFreshIndexRecords),
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1134,14 +1212,6 @@ func (l *eventLogStore) CodeIntelligenceRepositoryCountsByLanguage(ctx context.C
 	}
 
 	return byLanguage, nil
-}
-
-func safeDerefIntPtr(v *int) int {
-	if v != nil {
-		return *v
-	}
-
-	return 0
 }
 
 var codeIntelligenceRepositoryCountsByLanguageQuery = `
@@ -1338,6 +1408,143 @@ GROUP BY name, current_week
 ORDER BY name;
 `
 
+func (l *eventLogStore) AggregatedCodyUsage(ctx context.Context, now time.Time) (*types.CodyAggregatedUsage, error) {
+	codyUsage, err := l.aggregatedCodyUsage(ctx, aggregatedCodyUsageEventsQuery, now)
+	if err != nil {
+		return nil, err
+	}
+	return codyUsage, nil
+}
+
+func (l *eventLogStore) aggregatedCodyUsage(ctx context.Context, queryString string, now time.Time) (usages *types.CodyAggregatedUsage, err error) {
+	query := sqlf.Sprintf(queryString, now, now, now, now)
+	row := l.QueryRow(ctx, query)
+
+	var usage types.CodyAggregatedUsage
+	err = row.Scan(
+		&usage.Month,
+		&usage.Week,
+		&usage.Day,
+		&usage.TotalMonth,
+		&usage.TotalWeek,
+		&usage.TotalDay,
+		&usage.UniquesMonth,
+		&usage.UniquesWeek,
+		&usage.UniquesDay,
+		&usage.ProductUsersMonth,
+		&usage.ProductUsersWeek,
+		&usage.ProductUsersDay,
+		&usage.VSCodeProductUsersMonth,
+		&usage.JetBrainsProductUsersMonth,
+		&usage.NeovimProductUsersMonth,
+		&usage.WebProductUsersMonth,
+		&usage.EmacsProductUsersMonth,
+	)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if err = row.Err(); err != nil {
+		return nil, err
+	}
+	return &usage, nil
+}
+
+func buildAggregatedRepoMetadataEventsQuery(period PeriodType) (string, error) {
+	unit := ""
+	switch period {
+	case Daily:
+		unit = "day"
+	case Weekly:
+		unit = "week"
+	case Monthly:
+		unit = "month"
+	default:
+		return "", ErrInvalidPeriodType
+	}
+	return `
+	WITH events AS (
+		SELECT
+			name,
+			` + aggregatedUserIDQueryFragment + ` AS user_id,
+			argument
+		FROM event_logs
+		WHERE
+			timestamp >= ` + makeDateTruncExpression(unit, "%s::timestamp") + `
+			AND name IN ('RepoMetadataAdded', 'RepoMetadataUpdated', 'RepoMetadataDeleted', 'SearchSubmitted')
+	)
+	SELECT
+		` + makeDateTruncExpression(unit, "%s::timestamp") + ` as start_time,
+
+		COUNT(*) FILTER (WHERE name IN ('RepoMetadataAdded')) AS added_count,
+		COUNT(DISTINCT user_id) FILTER (WHERE name IN ('RepoMetadataAdded')) AS added_unique_count,
+
+		COUNT(*) FILTER (WHERE name IN ('RepoMetadataUpdated')) AS updated_count,
+		COUNT(DISTINCT user_id) FILTER (WHERE name IN ('RepoMetadataUpdated')) AS updated_unique_count,
+
+		COUNT(*) FILTER (WHERE name IN ('RepoMetadataDeleted')) AS deleted_count,
+		COUNT(DISTINCT user_id) FILTER (WHERE name IN ('RepoMetadataDeleted')) AS deleted_unique_count,
+
+		COUNT(*) FILTER (
+			WHERE name IN ('SearchSubmitted')
+			AND (
+				argument->>'query' ILIKE '%%repo:has(%%'
+				OR argument->>'query' ILIKE '%%repo:has.key(%%'
+				OR argument->>'query' ILIKE '%%repo:has.tag(%%'
+				OR argument->>'query' ILIKE '%%repo:has.meta(%%'
+			)
+		) AS searches_count,
+		COUNT(DISTINCT user_id) FILTER (
+			WHERE name IN ('SearchSubmitted')
+			AND (
+				argument->>'query' ILIKE '%%repo:has(%%'
+				OR argument->>'query' ILIKE '%%repo:has.key(%%'
+				OR argument->>'query' ILIKE '%%repo:has.tag(%%'
+				OR argument->>'query' ILIKE '%%repo:has.meta(%%'
+			)
+		) AS searches_unique_count
+	FROM events;
+	`, nil
+}
+
+func (l *eventLogStore) AggregatedRepoMetadataEvents(ctx context.Context, now time.Time, period PeriodType) (*types.RepoMetadataAggregatedEvents, error) {
+	query, err := buildAggregatedRepoMetadataEventsQuery(period)
+	if err != nil {
+		return nil, err
+	}
+	row := l.QueryRow(ctx, sqlf.Sprintf(query, now, now))
+	var startTime time.Time
+	var createEvent types.EventStats
+	var updateEvent types.EventStats
+	var deleteEvent types.EventStats
+	var searchEvent types.EventStats
+	if err := row.Scan(
+		&startTime,
+		&createEvent.EventsCount,
+		&createEvent.UsersCount,
+		&updateEvent.EventsCount,
+		&updateEvent.UsersCount,
+		&deleteEvent.EventsCount,
+		&deleteEvent.UsersCount,
+		&searchEvent.EventsCount,
+		&searchEvent.UsersCount,
+	); err != nil {
+		return nil, err
+	}
+
+	return &types.RepoMetadataAggregatedEvents{
+		StartTime:          startTime,
+		CreateRepoMetadata: &createEvent,
+		UpdateRepoMetadata: &updateEvent,
+		DeleteRepoMetadata: &deleteEvent,
+		SearchFilterUsage:  &searchEvent,
+	}, nil
+}
+
 func (l *eventLogStore) AggregatedSearchEvents(ctx context.Context, now time.Time) ([]types.SearchAggregatedEvent, error) {
 	latencyEvents, err := l.aggregatedSearchEvents(ctx, aggregatedSearchLatencyEventsQuery, now)
 	if err != nil {
@@ -1391,6 +1598,396 @@ func (l *eventLogStore) aggregatedSearchEvents(ctx context.Context, queryString 
 	return events, nil
 }
 
+var codyEventPatterns = []string{
+	"cody.%%",
+	"completion.%%",
+	"web:cody%%",
+	"CodyJetBrainsPlugin:%%",
+	"CodyVSCodeExtension:%%",
+	"CodyNeovimPlugin:%%",
+	"CodyEmacsPlugin:%%",
+	"CodyInstalled",
+}
+
+// Definition: https://handbook.sourcegraph.com/departments/data-analytics/cody_analytics/#cody-product-dau
+// Sources:
+//   - https://console.cloud.google.com/bigquery?project=telligentsourcegraph&ws=!1m5!1m4!4m3!1stelligentsourcegraph!2sdotcom_events!3scody_dau_lookup
+//   - https://docs.google.com/spreadsheets/d/1rNdsk4mRojLwEIcGIDezKzKSnltZOLFFiFN4QcbrPnQ/edit#gid=1567985033
+//
+// Last updated: 2024-02-22
+var codyProductUserEvents = []string{
+	"CodyJetBrainsPlugin:completion:partiallyAccepted",
+	"CodyAgent:completion:accepted",
+	"CodyVSCodeExtension:command:reset:filtering",
+	"CodyVSCodeExtension:command:explan:filtering",
+	"CodyVSCodeExtension:command:Generate Release Notes:executed",
+	"CodyVSCodeExtension:walkthrough:clicked",
+	"CodyVSCodeExtension:recipe:generate-diagram:executed",
+	"web:codyChat:edit",
+	"CodyJetBrainsPlugin:recipe:translate-to-language:executed",
+	"CodyVSCodeExtension:recipe:my-prompt:executed",
+	"web:codyChat:recipe:explain-code-detailed:executed",
+	"CodyVSCodeExtension:slashCommand:/tests:submitted",
+	"CodyVSCodeExtension:recipe:optimize-code:executed",
+	"CodyVSCodeExtension:recipe:improve-design-style:executed",
+	"CodyVSCodeExtension:slashCommand:/reset:submitted",
+	"CodyVSCodeExtension:command:mr:executing",
+	"CodyVSCodeExtension:keyDown:Copy:clicked",
+	"CodyVSCodeExtension:recipe:explain-code-5:executed",
+	"CodyVSCodeExtension:command:smell:called",
+	"CodyVSCodeExtension:command:Commit Message for Staged Files:executed",
+	"CodyJetBrainsPlugin:recipe:explain-code-detailed:clicked",
+	"CodyVSCodeExtension:recipe:file-chat:executed",
+	"CodyVSCodeExtension:command:docstrings:executed",
+	"CodyVSCodeExtension:command:review:filtering",
+	"CodyVSCodeExtension:recipe:explain-code-rick-sanchez:executed",
+	"CodyVSCodeExtension:fixup:applied",
+	"CodyVSCodeExtension:recipe:fuzzy-search:executed",
+	"CodyVSCodeExtension:command:commands-settings:filtering",
+	"CodyNeovimExtension:codeAction:cody.diff:executed",
+	"CodyVSCodeExtension:command:/doc:executed",
+	"CodyNeovimPlugin:recipe:chat-question:executed",
+	"CodyVSCodeExtension:command:codesmell:filtering",
+	"CodyVSCodeExtension:command:Commit Message Suggestion:executed",
+	"CodyVSCodeExtension:inlineChat:Copy:detected",
+	"CodyVSCodeExtension:recipe:translate-to-language:executed",
+	"CodyVSCodeExtension:command:explique:filtering",
+	"CodyVSCodeExtension:command:(example) Commit Message Suggestion:executed",
+	"CodyVSCodeExtension:command:test:filtering",
+	"CodyNeovimPlugin:recipe:code-question:executed",
+	"CodyJetBrainsPlugin:completion:accepted",
+	"CodyVSCodeExtension:command:find:invalid",
+	"CodyVSCodeExtension:command:doc:filtering",
+	"CodyVSCodeExtension:recipe:chat-question:executed",
+	"CodyVSCodeExtension:command:utils:filtering",
+	"CodyVSCodeExtension:recipe:generate-docstring:executed",
+	"CodyVSCodeExtension:command:inspire:filtering",
+	"web:codySidebar:edit",
+	"CodyVSCodeExtension:command:document:filtering",
+	"CodyVSCodeExtension:copyButton:clicked",
+	"CodyVSCodeExtension:inline-assist:deleteButton:clicked",
+	"CodyVSCodeExtension:command:test:called",
+	"CodyVSCodeExtension:fixup:codeLens:clicked",
+	"CodyVSCodeExtension:recipe:explain-code-detailed:executed",
+	"CodyVSCodeExtension:recipe:non-stop:executed",
+	"CodyVSCodeExtension:command:run:filtering",
+	"CodyVSCodeExtension:command:custom:called",
+	"CodyVSCodeExtension:inlineChat:Paste:clicked",
+	"CodyVSCodeExtension:command:convert:filtering",
+	"CodyVSCodeExtension:command:fix:filtering",
+	"web:codySidebar:recipe",
+	"CodyVSCodeExtension:recipe:non-stop-cody:executed",
+	"CodyVSCodeExtension:command:Organize Imports:executed",
+	"CodyVSCodeExtension:command:repository:filtering",
+	"CodyVSCodeExtension:command:menu:default",
+	"CodyVSCodeExtension:command:Project Analyzer:executed",
+	"CodyVSCodeExtension:command:Add:filtering",
+	"CodyVSCodeExtension:command:Commit Message for Current Changes:executed",
+	"CodyVSCodeExtension:copy::clicked",
+	"CodyVSCodeExtension:command:Translate to C++:executed",
+	"CodyVSCodeExtension:recipe:find-code-smells:executed",
+	"CodyVSCodeExtension:recipe:local-indexed-keyword-search:executed",
+	"CodyVSCodeExtension:chatReset:executed",
+	"CodyVSCodeExtension:command:convert:executing",
+	"CodyVSCodeExtension:command:If:filtering",
+	"CodyVSCodeExtension:saveButton:clicked",
+	"CodyVSCodeExtension:fixup",
+	"CodyVSCodeExtension:command:views:filtering",
+	"CodyVSCodeExtension:guardrails:annotate",
+	"CodyVSCodeExtension:command:execCommand",
+	"CodyVSCodeExtension:command:commands:filtering",
+	"CodyVSCodeExtension:command:search:filtering",
+	"CodyJetBrainsPlugin:recipe:generate-docstring:clicked",
+	"CodyVSCodeExtension:command:get:filtering",
+	"CodyVSCodeExtension:command:explain:filtering",
+	"CodyVSCodeExtension:command:Compare Open Tabs:executed",
+	"CodyVSCodeExtension:command:react:executed",
+	"web:codyChat:recipe:explain-code-high-level:executed",
+	"CodyVSCodeExtension:command:sequence:filtering",
+	"CodyVSCodeExtension:command:Convert Unittest to Pytest:executed",
+	"CodyVSCodeExtension:command:Add error handling:executed",
+	"CodyVSCodeExtension:command:react:filtering",
+	"CodyVSCodeExtension:slashCommand:/docstring:submitted",
+	"CodyVSCodeExtension:command:Document Code:executed",
+	"CodyVSCodeExtension:recipe:my-prompts:executed",
+	"CodyVSCodeExtension:command:Explain Code:executed",
+	"CodyVSCodeExtension:command::filtering",
+	"CodyVSCodeExtension:command:command:filtering",
+	"CodyVSCodeExtension:pasteKeydown:clicked",
+	"CodyVSCodeExtension:recipe:inline-chat:executed",
+	"web:codySidebar:recipe:executed",
+	"CodyVSCodeExtension:copy:copyButton:clicked",
+	"CodyVSCodeExtension:command:edit:executed",
+	"CodyVSCodeExtension:command:/smell:executed",
+	"CodyVSCodeExtension:command:starter:executed",
+	"CodyVSCodeExtension:command:test:executing",
+	"CodyVSCodeExtension:inlineChat:Paste:detected",
+	"CodyJetBrainsPlugin:recipe:generate-unit-test:clicked",
+	"CodyJetBrainsPlugin:recipe:explain-code-high-level:clicked",
+	"CodyVSCodeExtension:slashCommand:/search _:submitted",
+	"CodyVSCodeExtension:command:complete:filtering",
+	"CodyVSCodeExtension:command:smell:filtering",
+	"CodyJetBrainsPlugin:recipe:find-code-smells:clicked",
+	"CodyVSCodeExtension:command:Generate Unit Tests:executed",
+	"web:codyChat:submit",
+	"CodyVSCodeExtension:copyKeydown:clicked",
+	"CodyVSCodeExtension:command:executedFromMenu",
+	"CodyVSCodeExtension:command:menu:custom",
+	"CodyVSCodeExtension:restoreChatHistoryButton:clicked",
+	"CodyVSCodeExtension:slashCommand:/:submitted",
+	"CodyVSCodeExtension:command:commit:filtering",
+	"CodyVSCodeExtension:recipe:context-search:executed",
+	"CodyVSCodeExtension:command:Explain the Code:executed",
+	"CodyVSCodeExtension:command:explain:executed",
+	"CodyVSCodeExtension:command:Improve Variable Name:executed",
+	"CodyVSCodeExtension:completion:accepted",
+	"CodyVSCodeExtension:recipe:fixup:executed",
+	"CodyVSCodeExtension:recipe:computational-complexity:executed",
+	"CodyVSCodeExtension:command:Generate nice documentation from summary notes:executed",
+	"CodyVSCodeExtension:codyExplainCodeHighLevel:clicked",
+	"CodyVSCodeExtension:fixupResponse:hasCode",
+	"CodyVSCodeExtension:slashCommand:/touch:submitted",
+	"CodyVSCodeExtension:command:*:filtering",
+	"CodyVSCodeExtension:recipe:code-refactor:executed",
+	"CodyVSCodeExtension:slashCommand:/test:submitted",
+	"CodyVSCodeExtension:command:smell:executing",
+	"CodyVSCodeExtension:recipe:translate-to-language:clicked",
+	"CodyJetBrainsPlugin:recipe:chat-question:executed",
+	"CodyVSCodeExtension:command:models:filtering",
+	"CodyJetBrainsPlugin:recipe:chat-question:clicked",
+	"CodyVSCodeExtension:command:test:executed",
+	"CodyVSCodeExtension:slashCommand:/commands-settings:submitted",
+	"CodyVSCodeExtension:recipe:custom:executed",
+	"CodyVSCodeExtension:command:Better Readability:executed",
+	"CodyVSCodeExtension:command:compare:filtering",
+	"CodyVSCodeExtension:command:write:filtering",
+	"CodyJetBrainsPlugin:recipe:summarize-recent-code-changes:clicked",
+	"CodyVSCodeExtension:command:/explain:executed",
+	"CodyVSCodeExtension:command:mr:filtering",
+	"CodyVSCodeExtension:recipe:generate-unit-test:clicked",
+	"CodyVSCodeExtension:command:swift-ut:filtering",
+	"CodyVSCodeExtension:recipe:release-notes:executed",
+	"CodyVSCodeExtension:codyTranslateToLanguage:clicked",
+	"CodyVSCodeExtension:recipe:rate-code:executed",
+	"CodyVSCodeExtension:command:implement:filtering",
+	"CodyVSCodeExtension:command:explain:executing",
+	"web:codySearch:submit",
+	"web:codyChat:recipe:translate-to-language:executed",
+	"CodyVSCodeExtension:recipe:generate-unit-test:executed",
+	"CodyVSCodeExtension:command:touch:filtering",
+	"CodyVSCodeExtension:recipe:git-history:clicked",
+	"CodyVSCodeExtension:recipe:git-file-history:executed",
+	"CodyVSCodeExtension:custom-recipe-command-menu:clicked",
+	"web:codyChat:recipe:generate-unit-test:executed",
+	"CodyVSCodeExtension:command:/:filtering",
+	"CodyVSCodeExtension:command:Convert to C#:executed",
+	"CodyVSCodeExtension:recipe:explain-code-detailed:clicked",
+	"CodyVSCodeExtension:insert::clicked",
+	"CodyVSCodeExtension:exportChatHistoryButton:clicked",
+	"CodyVSCodeExtension:command:compare:executing",
+	"CodyVSCodeExtension:command:/import:filtering",
+	"CodyVSCodeExtension:inline-assist:chat",
+	"CodyVSCodeExtension:command:smell:executed",
+	"CodyVSCodeExtension:command:Smell Code:executed",
+	"CodyVSCodeExtension:command:sign:filtering",
+	"CodyVSCodeExtension:command:customPremade:applied",
+	"CodyVSCodeExtension:slashCommand:/doc:submitted",
+	"CodyVSCodeExtension:command:default:executed",
+	"CodyVSCodeExtension:inline-assist:stopFixup",
+	"CodyVSCodeExtension:recipe:generate-horsegraph:executed",
+	"CodyVSCodeExtension:command:modify:filtering",
+	"CodyVSCodeExtension:command:menu:config",
+	"web:codySidebar:submit",
+	"CodyVSCodeExtension:command:please:filtering",
+	"CodyVSCodeExtension:command:Make:filtering",
+	"web:codyChat:recipe:generate-docstring:executed",
+	"CodyVSCodeExtension:command:Give me some Inspiration:executed",
+	"CodyVSCodeExtension:command:create:filtering",
+	"CodyVSCodeExtension:command:(example) Compare Open Tabs:executed",
+	"CodyVSCodeExtension:command:could:filtering",
+	"CodyVSCodeExtension:command:doc:called",
+	"CodyVSCodeExtension:chatPredictions:used",
+	"CodyVSCodeExtension:command:openFile:executed",
+	"CodyVSCodeExtension:command:started",
+	"CodyVSCodeExtension:command:fixup:filtering",
+	"CodyVSCodeExtension:recipe:rewrite-to-functional:executed",
+	"CodyVSCodeExtension:command:r:filtering",
+	"CodyVSCodeExtension:command:fix::filtering",
+	"CodyVSCodeExtension:recipe:git-history:executed",
+	"CodyVSCodeExtension:custom-recipe:clicked",
+	"CodyVSCodeExtension:recipe:rewrite-functional:executed",
+	"CodyVSCodeExtension:command:/Add:filtering",
+	"CodyVSCodeExtension:recipe:explain-code-high-level:clicked",
+	"CodyVSCodeExtension:command:There:filtering",
+	"CodyVSCodeExtension:command:explain:called",
+	"CodyVSCodeExtension:command:/test:executed",
+	"web:codySearch:submitSucceeded",
+	"CodyVSCodeExtension:slash-command-menu:clicked",
+	"CodyVSCodeExtension:inlineChat:Copy:clicked",
+	"CodyVSCodeExtension:command:/test:executing",
+	"CodyVSCodeExtension:command:peux:filtering",
+	"CodyVSCodeExtension:command:commit:executing",
+	"CodyVSCodeExtension:command:doc:executed",
+	"CodyJetBrainsPlugin:recipe:improve-variable-names:clicked",
+	"CodyVSCodeExtension:recipe:inline-touch:executed",
+	"CodyVSCodeExtension:command:refactor:filtering",
+	"CodyVSCodeExtension:command:a:filtering",
+	"CodyVSCodeExtension:slashCommand:/search address_label:submitted",
+	"CodyVSCodeExtension:insertButton:clicked",
+	"CodyVSCodeExtension:command:doc:executing",
+	"CodyVSCodeExtension:recipe:improve-variable-names:clicked",
+	"CodyVSCodeExtension:completion:partiallyAccepted",
+	"CodyVSCodeExtension:command:swift-ut:executing",
+	"CodyVSCodeExtension:command:h:filtering",
+	"CodyVSCodeExtension:custom-command-menu:clicked",
+	"web:codyChat:recipe:find-code-smells:executed",
+	"CodyVSCodeExtension:slashCommand:/fix add docstring:submitted",
+	"CodyVSCodeExtension:inline-assist:replaced",
+	"CodyVSCodeExtension:command:hello:filtering",
+	"CodyVSCodeExtension:recipe:explain-code-high-level:executed",
+	"CodyVSCodeExtension:recipe:improve-variable-names:executed",
+	"CodyVSCodeExtension:command:/doc:executing",
+	"CodyNeovimExtension:codeAction:cody.explain:executed",
+	"CodyVSCodeExtension:inline-assist:fixup",
+	"CodyVSCodeExtension:recipe:pr-description:executed",
+	"CodyVSCodeExtension:slashCommand:/a:submitted",
+	"CodyVSCodeExtension:command:fix:executed",
+	"CodyVSCodeExtension:command:custom:executed",
+	"CodyNeovimExtension:codeAction:cody.remember:executed",
+	"CodyVSCodeExtension:recipe:chat-question:clicked",
+	"CodyVSCodeExtension:slashCommand:/improve variable name:submitted",
+	"CodyVSCodeExtension:command:Refactor the code block:executed",
+	"web:codyChat:recipeExecuted",
+	"CodyJetBrainsPlugin:recipe:translate-to-language:clicked",
+	"CodyJetBrainsPlugin:recipe:code-question:clicked",
+	"CodyVSCodeExtension:command:(example) Generate README.md for Current Directory:executed",
+	"CodyVSCodeExtension:command:improve:filtering",
+	"CodyNeovimExtension:codeAction:cody.chat:executed",
+	"CodyVSCodeExtension:command:read:filtering",
+	"CodyVSCodeExtension:fixup:created",
+	"CodyVSCodeExtension:keyDown:Paste:clicked",
+	"CodyVSCodeExtension:recipe:next-question:executed",
+	"CodyVSCodeExtension:slashCommand:/improve code:submitted",
+	"CodyVSCodeExtension:codyGenerateUnitTest:clicked",
+	"CodyVSCodeExtension:command:Compare Files in Opened Tabs:executed",
+	"CodyVSCodeExtension:recipe:file-touch:executed",
+	"web:codyChat:recipe:improve-variable-names:executed",
+	"CodyVSCodeExtension:slashCommand:/explain:submitted",
+	"CodyVSCodeExtension:recipe:explain-inline:executed",
+	"CodyVSCodeExtension:command:can:filtering",
+	"CodyVSCodeExtension:recipe:file-flow:executed",
+	"CodyVSCodeExtension:recipe:generate-docstring:clicked",
+	"CodyVSCodeExtension:command:/set:filtering",
+	"CodyVSCodeExtension:recipe:replace:executed",
+	"CodyVSCodeExtension:command:/explain:executing",
+	"CodyNeovimPlugin:completion:partiallyAccepted",
+	"CodyNeovimPlugin:completion:accepted",
+	"CodyEmacsPlugin:completion:accepted",
+	"CodyVSCodeExtension:chat-question:recipe-used",
+	"cody.fixup.codeLens.accept",
+	"completion.accepted",
+	"cody.completion.accepted",
+	"cody.fixup.applied",
+	"cody.insertButton.clicked",
+	"cody.walkthrough.clicked",
+	"cody.menu:command:default.clicked",
+	"cody.command.codelens.clicked",
+	"cody.keyDown:Copy.clicked",
+	"cody.copyButton.clicked",
+	"cody.exportChatHistoryButton.clicked",
+	"cody.menu:command:custom.clicked",
+	"cody.saveButton.clicked",
+	"cody.command.ask.clicked",
+	"cody.messageProvider.restoreChatHistoryButton.clicked",
+	"cody.fixup.codeLens.diff",
+	"cody.command.generateCommitMessage.executed",
+	"cody.command.custom.build.executed",
+	"cody.recipe.inline-chat.executed",
+	"cody.recipe.improve-variable-names.executed",
+	"cody.recipe.explain-code-high-level.executed",
+	"cody.recipe.explain-code-detailed.executed",
+	"cody.command.edit.executed",
+	"cody.at-mention.symbol.executed",
+	"cody.recipe.chat-question.executed",
+	"cody.recipe.local-indexed-keyword-search.executed",
+	"cody.command.smell.executed",
+	"cody.at-mention.file.executed",
+	"cody.command.openFile.executed",
+	"cody.recipe.generate-docstring.executed",
+	"cody.command.terminal.executed",
+	"cody.command.custom.executed",
+	"cody.recipe.find-code-smells.executed",
+	"cody.recipe.generate-unit-test.executed",
+	"cody.recipe.custom-prompt.executed",
+	"cody.command.explain.executed",
+	"cody.recipe.fixup.executed",
+	"cody.at-mention.executed",
+	"cody.guardrails.annotate.executed",
+	"cody.chat-question.executed",
+	"cody.command.test.executed",
+	"cody.command.doc.executed",
+	"cody.recipe.code-question.executed",
+	"cody.recipe.inline-touch.executed",
+	"cody.recipe.context-search.executed",
+	"cody.completion.partiallyAccepted",
+	"cody.keyDown.paste",
+	"cody.recipe.chat-question.recipe-used",
+	"cody.recipe.fixup.recipe-used",
+	"cody.fixup.apply.succeeded",
+}
+
+var aggregatedCodyUsageEventsQuery = `
+WITH events AS (
+  SELECT
+    name AS key,
+	client,
+    ` + aggregatedUserIDQueryFragment + ` AS user_id,
+    ` + makeDateTruncExpression("month", "timestamp") + ` as month,
+    ` + makeDateTruncExpression("week", "timestamp") + ` as week,
+    ` + makeDateTruncExpression("day", "timestamp") + ` as day,
+    ` + makeDateTruncExpression("month", "%s::timestamp") + ` as current_month,
+    ` + makeDateTruncExpression("week", "%s::timestamp") + ` as current_week,
+    ` + makeDateTruncExpression("day", "%s::timestamp") + ` as current_day
+  FROM event_logs
+  WHERE
+    timestamp >= ` + makeDateTruncExpression("month", "%s::timestamp") + `
+    AND (name ILIKE ANY (array['` + strings.Join(codyEventPatterns, "','") + `']))
+)
+SELECT
+  current_month,
+  current_week,
+  current_day,
+  SUM(case when month = current_month then 1 else 0 end) AS total_month,
+  SUM(case when week = current_week then 1 else 0 end) AS total_week,
+  SUM(case when day = current_day then 1 else 0 end) AS total_day,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month) AS uniques_month,
+  COUNT(DISTINCT user_id) FILTER (WHERE week = current_week) AS uniques_week,
+  COUNT(DISTINCT user_id) FILTER (WHERE day = current_day) AS uniques_day,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')) as product_users_month,
+  COUNT(DISTINCT user_id) FILTER (WHERE week = current_week and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')) as product_users_week,
+  COUNT(DISTINCT user_id) FILTER (WHERE day = current_day and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')) as product_users_day,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')
+	and client = 'VSCODE_CODY_EXTENSION') as vscode_product_users_month,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')
+	and client = 'JETBRAINS_CODY_EXTENSION') as jetbrains_product_users_month,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')
+	and client = 'NEOVIM_CODY_EXTENSION') as neovim_product_users_month,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')
+	and client is null) as web_product_users_month,
+  COUNT(DISTINCT user_id) FILTER (WHERE month = current_month and key in
+	('` + strings.Join(codyProductUserEvents, "','") + `')
+	and client = 'EMACS_CODY_EXTENSION') as emacs_product_users_month
+FROM events
+GROUP BY current_month, current_week, current_day
+`
+
 var searchLatencyEventNames = []string{
 	"'search.latencies.literal'",
 	"'search.latencies.regexp'",
@@ -1417,7 +2014,7 @@ WITH events AS (
     ` + makeDateTruncExpression("day", "%s::timestamp") + ` as current_day
   FROM event_logs
   WHERE
-    timestamp >= ` + makeDateTruncExpression("month", "%s::timestamp") + `
+    timestamp >= ` + makeDateTruncExpression("rolling_month", "%s::timestamp") + `
     AND name IN (` + strings.Join(searchLatencyEventNames, ", ") + `)
 )
 SELECT
@@ -1452,7 +2049,7 @@ WITH events AS (
   FROM event_logs
   CROSS JOIN LATERAL jsonb_each(argument->'code_search'->'query_data'->'query') json
   WHERE
-    timestamp >= ` + makeDateTruncExpression("month", "%s::timestamp") + `
+    timestamp >= ` + makeDateTruncExpression("rolling_month", "%s::timestamp") + `
     AND name = 'SearchResultsQueried'
 )
 SELECT
@@ -1514,12 +2111,18 @@ CASE WHEN user_id = 0
 END
 `
 
-// makeDateTruncExpression returns an expresson that converts the given
+// makeDateTruncExpression returns an expression that converts the given
 // SQL expression into the start of the containing date container specified
-// by the unit parameter (e.g. day, week, month, or).
+// by the unit parameter (e.g. day, week, month, or rolling month [prior 1 month]).
+// Note: If unit is 'week', the function will truncate to the preceding Sunday.
+// This is because some locales start the week on Sunday, unlike the Postgres default
+// (and many parts of the world) which start the week on Monday.
 func makeDateTruncExpression(unit, expr string) string {
 	if unit == "week" {
-		return fmt.Sprintf(`DATE_TRUNC('%s', TIMEZONE('UTC', %s) + '1 day'::interval) - '1 day'::interval`, unit, expr)
+		return fmt.Sprintf(`(DATE_TRUNC('week', TIMEZONE('UTC', %s) + '1 day'::interval) - '1 day'::interval)`, expr)
+	}
+	if unit == "rolling_month" {
+		return fmt.Sprintf(`(DATE_TRUNC('day', TIMEZONE('UTC', %s)) - '1 month'::interval)`, expr)
 	}
 
 	return fmt.Sprintf(`DATE_TRUNC('%s', TIMEZONE('UTC', %s))`, unit, expr)
@@ -1556,3 +2159,120 @@ SELECT
 FROM codeintel_langugage_support_requests
 GROUP BY language_id
 `
+
+func (l *eventLogStore) OwnershipFeatureActivity(ctx context.Context, now time.Time, eventNames ...string) (map[string]*types.OwnershipUsageStatisticsActiveUsers, error) {
+	if len(eventNames) == 0 {
+		return map[string]*types.OwnershipUsageStatisticsActiveUsers{}, nil
+	}
+	var sqlEventNames []*sqlf.Query
+	for _, e := range eventNames {
+		sqlEventNames = append(sqlEventNames, sqlf.Sprintf("%s", e))
+	}
+	query := sqlf.Sprintf(eventActivityQuery, now, now, sqlf.Join(sqlEventNames, ","), now, now, now)
+	rows, err := l.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = basestore.CloseRows(rows, err) }()
+	stats := map[string]*types.OwnershipUsageStatisticsActiveUsers{}
+	for _, e := range eventNames {
+		var zero int32
+		stats[e] = &types.OwnershipUsageStatisticsActiveUsers{
+			DAU: &zero,
+			WAU: &zero,
+			MAU: &zero,
+		}
+	}
+	for rows.Next() {
+		var (
+			unit        string
+			eventName   string
+			timestamp   time.Time
+			activeUsers int32
+		)
+		if err := rows.Scan(&unit, &eventName, &timestamp, &activeUsers); err != nil {
+			return nil, err
+		}
+		switch unit {
+		case "day":
+			stats[eventName].DAU = &activeUsers
+		case "week":
+			stats[eventName].WAU = &activeUsers
+		case "month":
+			stats[eventName].MAU = &activeUsers
+		default:
+			return nil, errors.Newf("unexpected unit %q, this is a bug", unit)
+		}
+	}
+	return stats, err
+}
+
+// eventActivityQuery returns the most recent reading on (M|W|D)AU for given events.
+//
+// The query outputs one row per event name, per unit ("month", "week", "day" as strings).
+// Each row contains:
+//  1. "unit" which is either "month" or "week" or "day" indicating whether
+//     whether the associated user_activity referes to MAU, WAU or DAU.
+//  2. "name" which refers to the name of the event considered.
+//  2. "time_stamp" which indicates the beginning of unit time span (like the beginning
+//     of week or month).
+//  3. "active_users" which is the count of distinct active users during
+//     the relevant time span.
+//
+// There are 6 parameters (but just two values):
+//  1. Timestamp which truncated to this month is the time-based lower bound
+//     for events taken into account, twice.
+//  2. The list of event names to consider.
+//  3. The same timestamp again, three times.
+var eventActivityQuery = `
+WITH events AS (
+	SELECT
+	` + aggregatedUserIDQueryFragment + ` AS user_id,
+	` + makeDateTruncExpression("day", "timestamp") + ` AS day,
+	` + makeDateTruncExpression("week", "timestamp") + ` AS week,
+	` + makeDateTruncExpression("month", "timestamp") + ` AS month,
+	name AS name
+	FROM event_logs
+	-- Either: the beginning of current week and current month
+	-- can come first, so take the earliest as timestamp lower bound.
+	WHERE timestamp >= LEAST(
+		` + makeDateTruncExpression("month", "%s::timestamp") + `,
+		` + makeDateTruncExpression("week", "%s::timestamp") + `
+	)
+	AND name IN (%s)
+)
+(
+	SELECT DISTINCT ON (unit, name)
+		'month' AS unit,
+		e.name AS name,
+		e.month AS time_stamp,
+		COUNT(DISTINCT e.user_id) AS active_users
+	FROM events AS e
+	WHERE e.month >= ` + makeDateTruncExpression("month", "%s::timestamp") + `
+	GROUP BY unit, name, time_stamp
+	ORDER BY unit, name, time_stamp DESC
+)
+UNION ALL
+(
+SELECT DISTINCT ON (unit, name)
+	'week' AS unit,
+	e.name AS name,
+	e.week AS time_stamp,
+	COUNT(DISTINCT e.user_id) AS active_users
+FROM events AS e
+WHERE e.week >= ` + makeDateTruncExpression("week", "%s::timestamp") + `
+GROUP BY unit, name, time_stamp
+ORDER BY unit, name, time_stamp DESC
+)
+UNION ALL
+(
+SELECT DISTINCT ON (unit, name)
+	'day' AS unit,
+	e.name AS name,
+	e.day AS time_stamp,
+	COUNT(DISTINCT e.user_id) AS active_users
+FROM events AS e
+WHERE e.day >= ` + makeDateTruncExpression("day", "%s::timestamp") + `
+GROUP BY unit, name, time_stamp
+ORDER BY unit, name, time_stamp DESC
+)`

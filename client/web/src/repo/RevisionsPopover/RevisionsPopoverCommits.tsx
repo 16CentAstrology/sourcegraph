@@ -1,15 +1,15 @@
 import React, { useState } from 'react'
 
-import * as H from 'history'
-import { useLocation } from 'react-router'
+import type * as H from 'history'
+import { useLocation } from 'react-router-dom'
 
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
-import { Scalars } from '@sourcegraph/shared/src/graphql-operations'
+import type { Scalars } from '@sourcegraph/shared/src/graphql-operations'
 import { Badge, useDebounce } from '@sourcegraph/wildcard'
 
 import { useShowMorePagination } from '../../components/FilteredConnection/hooks/useShowMorePagination'
 import { ConnectionSummary } from '../../components/FilteredConnection/ui'
-import {
+import type {
     GitCommitAncestorFields,
     RepositoryGitCommitResult,
     RepositoryGitCommitVariables,
@@ -144,7 +144,6 @@ export const RevisionsPopoverCommits: React.FunctionComponent<
         query: REPOSITORY_GIT_COMMIT,
         variables: {
             query,
-            first: BATCH_COUNT,
             repo,
             revision: currentRev || defaultBranch,
         },
@@ -175,13 +174,13 @@ export const RevisionsPopoverCommits: React.FunctionComponent<
         },
         options: {
             fetchPolicy: 'cache-first',
+            pageSize: BATCH_COUNT,
         },
     })
 
     const summary = response.connection && (
         <ConnectionSummary
             connection={response.connection}
-            first={BATCH_COUNT}
             noun={noun}
             pluralNoun={pluralNoun}
             hasNextPage={response.hasNextPage}

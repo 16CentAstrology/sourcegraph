@@ -1,10 +1,10 @@
-import { Observable } from 'rxjs'
+import type { Observable } from 'rxjs'
 import { map } from 'rxjs/operators'
 
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
 
 import { requestGraphQL } from '../backend/graphql'
-import {
+import type {
     FetchAllUsersWithSurveyResponsesResult,
     FetchAllUsersWithSurveyResponsesVariables,
     FetchSurveyResponseAggregatesResult,
@@ -56,7 +56,7 @@ export function fetchAllSurveyResponses(): Observable<FetchSurveyResponsesResult
  */
 export function fetchAllUsersWithSurveyResponses(args: {
     activePeriod?: UserActivePeriod
-    first?: number
+    first?: number | null
     query?: string
 }): Observable<FetchAllUsersWithSurveyResponsesResult['users']> {
     return requestGraphQL<FetchAllUsersWithSurveyResponsesResult, FetchAllUsersWithSurveyResponsesVariables>(

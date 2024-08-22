@@ -15,7 +15,13 @@ func Zoekt() *monitoring.Dashboard {
 		indexServerContainerName = "zoekt-indexserver"
 		webserverContainerName   = "zoekt-webserver"
 		bundledContainerName     = "indexed-search"
+		grpcServiceName          = "zoekt.webserver.v1.WebserverService"
+
+		indexServerJob = "indexed-search-indexer"
+		webserverJob   = "indexed-search"
 	)
+
+	grpcMethodVariable := shared.GRPCMethodVariable("zoekt_webserver", grpcServiceName)
 
 	return &monitoring.Dashboard{
 		Name:                     "zoekt",
@@ -27,12 +33,23 @@ func Zoekt() *monitoring.Dashboard {
 				Label: "Instance",
 				Name:  "instance",
 				OptionsLabelValues: monitoring.ContainerVariableOptionsLabelValues{
-					Query:         "index_num_assigned",
+					Query:         "index_num_indexed",
 					LabelName:     "instance",
 					ExampleOption: "zoekt-indexserver-0:6072",
 				},
 				Multi: true,
 			},
+			{
+				Label: "Webserver Instance",
+				Name:  "webserver_instance",
+				OptionsLabelValues: monitoring.ContainerVariableOptionsLabelValues{
+					Query:         "zoekt_webserver_watchdog_errors",
+					LabelName:     "instance",
+					ExampleOption: "zoekt-webserver-0:6072",
+				},
+				Multi: true,
+			},
+			grpcMethodVariable,
 		},
 		Groups: []monitoring.Group{
 			{
@@ -830,19 +847,24 @@ func Zoekt() *monitoring.Dashboard {
 							NextSteps: `
 								If you are running out of memory map areas, you could resolve this by:
 
+								    - Enabling shard merging for Zoekt: Set SRC_ENABLE_SHARD_MERGING="1" for zoekt-indexserver. Use this option
+								if your corpus of repositories has a high percentage of small, rarely updated repositories. See
+								[documentation](https://sourcegraph.com/docs/code-search/features#shard-merging).
 								    - Creating additional Zoekt replicas: This spreads all the shards out amongst more replicas, which
 								means that each _individual_ replica will have fewer shards. This, in turn, decreases the
 								amount of memory map areas that a _single_ replica can create (in order to load the shards into memory).
-								    - Increase the virtual memory subsystem's "max_map_count" parameter which defines the upper limit of memory areas
-								a process can use. The exact instructions for tuning this parameter can differ depending on your environment.
-								See https://kernel.org/doc/Documentation/sysctl/vm.txt for more information.
+								    - Increasing the virtual memory subsystem's "max_map_count" parameter which defines the upper limit of memory areas
+								a process can use. The default value of max_map_count is usually 65536. We recommend to set this value to 2x the number
+								of repos to be indexed per Zoekt instance. This means, if you want to index 240k repositories with 3 Zoekt instances,
+								set max_map_count to (240000 / 3) * 2 = 160000. The exact instructions for tuning this parameter can differ depending
+								on your environment. See https://kernel.org/doc/Documentation/sysctl/vm.txt for more information.
 							`,
 						},
 					},
 				},
 			},
 			{
-				Title:  "Compound shards (experimental)",
+				Title:  "Compound shards",
 				Hidden: true,
 				Rows: []monitoring.Row{
 					{
@@ -1050,6 +1072,35 @@ func Zoekt() *monitoring.Dashboard {
 					},
 				},
 			},
+
+			shared.NewGRPCServerMetricsGroup(
+				shared.GRPCServerMetricsOptions{
+					HumanServiceName:   "zoekt-webserver",
+					RawGRPCServiceName: grpcServiceName,
+
+					MethodFilterRegex:    fmt.Sprintf("${%s:regex}", grpcMethodVariable.Name),
+					InstanceFilterRegex:  `${webserver_instance:regex}`,
+					MessageSizeNamespace: "",
+				}, monitoring.ObservableOwnerSearchCore),
+
+			shared.NewGRPCInternalErrorMetricsGroup(
+				shared.GRPCInternalErrorMetricsOptions{
+					HumanServiceName:   "zoekt-webserver",
+					RawGRPCServiceName: grpcServiceName,
+					Namespace:          "src",
+
+					MethodFilterRegex: fmt.Sprintf("${%s:regex}", grpcMethodVariable.Name),
+				}, monitoring.ObservableOwnerSearchCore),
+
+			shared.NewGRPCRetryMetricsGroup(
+				shared.GRPCRetryMetricsOptions{
+					HumanServiceName:   "zoekt-webserver",
+					RawGRPCServiceName: grpcServiceName,
+					Namespace:          "src",
+
+					MethodFilterRegex: fmt.Sprintf("${%s:regex}", grpcMethodVariable.Name),
+				}, monitoring.ObservableOwnerSearchCore),
+
 			shared.NewDiskMetricsGroup(
 				shared.DiskMetricsGroupOptions{
 					DiskTitle: "data",
@@ -1079,6 +1130,9 @@ func Zoekt() *monitoring.Dashboard {
 			shared.NewProvisioningIndicatorsGroup(webserverContainerName, monitoring.ObservableOwnerSearchCore, &shared.ContainerProvisioningIndicatorsGroupOptions{
 				CustomTitle: fmt.Sprintf("[%s] %s", webserverContainerName, shared.TitleProvisioningIndicators),
 			}),
+
+			shared.NewGolangMonitoringGroup(indexServerJob, monitoring.ObservableOwnerSearchCore, &shared.GolangMonitoringOptions{ContainerNameInTitle: true}),
+			shared.NewGolangMonitoringGroup(webserverJob, monitoring.ObservableOwnerSearchCore, &shared.GolangMonitoringOptions{ContainerNameInTitle: true}),
 
 			// Note:
 			// We show pod availability here for both the webserver and indexserver as they are bundled together.

@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/globals"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/backend"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/cookie"
@@ -29,17 +27,17 @@ func SendResetPasswordURLEmail(ctx context.Context, email, username string, rese
 	return txemail.Send(ctx, "password_reset", txemail.Message{
 		To:       []string{email},
 		Template: emailTemplate,
-		Data: passwordEmailTemplateData{
+		Data: SetPasswordEmailTemplateData{
 			Username: username,
-			URL:      globals.ExternalURL().ResolveReference(resetURL).String(),
-			Host:     globals.ExternalURL().Host,
+			URL:      conf.ExternalURLParsed().ResolveReference(resetURL).String(),
+			Host:     conf.ExternalURLParsed().Host,
 		},
 	})
 }
 
 // HandleResetPasswordInit initiates the builtin-auth password reset flow by sending a password-reset email.
 func HandleResetPasswordInit(logger log.Logger, db database.DB) http.HandlerFunc {
-	logger = logger.Scoped("HandleResetPasswordInit", "password reset initialization flow handler")
+	logger = logger.Scoped("HandleResetPasswordInit")
 	return func(w http.ResponseWriter, r *http.Request) {
 		if handleEnabledCheck(logger, w) {
 			return
@@ -76,7 +74,7 @@ func HandleResetPasswordInit(logger log.Logger, db database.DB) http.HandlerFunc
 			return
 		}
 
-		resetURL, err := backend.MakePasswordResetURL(ctx, db, usr.ID)
+		resetURL, err := backend.MakePasswordResetURL(ctx, db, usr.ID, formData.Email)
 		if err == database.ErrPasswordResetRateLimit {
 			httpLogError(logger.Warn, w, "Too many password reset requests. Try again in a few minutes.", http.StatusTooManyRequests, log.Error(err))
 			return
@@ -96,7 +94,7 @@ func HandleResetPasswordInit(logger log.Logger, db database.DB) http.HandlerFunc
 // HandleResetPasswordCode resets the password if the correct code is provided, and also
 // verifies emails if the appropriate parameters are found.
 func HandleResetPasswordCode(logger log.Logger, db database.DB) http.HandlerFunc {
-	logger = logger.Scoped("HandleResetPasswordCode", "verifies password reset code requests handler")
+	logger = logger.Scoped("HandleResetPasswordCode")
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if handleEnabledCheck(logger, w) {
@@ -150,17 +148,12 @@ func HandleResetPasswordCode(logger log.Logger, db database.DB) http.HandlerFunc
 			} else if !ok {
 				logger.Warn("got invalid email verification code")
 			} else {
-				// copy-pasta from logEmailVerified
-				event := &database.SecurityEvent{
-					Name:      database.SecurityEventNameEmailVerified,
-					URL:       r.URL.Path,
-					UserID:    uint32(params.UserID),
-					Argument:  nil,
-					Source:    "BACKEND",
-					Timestamp: time.Now(),
+
+				anonymousID, _ := cookie.AnonymousUID(r)
+				if err := db.SecurityEventLogs().LogSecurityEvent(r.Context(), database.SecurityEventNameEmailVerified, r.URL.Path, uint32(params.UserID), anonymousID, "BACKEND", params.Email); err != nil {
+					logger.Warn("Error logging security event", log.Error(err))
 				}
-				event.AnonymousUserID, _ = cookie.AnonymousUID(r)
-				db.SecurityEventLogs().LogEvent(ctx, event)
+
 			}
 		}
 

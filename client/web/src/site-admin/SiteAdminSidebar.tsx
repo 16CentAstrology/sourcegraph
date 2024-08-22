@@ -5,22 +5,24 @@ import classNames from 'classnames'
 
 import { Link, Icon, Button } from '@sourcegraph/wildcard'
 
-import { BatchChangesProps } from '../batches'
+import type { BatchChangesProps } from '../batches'
 import { SidebarGroup, SidebarCollapseItems, SidebarNavItem } from '../components/Sidebar'
-import { NavGroupDescriptor } from '../util/contributions'
+import type { NavGroupDescriptor } from '../util/contributions'
 
 import styles from './SiteAdminSidebar.module.scss'
 
 export interface SiteAdminSideBarGroupContext extends BatchChangesProps {
     isSourcegraphDotCom: boolean
+    codeInsightsEnabled: boolean
+    endUserOnboardingEnabled: boolean
+    applianceUpdateTarget: string
 }
 
 export interface SiteAdminSideBarGroup extends NavGroupDescriptor<SiteAdminSideBarGroupContext> {}
 
 export type SiteAdminSideBarGroups = readonly SiteAdminSideBarGroup[]
 
-export interface SiteAdminSidebarProps extends BatchChangesProps {
-    isSourcegraphDotCom: boolean
+export interface SiteAdminSidebarProps extends SiteAdminSideBarGroupContext {
     /** The items for the side bar, by group */
     groups: SiteAdminSideBarGroups
     className?: string
@@ -56,15 +58,15 @@ export const SiteAdminSidebar: React.FunctionComponent<React.PropsWithChildren<S
                                         openByDefault={true}
                                     >
                                         {items.map(
-                                            ({ label, to, source = 'client', condition = () => true }) =>
+                                            ({ label, to, source = 'client', exact, condition = () => true }) =>
                                                 condition(props) && (
                                                     <SidebarNavItem
                                                         to={to}
-                                                        exact={true}
                                                         key={label}
                                                         source={source}
                                                         className={styles.navItem}
                                                         onClick={collapseMobileSidebar}
+                                                        exact={exact}
                                                     >
                                                         {label}
                                                     </SidebarNavItem>

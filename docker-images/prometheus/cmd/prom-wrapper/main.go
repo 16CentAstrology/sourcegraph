@@ -1,7 +1,7 @@
 // Command prom-wrapper provides a wrapper command for Prometheus that
 // also handles Sourcegraph configuration changes and making changes to Prometheus.
 //
-// See https://docs.sourcegraph.com/dev/background-information/observability/prometheus
+// See https://docs-legacy.sourcegraph.com/dev/background-information/observability/prometheus
 package main
 
 import (
@@ -49,7 +49,7 @@ func main() {
 	})
 	defer liblog.Sync()
 
-	logger := log.Scoped("prom-wrapper", "sourcegraph/prometheus wrapper program")
+	logger := log.Scoped("prom-wrapper")
 	ctx := context.Background()
 
 	disableAlertmanager := noAlertmanager == "true"
@@ -64,7 +64,7 @@ func main() {
 	if len(os.Args) > 1 {
 		promArgs = os.Args[1:] // propagate args to prometheus
 	}
-	go runCmd(logger, procErrs, NewPrometheusCmd(promArgs, prometheusPort))
+	go runCmd(log.Scoped("prometheus"), procErrs, NewPrometheusCmd(promArgs, prometheusPort))
 
 	// router serves endpoints accessible from outside the container (defined by `exportPort`)
 	// this includes any endpoints from `siteConfigSubscriber`, reverse-proxying services, etc.
@@ -82,13 +82,13 @@ func main() {
 		logger.Warn("DISABLE_ALERTMANAGER=true; Alertmanager is disabled")
 	} else {
 		// start alertmanager
-		go runCmd(logger, procErrs, NewAlertmanagerCmd(alertmanagerConfigPath))
+		go runCmd(log.Scoped("alertmanager"), procErrs, NewAlertmanagerCmd(alertmanagerConfigPath))
 
 		// wait for alertmanager to become available
 		logger.Info("waiting for alertmanager")
 		alertmanagerWaitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if err := waitForAlertmanager(alertmanagerWaitCtx, alertmanager); err != nil {
-			logger.Fatal("unable to reach Alertmanager", log.Error(err))
+			logger.Fatal("unable to reach Alertmanager within deadline", log.Error(err))
 		}
 		cancel()
 		logger.Debug("detected alertmanager ready")
@@ -98,7 +98,7 @@ func main() {
 			logger.Info("DISABLE_SOURCEGRAPH_CONFIG=true; configuration syncing is disabled")
 		} else {
 			logger.Info("initializing configuration")
-			subscriber := NewSiteConfigSubscriber(logger.Scoped("siteconfig", "site configuration subscriber"), alertmanager)
+			subscriber := NewSiteConfigSubscriber(logger.Scoped("siteconfig"), alertmanager)
 
 			// watch for configuration updates in the background
 			go subscriber.Subscribe(ctx)

@@ -29,6 +29,7 @@ import (
 //    pointers, which is ugly and inefficient.
 
 type BatchSpec struct {
+	Version           int                      `json:"version,omitempty" yaml:"version"`
 	Name              string                   `json:"name,omitempty" yaml:"name"`
 	Description       string                   `json:"description,omitempty" yaml:"description"`
 	On                []OnQueryOrRepository    `json:"on,omitempty" yaml:"on"`
@@ -43,6 +44,7 @@ type ChangesetTemplate struct {
 	Title     string                       `json:"title,omitempty" yaml:"title"`
 	Body      string                       `json:"body,omitempty" yaml:"body"`
 	Branch    string                       `json:"branch,omitempty" yaml:"branch"`
+	Fork      *bool                        `json:"fork,omitempty" yaml:"fork"`
 	Commit    ExpandedGitCommitDescription `json:"commit,omitempty" yaml:"commit"`
 	Published *overridable.BoolOrString    `json:"published" yaml:"published"`
 }
@@ -205,7 +207,7 @@ func (e BatchSpecValidationError) Error() string {
 }
 
 func IsValidationError(err error) bool {
-	return errors.HasType(err, &BatchSpecValidationError{})
+	return errors.HasType[*BatchSpecValidationError](err)
 }
 
 // SkippedStepsForRepo calculates the steps required to run on the given repo.

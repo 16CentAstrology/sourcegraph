@@ -1,15 +1,19 @@
-import React, { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, type FC } from 'react'
 
-import * as H from 'history'
-import { RouteComponentProps } from 'react-router'
+import { capitalize } from 'lodash'
+import { useLocation } from 'react-router-dom'
 
+import { basename, pluralize } from '@sourcegraph/common'
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
 import { displayRepoName } from '@sourcegraph/shared/src/components/RepoLink'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { RevisionSpec } from '@sourcegraph/shared/src/util/url'
-import { Code, Heading, ErrorAlert } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import type { RevisionSpec } from '@sourcegraph/shared/src/util/url'
+import { Code, ErrorAlert, Heading } from '@sourcegraph/wildcard'
 
-import { BreadcrumbSetters } from '../../components/Breadcrumbs'
+import type { BreadcrumbSetters } from '../../components/Breadcrumbs'
+import { useUrlSearchParamsForConnectionState } from '../../components/FilteredConnection/hooks/connectionState'
 import { useShowMorePagination } from '../../components/FilteredConnection/hooks/useShowMorePagination'
 import {
     ConnectionContainer,
@@ -21,15 +25,16 @@ import {
 } from '../../components/FilteredConnection/ui'
 import { PageTitle } from '../../components/PageTitle'
 import {
-    GitCommitFields,
-    RepositoryFields,
-    RepositoryGitCommitsResult,
-    RepositoryGitCommitsVariables,
+    RepositoryType,
+    type GitCommitFields,
+    type RepositoryFields,
+    type RepositoryGitCommitsResult,
+    type RepositoryGitCommitsVariables,
 } from '../../graphql-operations'
-import { eventLogger } from '../../tracking/eventLogger'
-import { basename } from '../../util/path'
+import { parseBrowserRepoURL } from '../../util/url'
 import { externalLinkFieldsFragment } from '../backend'
 import { FilePathBreadcrumbs } from '../FilePathBreadcrumbs'
+import { getRefType, isPerforceDepotSource } from '../utils'
 
 import { GitCommitNode } from './GitCommitNode'
 
@@ -40,6 +45,9 @@ export const gitCommitFragment = gql`
         id
         oid
         abbreviatedOID
+        perforceChangelist {
+            ...PerforceChangelistFieldsWithoutCommit
+        }
         message
         subject
         body
@@ -52,6 +60,9 @@ export const gitCommitFragment = gql`
         parents {
             oid
             abbreviatedOID
+            perforceChangelist {
+                ...PerforceChangelistFieldsWithoutCommit
+            }
             url
         }
         url
@@ -62,6 +73,11 @@ export const gitCommitFragment = gql`
         tree(path: "") {
             canonicalURL
         }
+    }
+
+    fragment PerforceChangelistFieldsWithoutCommit on PerforceChangelist {
+        cid
+        canonicalURL
     }
 
     fragment SignatureFields on Signature {
@@ -79,16 +95,18 @@ export const gitCommitFragment = gql`
         }
         date
     }
-
     ${externalLinkFieldsFragment}
 `
 
-const REPOSITORY_GIT_COMMITS_PER_PAGE = 20
-
-const REPOSITORY_GIT_COMMITS_QUERY = gql`
+export const REPOSITORY_GIT_COMMITS_QUERY = gql`
     query RepositoryGitCommits($repo: ID!, $revspec: String!, $first: Int, $afterCursor: String, $filePath: String) {
         node(id: $repo) {
             ... on Repository {
+                sourceType
+                externalURLs {
+                    url
+                    serviceKind
+                }
                 commit(rev: $revspec) {
                     ancestors(first: $first, path: $filePath, afterCursor: $afterCursor) {
                         nodes {
@@ -106,27 +124,19 @@ const REPOSITORY_GIT_COMMITS_QUERY = gql`
     ${gitCommitFragment}
 `
 
-export interface RepositoryCommitsPageProps
-    extends RevisionSpec,
-        BreadcrumbSetters,
-        RouteComponentProps<{
-            filePath?: string | undefined
-        }>,
-        TelemetryProps {
+export interface RepositoryCommitsPageProps extends RevisionSpec, BreadcrumbSetters, TelemetryProps, TelemetryV2Props {
     repo: RepositoryFields
-
-    history: H.History
-    location: H.Location
 }
 
 // A page that shows a repository's commits at the current revision.
-export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChildren<RepositoryCommitsPageProps>> = ({
-    useBreadcrumb,
-    ...props
-}) => {
-    const repo = props.repo
-    const filePath = props.match.params.filePath
+export const RepositoryCommitsPage: FC<RepositoryCommitsPageProps> = props => {
+    const { useBreadcrumb, repo } = props
+    const location = useLocation()
+    const { filePath = '' } = parseBrowserRepoURL(location.pathname)
 
+    let sourceType = RepositoryType.GIT_REPOSITORY
+
+    const connectionState = useUrlSearchParamsForConnectionState([])
     const { connection, error, loading, hasNextPage, fetchMore } = useShowMorePagination<
         RepositoryGitCommitsResult,
         RepositoryGitCommitsVariables,
@@ -137,8 +147,6 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
             repo: repo.id,
             revspec: props.revision,
             filePath: filePath ?? null,
-            first: REPOSITORY_GIT_COMMITS_PER_PAGE,
-            afterCursor: null,
         },
         getConnection: result => {
             const { node } = dataOrThrowErrors(result)
@@ -151,17 +159,32 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
             if (!node.commit?.ancestors) {
                 return { nodes: [] }
             }
+
+            sourceType = node.sourceType
+
             return node?.commit?.ancestors
         },
         options: {
             fetchPolicy: 'cache-first',
             useAlternateAfterCursor: true,
+            errorPolicy: 'all',
         },
+        state: connectionState,
     })
 
+    const getPageTitle = (): string => {
+        const repoString = displayRepoName(repo.name)
+        const refType = capitalize(pluralize(getRefType(sourceType), 0))
+        if (filePath) {
+            return `${refType} - ${basename(filePath)} - ${repoString}`
+        }
+        return `${refType} - ${repoString}`
+    }
+
     useEffect(() => {
-        eventLogger.logPageView('RepositoryCommits')
-    }, [])
+        EVENT_LOGGER.logPageView('RepositoryCommits')
+        props.telemetryRecorder.recordEvent('repo.commits', 'view')
+    }, [props.telemetryRecorder])
 
     useBreadcrumb(
         useMemo(() => {
@@ -179,10 +202,11 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
                         filePath={filePath}
                         isDir={true}
                         telemetryService={props.telemetryService}
+                        telemetryRecorder={props.telemetryRecorder}
                     />
                 ),
             }
-        }, [filePath, repo, props.revision, props.telemetryService])
+        }, [filePath, repo, props.revision, props.telemetryService, props.telemetryRecorder])
     )
     // We need to resolve the Commits breadcrumb at the same time as the
     // filePath, so that the order is correct (otherwise Commits will show
@@ -192,17 +216,15 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
             if (!repo) {
                 return
             }
-            return { key: 'commits', element: <>Commits</> }
-        }, [repo])
-    )
 
-    const getPageTitle = (): string => {
-        const repoString = displayRepoName(repo.name)
-        if (filePath) {
-            return `Commits - ${basename(filePath)} - ${repoString}`
-        }
-        return `Commits - ${repoString}`
-    }
+            const refType = getRefType(sourceType)
+
+            return {
+                key: refType,
+                element: <>{capitalize(pluralize(refType, 0))}</>,
+            }
+        }, [repo, sourceType])
+    )
 
     return (
         <div className={styles.repositoryCommitsPage} data-testid="commits-page">
@@ -213,10 +235,13 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
                     <Heading as="h2" styleAs="h1">
                         {filePath ? (
                             <>
-                                View commits inside <Code>{basename(filePath)}</Code>
+                                View {pluralize(getRefType(sourceType), 0)} inside <Code>{basename(filePath)}</Code>
                             </>
                         ) : (
-                            <>View commits from this repository</>
+                            <>
+                                View {pluralize(getRefType(sourceType), 0)} from this{' '}
+                                {isPerforceDepotSource(sourceType) ? 'depot' : 'repository'}
+                            </>
                         )}
                     </Heading>
 
@@ -227,7 +252,13 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
                     {error && <ErrorAlert error={error} className="w-100 mb-0" />}
                     <ConnectionList className="list-group list-group-flush w-100">
                         {connection?.nodes.map(node => (
-                            <GitCommitNode key={node.id} className="list-group-item" wrapperElement="li" node={node} />
+                            <GitCommitNode
+                                key={node.id}
+                                className="list-group-item"
+                                wrapperElement="li"
+                                node={node}
+                                telemetryRecorder={props.telemetryRecorder}
+                            />
                         ))}
                     </ConnectionList>
                     {loading && <ConnectionLoading />}
@@ -235,10 +266,9 @@ export const RepositoryCommitsPage: React.FunctionComponent<React.PropsWithChild
                         <SummaryContainer centered={true}>
                             <ConnectionSummary
                                 centered={true}
-                                first={REPOSITORY_GIT_COMMITS_PER_PAGE}
                                 connection={connection}
-                                noun="commit"
-                                pluralNoun="commits"
+                                noun={getRefType(sourceType)}
+                                pluralNoun={pluralize(getRefType(sourceType), 0)}
                                 hasNextPage={hasNextPage}
                                 emptyElement={null}
                             />

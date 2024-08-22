@@ -1,25 +1,28 @@
 import React, { useCallback } from 'react'
 
-import * as H from 'history'
 import { map } from 'rxjs/operators'
 
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
 import { Container, H3, H5 } from '@sourcegraph/wildcard'
 
-import { FilteredConnection, FilteredConnectionQueryArguments } from '../../../components/FilteredConnection'
-import { RepoBatchChange, RepositoryFields } from '../../../graphql-operations'
+import { FilteredConnection, type FilteredConnectionQueryArguments } from '../../../components/FilteredConnection'
+import type { RepoBatchChange, RepositoryFields } from '../../../graphql-operations'
 import { queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs } from '../detail/backend'
 import { GettingStarted } from '../list/GettingStarted'
 
 import { queryRepoBatchChanges as _queryRepoBatchChanges } from './backend'
-import { BatchChangeNode, BatchChangeNodeProps } from './BatchChangeNode'
+import { BatchChangeNode, type BatchChangeNodeProps } from './BatchChangeNode'
 
 import styles from './RepoBatchChanges.module.scss'
 
-interface Props {
+interface Props extends TelemetryV2Props {
     viewerCanAdminister: boolean
-    history: H.History
-    location: H.Location
+    // canCreate indicates whether or not the currently-authenticated user has sufficient
+    // permissions to create a batch change. If not, canCreate will be a string reason why
+    // the user cannot create.
+    canCreate: true | string
     repo: RepositoryFields
+    isSourcegraphDotCom: boolean
     onlyArchived?: boolean
 
     /** For testing only. */
@@ -33,11 +36,12 @@ interface Props {
  */
 export const RepoBatchChanges: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
     viewerCanAdminister,
-    history,
-    location,
+    canCreate,
     repo,
+    isSourcegraphDotCom,
     queryRepoBatchChanges = _queryRepoBatchChanges,
     queryExternalChangesetWithFileDiffs = _queryExternalChangesetWithFileDiffs,
+    telemetryRecorder,
 }) => {
     const query = useCallback(
         (args: FilteredConnectionQueryArguments) => {
@@ -55,12 +59,8 @@ export const RepoBatchChanges: React.FunctionComponent<React.PropsWithChildren<P
     return (
         <Container role="region" aria-label="batch changes">
             <FilteredConnection<RepoBatchChange, Omit<BatchChangeNodeProps, 'node'>>
-                history={history}
-                location={location}
                 nodeComponent={BatchChangeNode}
                 nodeComponentProps={{
-                    history,
-                    location,
                     queryExternalChangesetWithFileDiffs,
                     viewerCanAdminister,
                 }}
@@ -74,7 +74,13 @@ export const RepoBatchChanges: React.FunctionComponent<React.PropsWithChildren<P
                 headComponent={RepoBatchChangesHeader}
                 cursorPaging={true}
                 noSummaryIfAllNodesVisible={true}
-                emptyElement={<GettingStarted isSourcegraphDotCom={false} />}
+                emptyElement={
+                    <GettingStarted
+                        isSourcegraphDotCom={isSourcegraphDotCom}
+                        canCreate={canCreate}
+                        telemetryRecorder={telemetryRecorder}
+                    />
+                }
             />
         </Container>
     )

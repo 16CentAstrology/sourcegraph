@@ -5,38 +5,29 @@ import (
 	"fmt"
 	"strconv"
 
-	gh "github.com/google/go-github/v43/github"
+	gh "github.com/google/go-github/v55/github"
 
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/globals"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/webhooks"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/webhooks"
 	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/authz/permssync"
-	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
-	"github.com/sourcegraph/sourcegraph/internal/repoupdater/protocol"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
-// handleGitHubUserAuthzEvent handles a github webhook for the events described in webhookhandlers/handlers.go
-// extracting a user from the github event and scheduling it for a perms update in repo-updater
+// handleGitHubUserAuthzEvent handles a github webhook for the events described
+// in webhookhandlers/handlers.go extracting a user from the github event and
+// scheduling it for a perms update in repo-updater
 func handleGitHubUserAuthzEvent(logger log.Logger, opts authz.FetchPermsOptions) webhooks.Handler {
-	return webhooks.Handler(func(ctx context.Context, db database.DB, _ extsvc.CodeHostBaseURL, payload any) error {
-		if !conf.ExperimentalFeatures().EnablePermissionsWebhooks {
-			return nil
-		}
-		if globals.PermissionsUserMapping().Enabled {
-			return nil
-		}
-
+	return func(ctx context.Context, db database.DB, _ extsvc.CodeHostBaseURL, payload any) error {
 		logger.Debug("handleGitHubUserAuthzEvent: Got github event", log.String("type", fmt.Sprintf("%T", payload)))
 
 		var user *gh.User
 
-		// github events contain a user object at a few different levels, so try and find the first that matches
-		// and extract the user
+		// github events contain a user object at a few different levels, so try and find
+		// the first that matches and extract the user
 		switch e := payload.(type) {
 		case memberGetter:
 			user = e.GetMember()
@@ -48,7 +39,7 @@ func handleGitHubUserAuthzEvent(logger log.Logger, opts authz.FetchPermsOptions)
 		}
 
 		return scheduleUserUpdate(ctx, logger, db, user, opts)
-	})
+	}
 }
 
 type memberGetter interface {
@@ -82,9 +73,10 @@ func scheduleUserUpdate(ctx context.Context, logger log.Logger, db database.DB, 
 
 	logger.Debug("scheduleUserUpdate: Dispatching permissions update", log.Int32s("users", ids))
 
-	permssync.SchedulePermsSync(ctx, logger, db, protocol.PermsSyncRequest{
+	permssync.SchedulePermsSync(ctx, logger, db, permssync.ScheduleSyncOpts{
 		UserIDs: ids,
 		Options: opts,
+		Reason:  database.ReasonGitHubUserEvent,
 	})
 
 	return nil

@@ -8,7 +8,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/lib/batches"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/externallink"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 )
 
@@ -60,6 +59,10 @@ type SyncChangesetArgs struct {
 
 type ReenqueueChangesetArgs struct {
 	Changeset graphql.ID
+}
+
+type CreateChangesetSpecsArgs struct {
+	ChangesetSpecs []string
 }
 
 type CreateChangesetSpecArgs struct {
@@ -271,6 +274,7 @@ type BatchChangesResolver interface {
 	DeleteBatchChangesCredential(ctx context.Context, args *DeleteBatchChangesCredentialArgs) (*EmptyResponse, error)
 
 	CreateChangesetSpec(ctx context.Context, args *CreateChangesetSpecArgs) (ChangesetSpecResolver, error)
+	CreateChangesetSpecs(ctx context.Context, args *CreateChangesetSpecsArgs) ([]ChangesetSpecResolver, error)
 	SyncChangeset(ctx context.Context, args *SyncChangesetArgs) (*EmptyResponse, error)
 	ReenqueueChangeset(ctx context.Context, args *ReenqueueChangesetArgs) (ChangesetResolver, error)
 	DetachChangesets(ctx context.Context, args *DetachChangesetsArgs) (BulkOperationResolver, error)
@@ -299,12 +303,14 @@ type BatchChangesResolver interface {
 
 	MaxUnlicensedChangesets(ctx context.Context) int32
 
+	GetChangesetsByIDs(ctx context.Context, args *GetChangesetsByIDsArgs) (gqlutil.SliceConnectionResolver[ChangesetResolver], error)
+
 	NodeResolvers() map[string]NodeByIDFunc
 }
 
 type BulkOperationConnectionResolver interface {
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 	Nodes(ctx context.Context) ([]BulkOperationResolver, error)
 }
 
@@ -452,14 +458,14 @@ type ChangesetApplyPreviewConnectionStatsResolver interface {
 
 type ChangesetApplyPreviewConnectionResolver interface {
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 	Nodes(ctx context.Context) ([]ChangesetApplyPreviewResolver, error)
 	Stats(ctx context.Context) (ChangesetApplyPreviewConnectionStatsResolver, error)
 }
 
 type ChangesetSpecConnectionResolver interface {
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 	Nodes(ctx context.Context) ([]ChangesetSpecResolver, error)
 }
 
@@ -541,7 +547,7 @@ type ForkTargetInterface interface {
 type BatchChangesCodeHostConnectionResolver interface {
 	Nodes(ctx context.Context) ([]BatchChangesCodeHostResolver, error)
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type BatchChangesCodeHostResolver interface {
@@ -549,17 +555,26 @@ type BatchChangesCodeHostResolver interface {
 	ExternalServiceURL() string
 	RequiresSSH() bool
 	RequiresUsername() bool
+	SupportsCommitSigning() bool
 	HasWebhooks() bool
 	Credential() BatchChangesCredentialResolver
+	CommitSigningConfiguration(context.Context) (CommitSigningConfigResolver, error)
 }
 
 type BatchChangesCredentialResolver interface {
 	ID() graphql.ID
 	ExternalServiceKind() string
 	ExternalServiceURL() string
+	GitHubAppID() int
 	SSHPublicKey(ctx context.Context) (*string, error)
 	CreatedAt() gqlutil.DateTime
 	IsSiteCredential() bool
+	GitHubApp(context.Context) (GitHubAppResolver, error)
+}
+
+// Only GitHubApps are supported for commit signing for now.
+type CommitSigningConfigResolver interface {
+	ToGitHubApp() (GitHubAppResolver, bool)
 }
 
 type ChangesetCountsArgs struct {
@@ -605,12 +620,15 @@ type ListBatchSpecWorkspaceFilesArgs struct {
 }
 
 type AvailableBulkOperationsArgs struct {
-	BatchChange graphql.ID
-	Changesets  []graphql.ID
+	BulkOperationBaseArgs
 }
 
 type CheckBatchChangesCredentialArgs struct {
 	BatchChangesCredential graphql.ID
+}
+
+type GetChangesetsByIDsArgs struct {
+	BulkOperationBaseArgs
 }
 
 type ListWorkspacesArgs struct {
@@ -633,7 +651,7 @@ type ListRecentlyErroredWorkspacesArgs struct {
 
 type BatchSpecWorkspaceStepOutputLinesArgs struct {
 	First int32
-	After *int32
+	After *string
 }
 
 type BatchChangeResolver interface {
@@ -662,18 +680,18 @@ type BatchChangeResolver interface {
 type BatchChangesConnectionResolver interface {
 	Nodes(ctx context.Context) ([]BatchChangeResolver, error)
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type BatchSpecConnectionResolver interface {
 	Nodes(ctx context.Context) ([]BatchSpecResolver, error)
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type BatchSpecWorkspaceFileConnectionResolver interface {
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 	Nodes(ctx context.Context) ([]BatchWorkspaceFileResolver, error)
 }
 
@@ -686,16 +704,19 @@ type BatchWorkspaceFileResolver interface {
 	Path() string
 	Name() string
 	IsDirectory() bool
-	Content(ctx context.Context) (string, error)
+	Content(ctx context.Context, args *GitTreeContentPageArgs) (string, error)
 	ByteSize(ctx context.Context) (int32, error)
+	TotalLines(ctx context.Context) (int32, error)
 	Binary(ctx context.Context) (bool, error)
-	RichHTML(ctx context.Context) (string, error)
+	RichHTML(ctx context.Context, args *GitTreeContentPageArgs) (string, error)
 	URL(ctx context.Context) (string, error)
 	CanonicalURL() string
+	ChangelistURL(ctx context.Context) (*string, error)
 	ExternalURLs(ctx context.Context) ([]*externallink.Resolver, error)
 	Highlight(ctx context.Context, args *HighlightArgs) (*HighlightedFileResolver, error)
+	Languages() ([]string, error)
 
-	ToGitBlob() (*GitTreeEntryResolver, bool)
+	ToGitBlob() (*GitBlobResolver, bool)
 	ToVirtualFile() (*VirtualFileResolver, bool)
 	ToBatchSpecWorkspaceFile() (BatchWorkspaceFileResolver, bool)
 }
@@ -725,12 +746,14 @@ type ChangesetsStatsResolver interface {
 	Processing() int32
 	Deleted() int32
 	Archived() int32
+	IsCompleted() bool
+	PercentComplete() int32
 }
 
 type ChangesetsConnectionResolver interface {
 	Nodes(ctx context.Context) ([]ChangesetResolver, error)
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type ChangesetLabelResolver interface {
@@ -775,7 +798,16 @@ type ExternalChangesetResolver interface {
 	Body(context.Context) (*string, error)
 	Author() (*PersonResolver, error)
 	ExternalURL() (*externallink.Resolver, error)
+
+	OwnedByBatchChange() *graphql.ID
+
+	// If the changeset is a fork, this corresponds to the namespace of the fork.
 	ForkNamespace() *string
+	// If the changeset is a fork, this corresponds to the name of the fork.
+	ForkName() *string
+
+	CommitVerification(context.Context) (CommitVerificationResolver, error)
+
 	// ReviewState returns a value of type *btypes.ChangesetReviewState.
 	ReviewState(context.Context) *string
 	// CheckState returns a value of type *btypes.ChangesetCheckState.
@@ -794,10 +826,22 @@ type ExternalChangesetResolver interface {
 	CurrentSpec(ctx context.Context) (VisibleChangesetSpecResolver, error)
 }
 
+// Only GitHubApps are supported for commit signing for now.
+type CommitVerificationResolver interface {
+	ToGitHubCommitVerification() (GitHubCommitVerificationResolver, bool)
+}
+
+type GitHubCommitVerificationResolver interface {
+	Verified() bool
+	Reason() string
+	Signature() string
+	Payload() string
+}
+
 type ChangesetEventsConnectionResolver interface {
 	Nodes(ctx context.Context) ([]ChangesetEventResolver, error)
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 }
 
 type ChangesetEventResolver interface {
@@ -833,7 +877,7 @@ type BatchSpecWorkspaceResolutionResolver interface {
 type BatchSpecWorkspaceConnectionResolver interface {
 	Nodes(ctx context.Context) ([]BatchSpecWorkspaceResolver, error)
 	TotalCount(ctx context.Context) (int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 	Stats(ctx context.Context) (BatchSpecWorkspacesStatsResolver, error)
 }
 
@@ -901,6 +945,12 @@ type BatchSpecWorkspaceStagesResolver interface {
 	Teardown() []ExecutionLogEntryResolver
 }
 
+type BatchSpecWorkspaceStepOutputLineConnectionResolver interface {
+	TotalCount() (int32, error)
+	PageInfo() (*gqlutil.PageInfo, error)
+	Nodes() ([]string, error)
+}
+
 type BatchSpecWorkspaceStepResolver interface {
 	Number() int32
 	Run() string
@@ -908,7 +958,7 @@ type BatchSpecWorkspaceStepResolver interface {
 	IfCondition() *string
 	CachedResultFound() bool
 	Skipped() bool
-	OutputLines(ctx context.Context, args *BatchSpecWorkspaceStepOutputLinesArgs) (*[]string, error)
+	OutputLines(ctx context.Context, args *BatchSpecWorkspaceStepOutputLinesArgs) BatchSpecWorkspaceStepOutputLineConnectionResolver
 
 	StartedAt() *gqlutil.DateTime
 	FinishedAt() *gqlutil.DateTime

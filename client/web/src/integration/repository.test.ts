@@ -2,34 +2,41 @@ import assert from 'assert'
 import * as path from 'path'
 
 import { subDays } from 'date-fns'
+import { afterEach, beforeEach, describe, it } from 'mocha'
 
 import { encodeURIPathComponent } from '@sourcegraph/common'
-import { SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
+import {
+    RepositoryType,
+    type SharedGraphQlOperations,
+    type TreeEntriesResult,
+} from '@sourcegraph/shared/src/graphql-operations'
 import { accessibilityAudit } from '@sourcegraph/shared/src/testing/accessibility'
-import { createDriverForTest, Driver } from '@sourcegraph/shared/src/testing/driver'
+import { createDriverForTest, type Driver } from '@sourcegraph/shared/src/testing/driver'
 import { afterEachSaveScreenshotIfFailed } from '@sourcegraph/shared/src/testing/screenshotReporter'
 
 import {
     DiffHunkLineType,
-    RepositoryContributorsResult,
-    WebGraphQlOperations,
     ExternalServiceKind,
+    type RepositoryContributorsResult,
+    type WebGraphQlOperations,
 } from '../graphql-operations'
 
-import { createWebIntegrationTestContext, WebIntegrationTestContext } from './context'
+import { createWebIntegrationTestContext, type WebIntegrationTestContext } from './context'
 import {
-    createResolveRepoRevisionResult,
-    createFileExternalLinksResult,
-    createTreeEntriesResult,
     createBlobContentResult,
-    createRepoChangesetsStatsResult,
+    createCodyContextFiltersResult,
+    createFileExternalLinksResult,
     createFileNamesResult,
+    createFileTreeEntriesResult,
+    createRepoChangesetsStatsResult,
     createResolveCloningRepoRevisionResult,
+    createResolveRepoRevisionResult,
+    createTreeEntriesResult,
 } from './graphQlResponseHelpers'
 import { commonWebGraphQlResults } from './graphQlResults'
-import { createEditorAPI, percySnapshotWithVariants } from './utils'
+import { createEditorAPI, removeContextFromQuery } from './utils'
 
-export const getCommonRepositoryGraphQlResults = (
+const getCommonRepositoryGraphQlResults = (
     repositoryName: string,
     repositoryUrl: string,
     fileEntries: string[] = []
@@ -40,13 +47,9 @@ export const getCommonRepositoryGraphQlResults = (
     FileNames: () => createFileNamesResult(),
     FileExternalLinks: ({ filePath }) => createFileExternalLinksResult(filePath),
     TreeEntries: () => createTreeEntriesResult(repositoryUrl, fileEntries),
-    TreeCommits: () => ({
-        node: {
-            __typename: 'Repository',
-            commit: { ancestors: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
-        },
-    }),
+    FileTreeEntries: () => createFileTreeEntriesResult(repositoryUrl, fileEntries),
     Blob: ({ filePath }) => createBlobContentResult(`content for: ${filePath}\nsecond line\nthird line`),
+    ContextFilters: () => createCodyContextFiltersResult(),
 })
 
 const now = new Date()
@@ -82,7 +85,7 @@ describe('Repository', () => {
             const shortRepositoryName = 'sourcegraph/jsonrpc2'
             const repositoryName = `github.com/${shortRepositoryName}`
             const repositorySourcegraphUrl = `/${repositoryName}`
-            const commitUrl = `${repositorySourcegraphUrl}/-/commit/15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81?visible=1`
+            const commitUrl = `${repositorySourcegraphUrl}/-/commit/15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81?first=1`
             const clickedFileName = 'async.go'
             const clickedCommit = ''
             const fileEntries = ['jsonrpc2.go', clickedFileName]
@@ -90,189 +93,76 @@ describe('Repository', () => {
             testContext.overrideGraphQL({
                 ...commonWebGraphQlResults,
                 ...getCommonRepositoryGraphQlResults(repositoryName, repositorySourcegraphUrl, fileEntries),
-                TreeCommits: () => ({
-                    node: {
+                FileCommits: () => ({
+                    repository: {
                         __typename: 'Repository',
+                        id: repositoryName,
                         commit: {
-                            ancestors: {
-                                nodes: [
-                                    {
-                                        __typename: 'GitCommit',
-                                        id: 'CommitID1',
-                                        oid: '15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81',
-                                        abbreviatedOID: '15c2290',
-                                        message: 'update LSIF indexing CI workflow\n',
-                                        subject: 'update LSIF indexing CI workflow',
-                                        body: null,
-                                        author: {
-                                            __typename: 'Signature',
-                                            person: {
-                                                avatarURL: '',
-                                                name: 'garo (they/them)',
-                                                email: 'gbrik@users.noreply.github.com',
-                                                displayName: 'garo (they/them)',
-                                                user: null,
-                                            },
-                                            date: '2020-04-29T18:40:54Z',
-                                        },
-                                        committer: {
-                                            __typename: 'Signature',
-                                            person: {
-                                                avatarURL: '',
-                                                name: 'GitHub',
-                                                email: 'noreply@github.com',
-                                                displayName: 'GitHub',
-                                                user: null,
-                                            },
-                                            date: '2020-04-29T18:40:54Z',
-                                        },
-                                        parents: [
+                            __typename: 'GitCommit',
+                            id: '1',
+                            tree: {
+                                __typename: 'GitTree',
+                                entries: fileEntries.map((fileName, index) => ({
+                                    __typename: 'GitBlob',
+                                    path: fileName,
+                                    history: {
+                                        __typename: 'TreeEntryConnection',
+                                        nodes: [
                                             {
-                                                oid: '96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                                abbreviatedOID: '96c4efa',
-                                                url: '/github.com/sourcegraph/jsonrpc2/-/commit/96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                            },
-                                            {
-                                                oid: '9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                                abbreviatedOID: '9e615b1',
-                                                url: '/github.com/sourcegraph/jsonrpc2/-/commit/9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                            },
-                                        ],
-                                        url: commitUrl,
-                                        canonicalURL: commitUrl,
-                                        externalURLs: [
-                                            {
-                                                url: 'https://github.com/sourcegraph/jsonrpc2/commit/15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81',
-                                                serviceKind: ExternalServiceKind.GITHUB,
-                                            },
-                                        ],
-                                        tree: {
-                                            canonicalURL:
-                                                '/github.com/sourcegraph/jsonrpc2@15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81',
-                                        },
-                                    },
-                                    {
-                                        __typename: 'GitCommit',
-                                        id: 'CommitID2',
-                                        oid: '9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                        abbreviatedOID: '9e615b1',
-                                        message: 'LSIF Indexing Campaign',
-                                        subject: 'LSIF Indexing Campaign',
-                                        body: null,
-                                        author: {
-                                            __typename: 'Signature',
-                                            person: {
-                                                avatarURL: '',
-                                                name: 'Sourcegraph Bot',
-                                                email: 'batch-changes@sourcegraph.com',
-                                                displayName: 'Sourcegraph Bot',
-                                                user: null,
-                                            },
-                                            date: '2020-04-29T16:57:20Z',
-                                        },
-                                        committer: {
-                                            __typename: 'Signature',
-                                            person: {
-                                                avatarURL: '',
-                                                name: 'Sourcegraph Bot',
-                                                email: 'batch-changes@sourcegraph.com',
-                                                displayName: 'Sourcegraph Bot',
-                                                user: null,
-                                            },
-                                            date: '2020-04-29T16:57:20Z',
-                                        },
-                                        parents: [
-                                            {
-                                                oid: '96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                                abbreviatedOID: '96c4efa',
-                                                url: '/github.com/sourcegraph/jsonrpc2/-/commit/96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                            },
-                                        ],
-                                        url: '/github.com/sourcegraph/jsonrpc2/-/commit/9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                        canonicalURL:
-                                            '/github.com/sourcegraph/jsonrpc2/-/commit/9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                        externalURLs: [
-                                            {
-                                                url: 'https://github.com/sourcegraph/jsonrpc2/commit/9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                                serviceKind: ExternalServiceKind.GITHUB,
-                                            },
-                                        ],
-                                        tree: {
-                                            canonicalURL:
-                                                '/github.com/sourcegraph/jsonrpc2@9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
-                                        },
-                                    },
-                                    {
-                                        __typename: 'GitCommit',
-                                        id: 'CommitID3',
-                                        oid: '96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                        abbreviatedOID: '96c4efa',
-                                        message:
-                                            'Produce LSIF data for each commit for fast/precise code nav (#35)\n\n* Produce LSIF data for each commit for fast/precise code nav\r\n\r\n* Update lsif.yml\r',
-                                        subject: 'Produce LSIF data for each commit for fast/precise code nav (#35)',
-                                        body: '* Produce LSIF data for each commit for fast/precise code nav\r\n\r\n* Update lsif.yml',
-                                        author: {
-                                            __typename: 'Signature',
-                                            person: {
-                                                avatarURL: '',
-                                                name: 'Quinn Slack',
-                                                email: 'qslack@qslack.com',
-                                                displayName: 'Quinn Slack',
-                                                user: {
-                                                    id: 'VXNlcjo2',
-                                                    username: 'sqs',
-                                                    url: '/users/sqs',
-                                                    displayName: 'sqs',
+                                                __typename: 'GitBlob',
+                                                commit: {
+                                                    __typename: 'GitCommit',
+                                                    id: '1',
+                                                    author: {
+                                                        __typename: 'Signature',
+                                                        person: {
+                                                            avatarURL: '',
+                                                            name: 'Sourcegraph Bot',
+                                                            email: 'batch-changes@sourcegraph.com',
+                                                            displayName: 'Sourcegraph Bot',
+                                                            user: null,
+                                                        },
+                                                        date: '2020-04-29T16:57:20Z',
+                                                    },
+                                                    committer: {
+                                                        __typename: 'Signature',
+                                                        person: {
+                                                            avatarURL: '',
+                                                            name: 'Sourcegraph Bot',
+                                                            email: 'batch-changes@sourcegraph.com',
+                                                            displayName: 'Sourcegraph Bot',
+                                                            user: null,
+                                                        },
+                                                        date: '2020-04-29T16:57:20Z',
+                                                    },
+                                                    subject: 'update LSIF indexing CI workflow',
+                                                    canonicalURL: commitUrl,
+                                                    externalURLs: [
+                                                        {
+                                                            url: 'https://github.com/sourcegraph/jsonrpc2/commit/15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81',
+                                                            serviceKind: ExternalServiceKind.GITHUB,
+                                                        },
+                                                    ],
                                                 },
                                             },
-                                            date: '2019-12-22T04:34:38Z',
-                                        },
-                                        committer: {
-                                            __typename: 'Signature',
-                                            person: {
-                                                avatarURL: '',
-                                                name: 'GitHub',
-                                                email: 'noreply@github.com',
-                                                displayName: 'GitHub',
-                                                user: null,
-                                            },
-                                            date: '2019-12-22T04:34:38Z',
-                                        },
-                                        parents: [
-                                            {
-                                                oid: 'cee7209801bf50cee868f8e0696ba0b76ae21792',
-                                                abbreviatedOID: 'cee7209',
-                                                url: '/github.com/sourcegraph/jsonrpc2/-/commit/cee7209801bf50cee868f8e0696ba0b76ae21792',
-                                            },
                                         ],
-                                        url: '/github.com/sourcegraph/jsonrpc2/-/commit/96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                        canonicalURL:
-                                            '/github.com/sourcegraph/jsonrpc2/-/commit/96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                        externalURLs: [
-                                            {
-                                                url: 'https://github.com/sourcegraph/jsonrpc2/commit/96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                                serviceKind: ExternalServiceKind.GITHUB,
-                                            },
-                                        ],
-                                        tree: {
-                                            canonicalURL:
-                                                '/github.com/sourcegraph/jsonrpc2@96c4efab7ee28f3d1cf1d248a0139cea37368b18',
-                                        },
                                     },
-                                ],
-                                pageInfo: { __typename: 'PageInfo', hasNextPage: false, endCursor: 'abc' },
+                                })),
                             },
                         },
                     },
                 }),
+
                 RepositoryCommit: () => ({
                     node: {
                         __typename: 'Repository',
+                        sourceType: RepositoryType.GIT_REPOSITORY,
                         commit: {
                             __typename: 'GitCommit',
                             id: 'CommitID1',
                             oid: '15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81',
                             abbreviatedOID: '15c2290',
+                            perforceChangelist: null,
                             message: 'update LSIF indexing CI workflow\n',
                             subject: 'update LSIF indexing CI workflow',
                             body: null,
@@ -305,12 +195,14 @@ describe('Repository', () => {
                                     __typename: 'GitCommit',
                                     oid: '96c4efab7ee28f3d1cf1d248a0139cea37368b18',
                                     abbreviatedOID: '96c4efa',
+                                    perforceChangelist: null,
                                     url: '/github.com/sourcegraph/jsonrpc2/-/commit/96c4efab7ee28f3d1cf1d248a0139cea37368b18',
                                 },
                                 {
                                     __typename: 'GitCommit',
                                     oid: '9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
                                     abbreviatedOID: '9e615b1',
+                                    perforceChangelist: null,
                                     url: '/github.com/sourcegraph/jsonrpc2/-/commit/9e615b1c32cc519130575e8d10d0d0fee8a5eb6c',
                                 },
                             ],
@@ -346,6 +238,7 @@ describe('Repository', () => {
                                         mostRelevantFile: {
                                             __typename: 'GitBlob',
                                             url: '/github.com/sourcegraph/jsonrpc2@15c2290dcb37731cc4ee5a2a1c1e5a25b4c28f81/-/blob/.github/workflows/lsif.yml',
+                                            changelistURL: '',
                                         },
                                         hunks: [
                                             {
@@ -395,7 +288,6 @@ describe('Repository', () => {
             // Assert that the directory listing displays properly
             await driver.page.waitForSelector('.test-tree-entries')
 
-            await percySnapshotWithVariants(driver.page, 'Repository index page')
             await accessibilityAudit(driver.page)
 
             const numberOfFileEntries = await driver.page.evaluate(
@@ -419,7 +311,7 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent?.trim())
             )
-            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', `/${clickedFileName}`])
+            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', `${clickedFileName}`])
 
             // Return to repo page
             await driver.page.waitForSelector('.test-repo-header-repo-link')
@@ -430,7 +322,7 @@ describe('Repository', () => {
             await driver.assertWindowLocation(repositorySourcegraphUrl)
 
             await driver.findElementWithText(clickedCommit, {
-                selector: '[data-testid="git-commit-node-oid"]',
+                selector: '[data-testid="git-commit-message-with-links"] a',
                 action: 'click',
             })
             await driver.page.waitForSelector('[data-testid="repository-commit-page"]')
@@ -451,6 +343,29 @@ describe('Repository', () => {
             const directoryName = "Geoffrey's random queries.32r242442bf"
             const filePath = path.posix.join(directoryName, fileName)
 
+            const TreeEntries: TreeEntriesResult = {
+                repository: {
+                    id: 'test-repo-id',
+                    commit: {
+                        tree: {
+                            isRoot: false,
+                            url: '/github.com/ggilmore/q-test/-/tree/Geoffrey%27s%20random%20queries.32r242442bf',
+                            entries: [
+                                {
+                                    __typename: 'GitBlob',
+                                    languages: ['SQL'],
+                                    name: fileName,
+                                    path: filePath,
+                                    isDirectory: false,
+                                    url: '/github.com/ggilmore/q-test/-/blob/Geoffrey%27s%20random%20queries.32r242442bf/%25%20token.4288249258.sql',
+                                    submodule: null,
+                                },
+                            ],
+                        },
+                    },
+                },
+            }
+
             testContext.overrideGraphQL({
                 ...commonWebGraphQlResults,
                 ...getCommonRepositoryGraphQlResults(repositoryName, repositorySourcegraphUrl),
@@ -460,26 +375,8 @@ describe('Repository', () => {
                             revision
                         )}/${encodeURIPathComponent(filePath)}`
                     ),
-                TreeEntries: () => ({
-                    repository: {
-                        commit: {
-                            tree: {
-                                isRoot: false,
-                                url: '/github.com/ggilmore/q-test/-/tree/Geoffrey%27s%20random%20queries.32r242442bf',
-                                entries: [
-                                    {
-                                        name: fileName,
-                                        path: filePath,
-                                        isDirectory: false,
-                                        url: '/github.com/ggilmore/q-test/-/blob/Geoffrey%27s%20random%20queries.32r242442bf/%25%20token.4288249258.sql',
-                                        submodule: null,
-                                        isSingleChild: false,
-                                    },
-                                ],
-                            },
-                        },
-                    },
-                }),
+                TreeEntries: () => TreeEntries,
+                FileTreeEntries: () => TreeEntries,
             })
 
             await driver.page.goto(
@@ -507,16 +404,17 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent?.trim())
             )
+
             assert.deepStrictEqual(breadcrumbTexts, [
                 shortRepositoryName,
                 '@master',
-                "/Geoffrey's random queries.32r242442bf/% token.4288249258.sql",
+                "Geoffrey's random queries.32r242442bf/% token.4288249258.sql",
             ])
 
             {
-                const queryInput = await createEditorAPI(driver, '[data-testid="searchbox"] .test-query-input')
+                const queryInput = await createEditorAPI(driver, '.test-query-input')
                 assert.strictEqual(
-                    await queryInput.getValue(),
+                    removeContextFromQuery((await queryInput.getValue()) ?? ''),
                     "repo:^github\\.com/ggilmore/q-test$ file:^Geoffrey's\\ random\\ queries\\.32r242442bf/%\\ token\\.4288249258\\.sql"
                 )
             }
@@ -529,10 +427,14 @@ describe('Repository', () => {
                 "https://github.com/ggilmore/q-test/blob/master/Geoffrey's%20random%20queries.32r242442bf/%25%20token.4288249258.sql"
             )
 
-            const blobContent = await driver.page.evaluate(
-                () => document.querySelector('[data-testid="repo-blob"]')?.textContent
+            const blobContent = await driver.page.evaluate(() =>
+                [...document.querySelectorAll('[data-testid="repo-blob"] .cm-line')]
+                    .map(line => line.textContent)
+                    .join('\n')
             )
-            assert.strictEqual(blobContent, `content for: ${filePath}\nsecond line\nthird line`)
+            // CodeMirror blob content has no newline characters
+            const expectedBlobContent = `content for: ${filePath}\nsecond line\nthird line`
+            assert.strictEqual(blobContent, expectedBlobContent)
         })
 
         it('works with a plus sign in the repository name', async () => {
@@ -552,8 +454,11 @@ describe('Repository', () => {
             await assertSelectorHasText('.test-tree-entry-file', 'readme.md')
 
             {
-                const queryInput = await createEditorAPI(driver, '[data-testid="searchbox"] .test-query-input')
-                assert.strictEqual(await queryInput.getValue(), 'repo:^ubuntu/\\+source/quemu$ ') // + should be escaped in regular expression
+                const queryInput = await createEditorAPI(driver, '.test-query-input')
+                assert.strictEqual(
+                    removeContextFromQuery((await queryInput.getValue()) ?? ''),
+                    'repo:^ubuntu/\\+source/quemu$ '
+                ) // + should be escaped in regular expression
             }
 
             // page.click() fails for some reason with Error: Node is either not visible or not an HTMLElement
@@ -564,7 +469,7 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent?.trim())
             )
-            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', '/readme.md'])
+            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', 'readme.md'])
         })
 
         it('shows repo cloning in progress page', async () => {
@@ -581,12 +486,10 @@ describe('Repository', () => {
 
             await driver.page.goto(driver.sourcegraphBaseUrl + repositorySourcegraphUrl)
 
-            // Wait for clone in progress message before Percy snapshot.
+            // Wait for clone in progress message.
             await driver.page.waitForSelector('[data-testid="hero-page-subtitle"]')
             // Verify that we show the respective message in the UI.
             await assertSelectorHasText('[data-testid="hero-page-subtitle"]', 'Cloning in progress')
-
-            await percySnapshotWithVariants(driver.page, 'Repository cloning in progress page')
         })
 
         it('works with spaces in the repository name', async () => {
@@ -613,7 +516,7 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent?.trim())
             )
-            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', '/readme.md'])
+            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', 'readme.md'])
         })
     })
 
@@ -628,6 +531,14 @@ describe('Repository', () => {
                     __typename: 'Query',
                     node: {
                         __typename: 'Repository',
+                        sourceType: RepositoryType.GIT_REPOSITORY,
+                        externalURLs: [
+                            {
+                                __typename: 'ExternalLink',
+                                serviceKind: ExternalServiceKind.GITHUB,
+                                url: 'https://' + repositoryName,
+                            },
+                        ],
                         commit: {
                             __typename: 'GitCommit',
                             ancestors: {
@@ -638,6 +549,7 @@ describe('Repository', () => {
                                         id: 'R2l0Q29tbWl0OnsiciI6IlVtVndiM05wZEc5eWVUb3hORGs9IiwiYyI6IjI4NGFiYTAyNGIxYjU1ODU5MGU4ZTJmOTdkYmMzNTUzYTVlMGM3NmIifQ==',
                                         oid: '284aba024b1b558590e8e2f97dbc3553a5e0c76b',
                                         abbreviatedOID: '284aba0',
+                                        perforceChangelist: null,
                                         message: 'sg: create a test command to run e2e tests locally (#34627)\n',
                                         subject: 'sg: create a test command to run e2e tests locally (#34627)',
                                         body: null,
@@ -669,6 +581,7 @@ describe('Repository', () => {
                                             {
                                                 oid: 'a2d1fd474d79dc29af6c7b4c33f02fe22287bd11',
                                                 abbreviatedOID: 'a2d1fd4',
+                                                perforceChangelist: null,
                                                 url: '/github.com/sourcegraph/sourcegraph/-/commit/a2d1fd474d79dc29af6c7b4c33f02fe22287bd11',
                                             },
                                         ],
@@ -691,6 +604,7 @@ describe('Repository', () => {
                                         id: 'R2l0Q29tbWl0OnsiciI6IlVtVndiM05wZEc5eWVUb3hORGs9IiwiYyI6ImEyZDFmZDQ3NGQ3OWRjMjlhZjZjN2I0YzMzZjAyZmUyMjI4N2JkMTEifQ==',
                                         oid: 'a2d1fd474d79dc29af6c7b4c33f02fe22287bd11',
                                         abbreviatedOID: 'a2d1fd4',
+                                        perforceChangelist: null,
                                         message:
                                             'Wildcard V2: <Checkbox /> migration (#34324)\n\nCo-authored-by: gitstart-sourcegraph <gitstart@users.noreply.github.com>',
                                         subject: 'Wildcard V2: <Checkbox /> migration (#34324)',
@@ -723,6 +637,7 @@ describe('Repository', () => {
                                             {
                                                 oid: '3a163b92b5c45921fbc730ff2047ff7e60d8689b',
                                                 abbreviatedOID: '3a163b9',
+                                                perforceChangelist: null,
                                                 url: '/github.com/sourcegraph/sourcegraph/-/commit/3a163b92b5c45921fbc730ff2047ff7e60d8689b',
                                             },
                                         ],
@@ -745,6 +660,7 @@ describe('Repository', () => {
                                         id: 'R2l0Q29tbWl0OnsiciI6IlVtVndiM05wZEc5eWVUb3hORGs9IiwiYyI6IjNhMTYzYjkyYjVjNDU5MjFmYmM3MzBmZjIwNDdmZjdlNjBkODY4OWIifQ==',
                                         oid: '3a163b92b5c45921fbc730ff2047ff7e60d8689b',
                                         abbreviatedOID: '3a163b9',
+                                        perforceChangelist: null,
                                         message: 'web: ban `reactstrap` imports (#34881)\n',
                                         subject: 'web: ban `reactstrap` imports (#34881)',
                                         body: null,
@@ -776,6 +692,7 @@ describe('Repository', () => {
                                             {
                                                 oid: 'e2e91f0dcdc90811c4f2f4df638bc459b2358e7d',
                                                 abbreviatedOID: 'e2e91f0',
+                                                perforceChangelist: null,
                                                 url: '/github.com/sourcegraph/sourcegraph/-/commit/e2e91f0dcdc90811c4f2f4df638bc459b2358e7d',
                                             },
                                         ],
@@ -814,11 +731,11 @@ describe('Repository', () => {
                         },
                     },
                 }),
+                ContextFilters: () => createCodyContextFiltersResult(),
             })
             await driver.page.goto(driver.sourcegraphBaseUrl + '/github.com/sourcegraph/sourcegraph/-/commits')
             await driver.page.waitForSelector('[data-testid="commits-page"]', { visible: true })
             await driver.page.waitForSelector('.list-group-item', { visible: true })
-            await percySnapshotWithVariants(driver.page, 'Repository commits page')
             await accessibilityAudit(driver.page)
         })
     })
@@ -930,7 +847,6 @@ describe('Repository', () => {
                 })
                 await driver.page.goto(driver.sourcegraphBaseUrl + repositorySourcegraphUrl)
                 await driver.page.waitForSelector('.test-filtered-contributors-connection')
-                await percySnapshotWithVariants(driver.page, 'Contributor list')
                 await accessibilityAudit(driver.page)
             })
         })
@@ -942,20 +858,27 @@ describe('Repository', () => {
                     ...commonWebGraphQlResults,
                     ...getCommonRepositoryGraphQlResults(repositoryName, repositorySourcegraphUrl, []),
                     RepositoryGitBranchesOverview: () => ({
+                        __typename: 'Query',
                         node: {
+                            __typename: 'Repository',
                             defaultBranch: {
+                                __typename: 'GitRef',
                                 id: 'QmV3b2Q=',
                                 displayName: 'main',
                                 name: 'refs/heads/main',
                                 abbrevName: 'main',
                                 url: `/${repositoryName}/-/branches/${'1'.repeat(40)}`,
                                 target: {
+                                    __typename: 'GitObject',
                                     commit: {
+                                        __typename: 'GitCommit',
                                         author: {
                                             __typename: 'Signature',
                                             person: {
+                                                __typename: 'Person',
                                                 displayName: 'John Doe',
                                                 user: {
+                                                    __typename: 'User',
                                                     username: 'johndoe',
                                                 },
                                             },
@@ -964,12 +887,14 @@ describe('Repository', () => {
                                         committer: {
                                             __typename: 'Signature',
                                             person: {
+                                                __typename: 'Person',
                                                 displayName: 'John Doe',
                                                 user: null,
                                             },
                                             date: subDays(new Date(), 1).toISOString(),
                                         },
                                         behindAhead: {
+                                            __typename: 'BehindAheadCounts',
                                             behind: 0,
                                             ahead: 0,
                                         },
@@ -977,21 +902,27 @@ describe('Repository', () => {
                                 },
                             },
                             gitRefs: {
-                                pageInfo: { hasNextPage: false },
+                                __typename: 'GitRefConnection',
+                                pageInfo: { __typename: 'PageInfo', hasNextPage: false },
                                 nodes: [
                                     {
+                                        __typename: 'GitRef',
                                         id: 'BranchId1',
                                         displayName: 'integration-tests-trigramming',
                                         name: 'refs/heads/integration-tests-trigramming',
                                         abbrevName: 'integration-tests-trigramming',
                                         url: `/${repositoryName}/-/branches/${'1'.repeat(40)}`,
                                         target: {
+                                            __typename: 'GitObject',
                                             commit: {
+                                                __typename: 'GitCommit',
                                                 author: {
                                                     __typename: 'Signature',
                                                     person: {
+                                                        __typename: 'Person',
                                                         displayName: 'John Doe',
                                                         user: {
+                                                            __typename: 'User',
                                                             username: 'johndoe',
                                                         },
                                                     },
@@ -1000,14 +931,17 @@ describe('Repository', () => {
                                                 committer: {
                                                     __typename: 'Signature',
                                                     person: {
+                                                        __typename: 'Person',
                                                         displayName: 'John Doe',
                                                         user: {
+                                                            __typename: 'User',
                                                             username: 'johndoe',
                                                         },
                                                     },
                                                     date: subDays(new Date(), 1).toISOString(),
                                                 },
                                                 behindAhead: {
+                                                    __typename: 'BehindAheadCounts',
                                                     behind: 12633,
                                                     ahead: 1,
                                                 },
@@ -1015,18 +949,23 @@ describe('Repository', () => {
                                         },
                                     },
                                     {
+                                        __typename: 'GitRef',
                                         id: 'BranchId2',
                                         displayName: 'integration-tests-quadgramming',
                                         name: 'refs/heads/integration-tests-quadgramming',
                                         abbrevName: 'integration-tests-quadgramming',
                                         url: `/${repositoryName}/-/branches/${'1'.repeat(40)}`,
                                         target: {
+                                            __typename: 'GitObject',
                                             commit: {
+                                                __typename: 'GitCommit',
                                                 author: {
                                                     __typename: 'Signature',
                                                     person: {
+                                                        __typename: 'Person',
                                                         displayName: 'Alice',
                                                         user: {
+                                                            __typename: 'User',
                                                             username: 'alice',
                                                         },
                                                     },
@@ -1035,14 +974,17 @@ describe('Repository', () => {
                                                 committer: {
                                                     __typename: 'Signature',
                                                     person: {
+                                                        __typename: 'Person',
                                                         displayName: 'Alice',
                                                         user: {
+                                                            __typename: 'User',
                                                             username: 'alice',
                                                         },
                                                     },
                                                     date: subDays(new Date(), 1).toISOString(),
                                                 },
                                                 behindAhead: {
+                                                    __typename: 'BehindAheadCounts',
                                                     behind: 12633,
                                                     ahead: 1,
                                                 },
@@ -1057,7 +999,6 @@ describe('Repository', () => {
 
                 await driver.page.goto(driver.sourcegraphBaseUrl + repositorySourcegraphUrl)
                 await driver.page.waitForSelector('[data-testid="active-branches-list"]')
-                await percySnapshotWithVariants(driver.page, 'Repository branches page')
                 await accessibilityAudit(driver.page)
             })
         })
@@ -1161,13 +1102,12 @@ describe('Repository', () => {
                 await driver.page.waitForSelector('.test-filtered-tags-connection')
                 await driver.page.click('input[name="query"]')
                 await driver.page.waitForSelector('input[name="query"].focus-visible')
-                await percySnapshotWithVariants(driver.page, 'Repository tags page')
                 await accessibilityAudit(driver.page)
             })
         })
 
         describe('Compare page', () => {
-            const repositorySourcegraphUrl = `/${repositoryName}/-/compare/main...bl/readme?visible=1`
+            const repositorySourcegraphUrl = `/${repositoryName}/-/compare/main...bl/readme`
             it('should render correctly compare page, including diff view', async () => {
                 testContext.overrideGraphQL({
                     ...commonWebGraphQlResults,
@@ -1185,6 +1125,7 @@ describe('Repository', () => {
                     }),
                     RepositoryComparisonCommits: () => ({
                         node: {
+                            sourceType: RepositoryType.GIT_REPOSITORY,
                             comparison: {
                                 commits: {
                                     nodes: [
@@ -1192,6 +1133,7 @@ describe('Repository', () => {
                                             id: '1'.repeat(70),
                                             oid: '1'.repeat(40),
                                             abbreviatedOID: '1'.repeat(7),
+                                            perforceChangelist: null,
                                             message: 'update README',
                                             subject: 'update README',
                                             body: null,
@@ -1229,6 +1171,7 @@ describe('Repository', () => {
                                                 {
                                                     oid: '2'.repeat(40),
                                                     abbreviatedOID: '2'.repeat(7),
+                                                    perforceChangelist: null,
                                                     url: '/github.com/sourcegraph/sourcegraph@2'.repeat(70),
                                                 },
                                             ],
@@ -1264,6 +1207,7 @@ describe('Repository', () => {
                                             mostRelevantFile: {
                                                 __typename: 'GitBlob',
                                                 url: `/${repositoryName}/-/commit/${'1'.repeat(40)}`,
+                                                changelistURL: '',
                                             },
                                             hunks: [
                                                 {
@@ -1304,7 +1248,6 @@ describe('Repository', () => {
                 })
                 await driver.page.goto(driver.sourcegraphBaseUrl + repositorySourcegraphUrl)
                 await driver.page.waitForSelector('.test-file-diff-connection')
-                await percySnapshotWithVariants(driver.page, 'Repository compare page')
                 await accessibilityAudit(driver.page)
             })
         })

@@ -4,79 +4,59 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
-	"github.com/getsentry/sentry-go"
-
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/cmd/symbols/fetcher"
-	"github.com/sourcegraph/sourcegraph/cmd/symbols/gitserver"
 	"github.com/sourcegraph/sourcegraph/cmd/symbols/internal/api"
 	sqlite "github.com/sourcegraph/sourcegraph/cmd/symbols/internal/database"
-	"github.com/sourcegraph/sourcegraph/cmd/symbols/types"
+	"github.com/sourcegraph/sourcegraph/cmd/symbols/internal/fetcher"
+	symbolsgitserver "github.com/sourcegraph/sourcegraph/cmd/symbols/internal/gitserver"
+	"github.com/sourcegraph/sourcegraph/cmd/symbols/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/conf/conftypes"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	connections "github.com/sourcegraph/sourcegraph/internal/database/connections/live"
-	"github.com/sourcegraph/sourcegraph/internal/debugserver"
 	"github.com/sourcegraph/sourcegraph/internal/env"
+	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
 	"github.com/sourcegraph/sourcegraph/internal/honey"
-	"github.com/sourcegraph/sourcegraph/internal/hostname"
 	"github.com/sourcegraph/sourcegraph/internal/httpserver"
 	"github.com/sourcegraph/sourcegraph/internal/instrumentation"
-	"github.com/sourcegraph/sourcegraph/internal/logging"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
-	"github.com/sourcegraph/sourcegraph/internal/profiler"
+	"github.com/sourcegraph/sourcegraph/internal/service"
+	"github.com/sourcegraph/sourcegraph/internal/tenant"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
-	"github.com/sourcegraph/sourcegraph/internal/tracer"
-	"github.com/sourcegraph/sourcegraph/internal/version"
+	internaltypes "github.com/sourcegraph/sourcegraph/internal/types"
+	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 var sanityCheck, _ = strconv.ParseBool(env.Get("SANITY_CHECK", "false", "check that go-sqlite3 works then exit 0 if it's ok or 1 if not"))
 
 var (
 	baseConfig              = env.BaseConfig{}
-	RepositoryFetcherConfig = types.LoadRepositoryFetcherConfig(baseConfig)
-	CtagsConfig             = types.LoadCtagsConfig(baseConfig)
+	RepositoryFetcherConfig types.RepositoryFetcherConfig
+	CtagsConfig             types.CtagsConfig
 )
 
 const addr = ":3184"
 
-type SetupFunc func(observationCtx *observation.Context, db database.DB, gitserverClient gitserver.GitserverClient, repositoryFetcher fetcher.RepositoryFetcher) (types.SearchFunc, func(http.ResponseWriter, *http.Request), []goroutine.BackgroundRoutine, string, error)
+type SetupFunc func(observationCtx *observation.Context, db database.DB, gitserverClient symbolsgitserver.GitserverClient, repositoryFetcher fetcher.RepositoryFetcher) (types.SearchFunc, func(http.ResponseWriter, *http.Request), []goroutine.BackgroundRoutine, error)
 
-func Main(setup SetupFunc) {
-	// Initialization
-	env.HandleHelpFlag()
-	logging.Init() //nolint:staticcheck // Deprecated, but logs unmigrated to sourcegraph/log look really bad without this.
-	liblog := log.Init(log.Resource{
-		Name:       env.MyName,
-		Version:    version.Version(),
-		InstanceID: hostname.Get(),
-	}, log.NewSentrySinkWith(
-		log.SentrySink{
-			ClientOptions: sentry.ClientOptions{SampleRate: 0.2},
-		},
-	)) // Experimental: DevX is observing how sampling affects the errors signal
-	defer liblog.Sync()
-
-	conf.Init()
-	go conf.Watch(liblog.Update(conf.GetLogSinks))
-	tracer.Init(log.Scoped("tracer", "internal tracer package"), conf.DefaultClient())
-	profiler.Init()
+func Main(ctx context.Context, observationCtx *observation.Context, ready service.ReadyFunc, setup SetupFunc) error {
+	logger := observationCtx.Logger
 
 	routines := []goroutine.BackgroundRoutine{}
 
 	// Initialize tracing/metrics
-	logger := log.Scoped("service", "the symbols service")
-	observationCtx := observation.NewContext(logger, observation.Honeycomb(&honey.Dataset{
+	observationCtx = observation.NewContext(logger, observation.Honeycomb(&honey.Dataset{
 		Name:       "codeintel-symbols",
-		SampleRate: 20,
+		SampleRate: 200,
 	}))
 
 	// Allow to do a sanity check of sqlite.
@@ -100,24 +80,29 @@ func Main(setup SetupFunc) {
 	db := database.NewDB(logger, sqlDB)
 
 	// Run setup
-	gitserverClient := gitserver.NewClient(observationCtx, db)
+	gitserverClient := symbolsgitserver.NewClient(observationCtx, gitserver.NewClient("symbols"))
 	repositoryFetcher := fetcher.NewRepositoryFetcher(observationCtx, gitserverClient, RepositoryFetcherConfig.MaxTotalPathsLength, int64(RepositoryFetcherConfig.MaxFileSizeKb)*1000)
-	searchFunc, handleStatus, newRoutines, ctagsBinary, err := setup(observationCtx, db, gitserverClient, repositoryFetcher)
+	searchFunc, handleStatus, newRoutines, err := setup(observationCtx, db, gitserverClient, repositoryFetcher)
 	if err != nil {
-		logger.Fatal("Failed to set up", log.Error(err))
+		return errors.Wrap(err, "failed to set up")
 	}
 	routines = append(routines, newRoutines...)
 
-	// Start debug server
-	ready := make(chan struct{})
-	go debugserver.NewServerRoutine(ready).Start()
-
 	// Create HTTP server
-	handler := api.NewHandler(searchFunc, gitserverClient.ReadFile, handleStatus, ctagsBinary)
+	handler := api.NewHandler(searchFunc, func(ctx context.Context, rcp internaltypes.RepoCommitPath) ([]byte, error) {
+		r, err := gitserverClient.NewFileReader(ctx, rcp)
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		return io.ReadAll(r)
+	}, handleStatus)
+
 	handler = handlePanic(logger, handler)
-	handler = trace.HTTPMiddleware(logger, handler, conf.DefaultClient())
+	handler = trace.HTTPMiddleware(logger, handler)
 	handler = instrumentation.HTTPMiddleware("", handler)
 	handler = actor.HTTPMiddleware(logger, handler)
+	handler = tenant.InternalHTTPMiddleware(logger, handler)
 	server := httpserver.NewFromAddr(addr, &http.Server{
 		ReadTimeout:  75 * time.Second,
 		WriteTimeout: 10 * time.Minute,
@@ -126,8 +111,8 @@ func Main(setup SetupFunc) {
 	routines = append(routines, server)
 
 	// Mark health server as ready and go!
-	close(ready)
-	goroutine.MonitorBackgroundRoutines(context.Background(), routines...)
+	ready()
+	return goroutine.MonitorBackgroundRoutines(ctx, routines...)
 }
 
 func mustInitializeFrontendDB(observationCtx *observation.Context) *sql.DB {

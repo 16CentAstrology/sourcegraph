@@ -6,10 +6,10 @@ import (
 	"github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/relay"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 )
 
 func unmarshalExecutorID(id graphql.ID) (executorID int64, err error) {
@@ -30,54 +30,56 @@ func (r *schemaResolver) Executors(ctx context.Context, args ExecutorsListArgs) 
 		return nil, err
 	}
 
-	offset, err := graphqlutil.DecodeIntCursor(args.After)
+	offset, err := gqlutil.DecodeIntCursor(args.After)
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := r.db.Transact(ctx)
+	var executorConnection *executorConnectionResolver
+	err = r.db.WithTransact(ctx, func(tx database.DB) error {
+		opts := database.ExecutorStoreListOptions{
+			Offset: offset,
+			Limit:  int(args.First),
+		}
+		if args.Query != nil {
+			opts.Query = *args.Query
+		}
+		if args.Active != nil {
+			opts.Active = *args.Active
+		}
+		execs, err := tx.Executors().List(ctx, opts)
+		if err != nil {
+			return err
+		}
+		totalCount, err := tx.Executors().Count(ctx, opts)
+		if err != nil {
+			return err
+		}
+
+		resolvers := make([]*ExecutorResolver, 0, len(execs))
+		for _, executor := range execs {
+			resolvers = append(resolvers, &ExecutorResolver{executor: executor})
+		}
+
+		nextOffset := gqlutil.NextOffset(offset, len(execs), totalCount)
+
+		executorConnection = &executorConnectionResolver{
+			resolvers:  resolvers,
+			totalCount: totalCount,
+			nextOffset: nextOffset,
+		}
+
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer func() { err = tx.Done(err) }()
-
-	opts := database.ExecutorStoreListOptions{
-		Offset: offset,
-		Limit:  int(args.First),
-	}
-	if args.Query != nil {
-		opts.Query = *args.Query
-	}
-	if args.Active != nil {
-		opts.Active = *args.Active
-	}
-	execs, err := tx.Executors().List(ctx, opts)
-	if err != nil {
-		return nil, err
-	}
-	totalCount, err := tx.Executors().Count(ctx, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	resolvers := make([]*ExecutorResolver, 0, len(execs))
-	for _, executor := range execs {
-		resolvers = append(resolvers, &ExecutorResolver{executor: executor})
-	}
-
-	nextOffset := graphqlutil.NextOffset(offset, len(execs), totalCount)
-
-	executorConnection := &executorConnectionResolver{
-		resolvers:  resolvers,
-		totalCount: totalCount,
-		nextOffset: nextOffset,
 	}
 
 	return executorConnection, nil
 }
 
 func (r *schemaResolver) AreExecutorsConfigured() bool {
-	return conf.Get().ExecutorsAccessToken != ""
+	return conf.ExecutorsAccessToken() != ""
 }
 
 func executorByID(ctx context.Context, db database.DB, gqlID graphql.ID) (*ExecutorResolver, error) {

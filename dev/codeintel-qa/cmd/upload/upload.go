@@ -19,15 +19,16 @@ type uploadMeta struct {
 	id       string
 	repoName string
 	commit   string
+	root     string
 }
 
 // uploadAll uploads the dumps for the commits present in the given commitsByRepo map.
 // Uploads are performed concurrently given the limiter instance as well as the set of
 // flags supplied by the user. This function returns a slice of uploadMeta containing
 // the graphql identifier of the uploaded resources.
-func uploadAll(ctx context.Context, commitsByRepo map[string][]string, limiter *internal.Limiter) ([]uploadMeta, error) {
+func uploadAll(ctx context.Context, extensionAndCommitsByRepo map[string][]internal.ExtensionCommitAndRoot, limiter *internal.Limiter) ([]uploadMeta, error) {
 	n := 0
-	for _, commits := range commitsByRepo {
+	for _, commits := range extensionAndCommitsByRepo {
 		n += len(commits)
 	}
 
@@ -35,11 +36,15 @@ func uploadAll(ctx context.Context, commitsByRepo map[string][]string, limiter *
 	errCh := make(chan error, n)
 	uploadCh := make(chan uploadMeta, n)
 
-	for repoName, commits := range commitsByRepo {
-		for i, commit := range commits {
+	for repoName, extensionAndCommits := range extensionAndCommitsByRepo {
+		for _, extensionCommitAndRoot := range extensionAndCommits {
+			commit := extensionCommitAndRoot.Commit
+			extension := extensionCommitAndRoot.Extension
+			root := extensionCommitAndRoot.Root
+
 			wg.Add(1)
 
-			go func(repoName, commit, file string) {
+			go func(file string) {
 				defer wg.Done()
 
 				if err := limiter.Acquire(ctx); err != nil {
@@ -48,22 +53,24 @@ func uploadAll(ctx context.Context, commitsByRepo map[string][]string, limiter *
 				}
 				defer limiter.Release()
 
-				fmt.Printf("[%5s] %s Uploading index for %s@%s\n", internal.TimeSince(start), internal.EmojiLightbulb, repoName, commit[:7])
+				fmt.Printf("[%5s] %s Uploading index for %s@%s:%s\n", internal.TimeSince(start), internal.EmojiLightbulb, repoName, commit[:7], root)
 
-				graphqlID, err := upload(ctx, internal.MakeTestRepoName(repoName), commit, file)
+				cleanedRoot := strings.ReplaceAll(root, "_", "/")
+				graphqlID, err := upload(ctx, internal.MakeTestRepoName(repoName), commit, file, cleanedRoot)
 				if err != nil {
 					errCh <- err
 					return
 				}
 
-				fmt.Printf("[%5s] %s Finished uploading index %s for %s@%s\n", internal.TimeSince(start), internal.EmojiSuccess, graphqlID, repoName, commit[:7])
+				fmt.Printf("[%5s] %s Finished uploading index %s for %s@%s:%s\n", internal.TimeSince(start), internal.EmojiSuccess, graphqlID, repoName, commit[:7], cleanedRoot)
 
 				uploadCh <- uploadMeta{
 					id:       graphqlID,
 					repoName: repoName,
 					commit:   commit,
+					root:     cleanedRoot,
 				}
-			}(repoName, commit, fmt.Sprintf("%s.%d.%s.dump", strings.Replace(repoName, "/", ".", 1), i, commit))
+			}(fmt.Sprintf("%s.%s.%s.%s", strings.Replace(repoName, "/", ".", 1), commit, root, extension))
 		}
 	}
 
@@ -87,9 +94,9 @@ func uploadAll(ctx context.Context, commitsByRepo map[string][]string, limiter *
 
 // upload invokes `src code-intel upload` on the host and returns the graphql identifier of
 // the uploaded resource.
-func upload(ctx context.Context, repoName, commit, file string) (string, error) {
+func upload(ctx context.Context, repoName, commit, file, root string) (string, error) {
 	argMap := map[string]string{
-		"root":   "/",
+		"root":   root,
 		"repo":   repoName,
 		"commit": commit,
 		"file":   file,
@@ -124,16 +131,15 @@ func upload(ctx context.Context, repoName, commit, file string) (string, error) 
 		return "", err
 	}
 
-	cmd := exec.CommandContext(ctx, "src", append([]string{"lsif", "upload", "-json"}, args...)...)
+	cmd := exec.CommandContext(ctx, srcPath, append([]string{"code-intel", "upload", "-json"}, args...)...)
 	cmd.Dir = tempDir
-	cmd.Env = []string{
-		fmt.Sprintf("SRC_ENDPOINT=%s", internal.SourcegraphEndpoint),
-		fmt.Sprintf("SRC_ACCESS_TOKEN=%s", internal.SourcegraphAccessToken),
-	}
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("SRC_ENDPOINT=%s", internal.SourcegraphEndpoint))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("SRC_ACCESS_TOKEN=%s", internal.SourcegraphAccessToken))
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", errors.Wrap(err, fmt.Sprintf("failed to upload index for %s@%s: %s", repoName, commit, output))
+		return "", errors.Wrap(err, fmt.Sprintf("failed to upload index for %s@%s:%s: %s", repoName, commit, root, output))
 	}
 
 	resp := struct {

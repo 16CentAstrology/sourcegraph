@@ -1,13 +1,15 @@
-import React, { createContext, useContext } from 'react'
+import React, { createContext } from 'react'
 
-import { StoreApi, UseBoundStore } from 'zustand'
+import type { StoreApi, UseBoundStore } from 'zustand'
 
-import { SearchPatternType } from '../graphql-operations'
+import type { SearchPatternType } from '../graphql-operations'
+import type { TelemetryV2Props } from '../telemetry'
 
-import { QueryState, SubmitSearchParameters, toggleSubquery } from './helpers'
-import { FilterType } from './query/filters'
+import { type QueryState, type SubmitSearchParameters, toggleSubquery } from './helpers'
+import type { FilterType } from './query/filters'
 import { appendFilter, updateFilter } from './query/transformer'
 import { filterExists } from './query/validate'
+import { SearchMode } from './types'
 
 export type SearchQueryStateStore<T extends SearchQueryState = SearchQueryState> = UseBoundStore<T, StoreApi<T>>
 
@@ -31,14 +33,6 @@ export const SearchQueryStateStoreProvider: React.FunctionComponent<
     </SearchQueryStateStoreContext.Provider>
 )
 
-export const useSearchQueryStateStoreContext = (): SearchQueryStateStore => {
-    const context = useContext(SearchQueryStateStoreContext)
-    if (context === null) {
-        throw new Error('useSearchQueryStateStoreContext must be used within a SearchQueryStateStoreProvider')
-    }
-    return context
-}
-
 /**
  * Describes where settings have been loaded from when the app loads. Higher
  * values have higher precedence, i.e. if settings have been loaded from the
@@ -48,11 +42,6 @@ export enum InitialParametersSource {
     DEFAULT,
     USER_SETTINGS,
     URL,
-}
-
-export enum SearchMode {
-    Precise = 0,
-    SmartSearch = 1 << 0,
 }
 
 // Implemented in /web as navbar query state, /vscode as webview query state.
@@ -68,14 +57,15 @@ export interface SearchQueryState {
 
     // DATA
     /**
-     * The current seach query and auxiliary information needed by the
-     * MonacoQueryInput component. You most likely don't have to read this value
+     * The current search query and auxiliary information needed by the
+     * query input component. You most likely don't have to read this value
      * directly.
      * See {@link QueryState} for more information.
      */
     queryState: QueryState
     searchCaseSensitivity: boolean
     searchPatternType: SearchPatternType
+    defaultPatternType: SearchPatternType
     searchQueryFromURL: string
     searchMode: SearchMode
 
@@ -92,7 +82,9 @@ export interface SearchQueryState {
      * Note that this won't update `queryState` directly.
      */
     submitSearch: (
-        parameters: Omit<SubmitSearchParameters, 'query' | 'caseSensitive' | 'patternType'>,
+        parameters: Omit<SubmitSearchParameters, 'query' | 'caseSensitive' | 'patternType'> & {
+            query?: string
+        } & TelemetryV2Props,
         updates?: QueryUpdate[]
     ) => void
 }
@@ -136,17 +128,21 @@ export type QueryUpdate =
 export function updateQuery(query: string, updates: QueryUpdate[]): string {
     return updates.reduce((query, update) => {
         switch (update.type) {
-            case 'appendFilter':
+            case 'appendFilter': {
                 if (!update.unique || !filterExists(query, update.field)) {
                     return appendFilter(query, update.field, update.value)
                 }
                 break
-            case 'updateOrAppendFilter':
+            }
+            case 'updateOrAppendFilter': {
                 return updateFilter(query, update.field, update.value)
-            case 'toggleSubquery':
+            }
+            case 'toggleSubquery': {
                 return toggleSubquery(query, update.value)
-            case 'replaceQuery':
+            }
+            case 'replaceQuery': {
                 return update.value
+            }
         }
         return query
     }, query)

@@ -1,12 +1,12 @@
 import { noop } from 'lodash'
-import { from, Observable } from 'rxjs'
+import { from, type Observable } from 'rxjs'
 import { catchError, map } from 'rxjs/operators'
 
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
 import { EventSource } from '@sourcegraph/shared/src/graphql-operations'
 
 import { displayWarning } from '../settings/displayWarnings'
-import { INSTANCE_VERSION_NUMBER_KEY, LocalStorageService } from '../settings/LocalStorageService'
+import { INSTANCE_VERSION_NUMBER_KEY, type LocalStorageService } from '../settings/LocalStorageService'
 
 import { requestGraphQLFromVSCode } from './requestGraphQl'
 
@@ -18,8 +18,8 @@ import { requestGraphQLFromVSCode } from './requestGraphQl'
  * - insiders version format: 134683_2022-03-02_5188fes0101
  */
 export const observeInstanceVersionNumber = (
-    accessToken: string,
-    endpointURL: string
+    accessToken?: string,
+    endpointURL?: string
 ): Observable<string | undefined> =>
     from(requestGraphQLFromVSCode<SiteVersionResult>(siteVersionQuery, {}, accessToken, endpointURL)).pipe(
         map(dataOrThrowErrors),
@@ -34,6 +34,7 @@ interface RegularVersion {
     major: number
     minor: number
 }
+
 type Version = RegularVersion | 'insiders'
 
 /**
@@ -103,6 +104,7 @@ const siteVersionQuery = gql`
         }
     }
 `
+
 interface SiteVersionResult {
     site: {
         productVersion: string

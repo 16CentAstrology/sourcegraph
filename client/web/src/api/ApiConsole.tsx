@@ -1,15 +1,18 @@
 import * as React from 'react'
 
-import * as _graphiqlModule from 'graphiql' // type only
-import * as H from 'history'
+// type only
+import type * as _graphiqlModule from 'graphiql'
+import type * as H from 'history'
+import { useNavigate, useLocation, type NavigateFunction } from 'react-router-dom'
 import { from as fromPromise, Subject, Subscription } from 'rxjs'
 import { catchError, debounceTime } from 'rxjs/operators'
 
-import { asError, ErrorLike, isErrorLike, logger } from '@sourcegraph/common'
+import { asError, type ErrorLike, isErrorLike, logger } from '@sourcegraph/common'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
 import { LoadingSpinner, ErrorAlert } from '@sourcegraph/wildcard'
 
 import { PageTitle } from '../components/PageTitle'
-import { eventLogger } from '../tracking/eventLogger'
 
 import { ApiConsoleToolbar } from './ApiConsoleToolbar'
 
@@ -31,16 +34,18 @@ query {
 }
 `
 
-interface Props {
+interface Props extends TelemetryV2Props {}
+
+interface InnerProps extends TelemetryV2Props {
     location: H.Location
-    history: H.History
+    navigate: NavigateFunction
 }
 
 interface State {
     /** The dynamically imported graphiql module, undefined while loading. */
     graphiqlOrError?: typeof _graphiqlModule | ErrorLike
 
-    /** The URL parameters decoded from the location hash. */
+    /** The current URL parameters. Only used to update the shareable URL link */
     parameters: Parameters
 }
 
@@ -56,16 +61,26 @@ interface Parameters {
     operationName?: string
 }
 
+export const ApiConsole: React.FC<Props> = ({ telemetryRecorder }) => {
+    const navigate = useNavigate()
+    const location = useLocation()
+
+    return <ApiConsoleInner location={location} navigate={navigate} telemetryRecorder={telemetryRecorder} />
+}
+
 /**
  * Component to show the GraphQL API console.
  */
-export class ApiConsole extends React.PureComponent<Props, State> {
+class ApiConsoleInner extends React.PureComponent<InnerProps, State> {
     public state: State = { parameters: {} }
 
     private updates = new Subject<Parameters>()
     private subscriptions = new Subscription()
+    /** The initial URL parameters decoded from the location hash. */
+    /** This is used to programmatically set the initial editor state. */
+    private initialParameters: Parameters
 
-    constructor(props: Props) {
+    constructor(props: InnerProps) {
         super(props)
 
         // Parse the location.hash JSON to get URL parameters.
@@ -84,20 +99,20 @@ export class ApiConsole extends React.PureComponent<Props, State> {
                 // invalid JSON errors in the GraphiQL editor.
             }
         }
+        this.initialParameters = parameters
         this.state = { parameters }
     }
 
     public componentDidMount(): void {
-        eventLogger.logViewEvent('ApiConsole')
+        EVENT_LOGGER.logViewEvent('ApiConsole')
+        this.props.telemetryRecorder.recordEvent('api-console', 'view')
 
         // Update the browser URL bar when query/variables/operation name are
         // changed so that the page can be easily shared.
         this.subscriptions.add(
             this.updates
                 .pipe(debounceTime(500))
-                .subscribe(data =>
-                    this.props.history.replace({ ...location, hash: encodeURIComponent(JSON.stringify(data)) })
-                )
+                .subscribe(data => this.props.navigate({ ...location, hash: encodeURIComponent(JSON.stringify(data)) }))
         )
 
         this.subscriptions.add(
@@ -154,9 +169,9 @@ export class ApiConsole extends React.PureComponent<Props, State> {
         return (
             <>
                 <GraphiQL
-                    query={this.state.parameters.query}
-                    variables={this.state.parameters.variables}
-                    operationName={this.state.parameters.operationName}
+                    query={this.initialParameters.query}
+                    variables={this.initialParameters.variables}
+                    operationName={this.initialParameters.operationName}
                     onEditQuery={this.onEditQuery}
                     onEditVariables={this.onEditVariables}
                     onEditOperationName={this.onEditOperationName}

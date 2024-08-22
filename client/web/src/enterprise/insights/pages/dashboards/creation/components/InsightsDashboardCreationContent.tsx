@@ -1,19 +1,22 @@
-import React, { ReactNode } from 'react'
+import React, { type ReactNode } from 'react'
 
 import classNames from 'classnames'
 
-import { Input, ErrorAlert } from '@sourcegraph/wildcard'
-
 import {
+    Input,
+    ErrorAlert,
     FormGroup,
-    FormRadioInput,
-    getDefaultInputProps,
+    useForm,
     useField,
+    getDefaultInputProps,
     createRequiredValidator,
-    LimitedAccessLabel,
-} from '../../../../components'
-import { FORM_ERROR, FormAPI, SubmissionErrors, useForm } from '../../../../components/form/hooks/useForm'
-import { InsightsDashboardOwner, isGlobalOwner, isOrganizationOwner, isPersonalOwner } from '../../../../core'
+    FORM_ERROR,
+    type FormAPI,
+    type SubmissionErrors,
+} from '@sourcegraph/wildcard'
+
+import { FormRadioInput, LimitedAccessLabel } from '../../../../components'
+import { type InsightsDashboardOwner, isGlobalOwner, isOrganizationOwner, isPersonalOwner } from '../../../../core'
 import { useUiFeatures } from '../../../../hooks'
 
 import styles from './InsightsDashboardCreationContent.module.scss'

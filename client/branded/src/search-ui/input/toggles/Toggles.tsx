@@ -3,24 +3,19 @@ import React, { useCallback } from 'react'
 import { mdiCodeBrackets, mdiFormatLetterCase, mdiRegex } from '@mdi/js'
 import classNames from 'classnames'
 
-import { isMacPlatform } from '@sourcegraph/common'
 import { SearchPatternType } from '@sourcegraph/shared/src/graphql-operations'
-import {
-    SearchPatternTypeProps,
+import type {
     CaseSensitivityProps,
-    SearchContextProps,
     SearchPatternTypeMutationProps,
     SubmitSearchProps,
-    SearchMode,
     SearchModeProps,
+    SearchPatternTypeProps,
 } from '@sourcegraph/shared/src/search'
 import { findFilter, FilterKind } from '@sourcegraph/shared/src/search/query/query'
-import { appendContextFilter } from '@sourcegraph/shared/src/search/query/transformer'
-import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 
-import { CopyQueryButton } from './CopyQueryButton'
 import { QueryInputToggle } from './QueryInputToggle'
-import { SmartSearchToggle } from './SmartSearchToggle'
 
 import styles from './Toggles.module.scss'
 
@@ -29,12 +24,12 @@ export interface TogglesProps
         SearchPatternTypeMutationProps,
         CaseSensitivityProps,
         SearchModeProps,
-        SettingsCascadeProps,
-        Pick<SearchContextProps, 'selectedSearchContextSpec'>,
+        TelemetryProps,
+        TelemetryV2Props,
         Partial<Pick<SubmitSearchProps, 'submitSearch'>> {
     navbarSearchQuery: string
+    defaultPatternType: SearchPatternType
     className?: string
-    showCopyQueryButton?: boolean
     /**
      * If set to false makes all buttons non-actionable. The main use case for
      * this prop is showing the toggles in examples. This is different from
@@ -45,18 +40,6 @@ export interface TogglesProps
     structuralSearchDisabled?: boolean
 }
 
-export const getFullQuery = (
-    query: string,
-    searchContextSpec: string,
-    caseSensitive: boolean,
-    patternType: SearchPatternType
-): string => {
-    const finalQuery = [query, `patternType:${patternType}`, caseSensitive ? 'case:yes' : '']
-        .filter(queryPart => !!queryPart)
-        .join(' ')
-    return appendContextFilter(finalQuery, searchContextSpec)
-}
-
 /**
  * The toggles displayed in the query input.
  */
@@ -64,69 +47,58 @@ export const Toggles: React.FunctionComponent<React.PropsWithChildren<TogglesPro
     const {
         navbarSearchQuery,
         patternType,
+        defaultPatternType,
         setPatternType,
         caseSensitive,
         setCaseSensitivity,
-        searchMode,
-        setSearchMode,
         className,
-        selectedSearchContextSpec,
         submitSearch,
-        showCopyQueryButton = true,
         structuralSearchDisabled,
+        telemetryService,
+        telemetryRecorder,
     } = props
 
     const submitOnToggle = useCallback(
-        (
-            args:
-                | { newPatternType: SearchPatternType }
-                | { newCaseSensitivity: boolean }
-                | { newPowerUser: boolean }
-                | { newSearchMode: SearchMode }
-        ): void => {
+        (args: { newPatternType: SearchPatternType } | { newCaseSensitivity: boolean }): void => {
             submitSearch?.({
                 source: 'filter',
                 patternType: 'newPatternType' in args ? args.newPatternType : patternType,
                 caseSensitive: 'newCaseSensitivity' in args ? args.newCaseSensitivity : caseSensitive,
-                searchMode: 'newSearchMode' in args ? args.newSearchMode : searchMode,
             })
         },
-        [caseSensitive, patternType, searchMode, submitSearch]
+        [caseSensitive, patternType, submitSearch]
     )
 
     const toggleCaseSensitivity = useCallback((): void => {
         const newCaseSensitivity = !caseSensitive
         setCaseSensitivity(newCaseSensitivity)
         submitOnToggle({ newCaseSensitivity })
-    }, [caseSensitive, setCaseSensitivity, submitOnToggle])
+        telemetryRecorder.recordEvent('search.caseSensitive', 'toggle')
+    }, [caseSensitive, setCaseSensitivity, submitOnToggle, telemetryRecorder])
 
     const toggleRegexp = useCallback((): void => {
         const newPatternType =
-            patternType !== SearchPatternType.regexp ? SearchPatternType.regexp : SearchPatternType.standard
+            patternType !== SearchPatternType.regexp
+                ? SearchPatternType.regexp
+                : // Handle the case where the user has regexp configured as the default pattern type.
+                defaultPatternType === SearchPatternType.regexp
+                ? SearchPatternType.keyword
+                : defaultPatternType
 
         setPatternType(newPatternType)
         submitOnToggle({ newPatternType })
-    }, [patternType, setPatternType, submitOnToggle])
+        telemetryService.log('ToggleRegexpPatternType', { currentStatus: patternType === SearchPatternType.regexp })
+        telemetryRecorder.recordEvent('search.regexpPatternType', 'toggle')
+    }, [patternType, defaultPatternType, setPatternType, submitOnToggle, telemetryService, telemetryRecorder])
 
     const toggleStructuralSearch = useCallback((): void => {
         const newPatternType: SearchPatternType =
-            patternType !== SearchPatternType.structural ? SearchPatternType.structural : SearchPatternType.standard
+            patternType !== SearchPatternType.structural ? SearchPatternType.structural : defaultPatternType
 
         setPatternType(newPatternType)
         submitOnToggle({ newPatternType })
-    }, [patternType, setPatternType, submitOnToggle])
-
-    const onSelectSmartSearch = useCallback(
-        (enabled: boolean): void => {
-            const newSearchMode: SearchMode = enabled ? SearchMode.SmartSearch : SearchMode.Precise
-
-            setSearchMode(newSearchMode)
-            submitOnToggle({ newSearchMode })
-        },
-        [setSearchMode, submitOnToggle]
-    )
-
-    const fullQuery = getFullQuery(navbarSearchQuery, selectedSearchContextSpec || '', caseSensitive, patternType)
+        telemetryRecorder.recordEvent('search.structuralPatternType', 'toggle')
+    }, [patternType, defaultPatternType, setPatternType, submitOnToggle, telemetryRecorder])
 
     return (
         <div className={classNames(className, styles.toggleContainer)}>
@@ -189,20 +161,6 @@ export const Toggles: React.FunctionComponent<React.PropsWithChildren<TogglesPro
                         />
                     )}
                 </>
-                <div className={styles.separator} />
-                <SmartSearchToggle
-                    className="test-smart-search-toggle"
-                    isActive={searchMode === SearchMode.SmartSearch}
-                    onSelect={onSelectSmartSearch}
-                    interactive={props.interactive}
-                />
-                {showCopyQueryButton && (
-                    <CopyQueryButton
-                        fullQuery={fullQuery}
-                        isMacPlatform={isMacPlatform()}
-                        className={classNames(styles.toggle, styles.copyQueryButton)}
-                    />
-                )}
             </>
         </div>
     )

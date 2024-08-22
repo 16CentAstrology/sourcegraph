@@ -30,7 +30,7 @@ func (j *janitor) Config() []env.Config {
 	return nil
 }
 
-func (j *janitor) Routines(startupCtx context.Context, observationCtx *observation.Context) ([]goroutine.BackgroundRoutine, error) {
+func (j *janitor) Routines(_ context.Context, observationCtx *observation.Context) ([]goroutine.BackgroundRoutine, error) {
 	db, err := workerdb.InitDB(observationCtx)
 	if err != nil {
 		return nil, err
@@ -41,10 +41,14 @@ func (j *janitor) Routines(startupCtx context.Context, observationCtx *observati
 		// hour aren't supported, and this is why: there's no point running this
 		// operation more frequently than that, given it's purely a debugging
 		// tool.
-		goroutine.NewPeriodicGoroutine(context.Background(), "batchchanges.webhook-log-janitor", "cleans up stale webhook logs",
-			1*time.Hour, &handler{
+		goroutine.NewPeriodicGoroutine(
+			context.Background(),
+			&handler{
 				store: db.WebhookLogs(keyring.Default().WebhookLogKey),
 			},
+			goroutine.WithName("batchchanges.webhook-log-janitor"),
+			goroutine.WithDescription("cleans up stale webhook logs"),
+			goroutine.WithInterval(1*time.Hour),
 		),
 	}, nil
 }

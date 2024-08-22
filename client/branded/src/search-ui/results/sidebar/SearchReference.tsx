@@ -1,4 +1,4 @@
-import React, { ReactElement, useCallback, useMemo, useState } from 'react'
+import React, { type ReactElement, useCallback, useMemo, useState } from 'react'
 
 import { mdiChevronDown, mdiChevronLeft, mdiOpenInNew } from '@mdi/js'
 import classNames from 'classnames'
@@ -7,15 +7,16 @@ import { escapeRegExp } from 'lodash'
 import { renderMarkdown } from '@sourcegraph/common'
 import { SearchPatternType } from '@sourcegraph/shared/src/graphql-operations'
 import {
-    SearchQueryState,
+    type SearchQueryState,
     createQueryExampleFromString,
     updateQueryWithFilterAndExample,
-    QueryExample,
+    type QueryExample,
     EditorHint,
 } from '@sourcegraph/shared/src/search'
 import { FILTERS, FilterType, isNegatableFilter } from '@sourcegraph/shared/src/search/query/filters'
 import { scanSearchQuery } from '@sourcegraph/shared/src/search/query/scanner'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import {
     Button,
     useLocalStorage,
@@ -143,6 +144,12 @@ To use this filter, the search query must contain \`type:diff\` or \`type:commit
         examples: ['file:has.content(github.com/sourcegraph/sourcegraph)'],
     },
     {
+        ...createQueryExampleFromString('has.owner({name})'),
+        field: FilterType.file,
+        description: 'Search only inside files that are owned by the given owner.',
+        examples: ['file:has.owner(johndoe)'],
+    },
+    {
         ...createQueryExampleFromString('{yes/only}'),
         field: FilterType.fork,
         description:
@@ -201,10 +208,17 @@ To use this filter, the search query must contain \`type:diff\` or \`type:commit
         showSuggestions: false,
     },
     {
+        ...createQueryExampleFromString('has.topic({topic})'),
+        field: FilterType.repo,
+        description: 'Search only inside repositories that have the provided GitHub topic',
+        examples: ['repo:has.topic(go)'],
+        showSuggestions: false,
+    },
+    {
         ...createQueryExampleFromString('has.commit.after({date})'),
         field: FilterType.repo,
         description:
-            'Search only inside repositories that contain a a commit after some specified time. See [git date formats](https://github.com/git/git/blob/master/Documentation/date-formats.txt) for accepted formats. Use this to filter out stale repositories that don’t contain commits past the specified time frame. This parameter is experimental.',
+            'Search only inside repositories that contain a commit after some specified time. See [git date formats](https://github.com/git/git/blob/master/Documentation/date-formats.txt) for accepted formats. Use this to filter out stale repositories that don’t contain commits past the specified time frame. This parameter is experimental.',
         examples: ['repo:has.commit.after(1 month ago)', 'repo:has.commit.after(june 25 2017)'],
         showSuggestions: false,
     },
@@ -216,25 +230,18 @@ To use this filter, the search query must contain \`type:diff\` or \`type:commit
         showSuggestions: false,
     },
     {
-        ...createQueryExampleFromString('has.tag({any string})'),
-        field: FilterType.repo,
-        description: 'Search inside repositories that are tagged with the provided string.',
-        examples: ['repo:has.tag(ocaml)', '-repo:has.tag(golang)'],
-        showSuggestions: false,
-    },
-    {
-        ...createQueryExampleFromString('has({key:value})'),
+        ...createQueryExampleFromString('has.meta({key:value})'),
         field: FilterType.repo,
         description:
-            'Search inside repositories associated with a key:value pair that matches the provided key:value pair.',
-        examples: ['repo:has(owner:jordan)', '-repo:has(team:search)'],
-        showSuggestions: false,
-    },
-    {
-        ...createQueryExampleFromString('has.key({any string})'),
-        field: FilterType.repo,
-        description: 'Search inside repositories that are associated with the given key, regardless of its value.',
-        examples: ['repo:has.key(owner)', '-repo:has.key(wip)'],
+            'Search only inside repositories having ({key}:{value}) pair, or ({key}) with any value or ({key}:) with no value metadata',
+        examples: [
+            'repo:has.meta(owner:jordan)',
+            '-repo:has.meta(team:search)',
+            'repo:has.meta(owner)',
+            '-repo:has.meta(wip)',
+            'repo:has.meta(ocaml:)',
+            '-repo:has.meta(golang:)',
+        ],
         showSuggestions: false,
     },
     {
@@ -242,7 +249,7 @@ To use this filter, the search query must contain \`type:diff\` or \`type:commit
         field: FilterType.rev,
         commonRank: 20,
         description:
-            'Search a revision instead of the default branch. `rev:` can only be used in conjunction with `repo:` and may not be used more than once. See our [revision syntax documentation](https://docs.sourcegraph.com/code_search/reference/queries#repository-revisions) to learn more.',
+            'Search a revision instead of the default branch. `rev:` can only be used in conjunction with `repo:` and may not be used more than once. See our [revision syntax documentation](https://sourcegraph.com/docs/code_search/reference/queries#repository-revisions) to learn more.',
     },
     {
         ...createQueryExampleFromString('{result-types}'),
@@ -259,7 +266,7 @@ To use this filter, the search query must contain \`type:diff\` or \`type:commit
 - \`select:content\`
 - \`select:symbol.symboltype\`
 
-See [language definition](https://docs.sourcegraph.com/code_search/reference/language#select) for more information on possible values.`,
+See [language definition](https://sourcegraph.com/docs/code_search/reference/language#select) for more information on possible values.`,
         examples: ['fmt.Errorf select:repo', 'select:commit.diff.added //TODO', 'select:file.directory'],
     },
     {
@@ -274,7 +281,7 @@ See [language definition](https://docs.sourcegraph.com/code_search/reference/lan
         ...createQueryExampleFromString('{golang-duration-value}'),
         field: FilterType.timeout,
         description:
-            'Customizes the timeout for searches. The value of the parameter is a string that can be parsed by the [Go time package’s `ParseDuration`](https://golang.org/pkg/time/#ParseDuration) (e.g. 10s, 100ms). By default, the timeout is set to 10 seconds, and the search will optimize for returning results as soon as possible. The timeout value cannot be set longer than 1 minute. When provided, the search is given the full timeout to complete.',
+            'Customizes the timeout for searches. The value of the parameter is a string that can be parsed by the [Go time package’s `ParseDuration`](https://golang.org/pkg/time/#ParseDuration) (e.g. 10s, 100ms). By default, the timeout is set to 1 minute, and the search will optimize for returning results as soon as possible. The value of [`search.limits.maxTimeoutSeconds`](https://sourcegraph.com/docs/code-search/types/exhaustive#timeouts) can be configured by site admins. When provided, the search is given the full timeout to complete.',
         examples: ['repo:^github.com/sourcegraph timeout:15s func count:10000'],
     },
     {
@@ -372,21 +379,24 @@ const SearchReferenceExample: React.FunctionComponent<React.PropsWithChildren<Se
             <Button className="p-0 flex-1" onClick={() => onClick?.(example)}>
                 {scanResult.term.map((term, index) => {
                     switch (term.type) {
-                        case 'filter':
+                        case 'filter': {
                             return (
                                 <React.Fragment key={index}>
                                     <span className="search-filter-keyword">{term.field.value}:</span>
                                     {term.value?.quoted ? `"${term.value.value}"` : term.value?.value}
                                 </React.Fragment>
                             )
-                        case 'keyword':
+                        }
+                        case 'keyword': {
                             return (
                                 <span key={index} className="search-filter-keyword">
                                     {term.value}
                                 </span>
                             )
-                        default:
+                        }
+                        default: {
                             return example.slice(term.range.start, term.range.end)
+                        }
                     }
                 })}
             </Button>
@@ -515,14 +525,17 @@ const FilterInfoList = ({ filters, onClick, onExampleClick }: FilterInfoListProp
     </ul>
 )
 
-export interface SearchReferenceProps extends TelemetryProps, Pick<SearchQueryState, 'setQueryState'> {
+export interface SearchReferenceProps
+    extends TelemetryProps,
+        TelemetryV2Props,
+        Pick<SearchQueryState, 'setQueryState'> {
     filter: string
 }
 
-const SearchReference = React.memo((props: SearchReferenceProps): ReactElement => {
+const SearchReference = React.memo(function SearchReference(props: SearchReferenceProps) {
     const [persistedTabIndex, setPersistedTabIndex] = useLocalStorage(SEARCH_REFERENCE_TAB_KEY, 0)
 
-    const { setQueryState, telemetryService } = props
+    const { setQueryState, telemetryService, telemetryRecorder } = props
     const filter = props.filter.trim()
     const hasFilter = filter.length > 0
 
@@ -554,16 +567,21 @@ const SearchReference = React.memo((props: SearchReferenceProps): ReactElement =
     )
     const updateQueryWithOperator = useCallback(
         (info: OperatorInfo) => {
+            telemetryRecorder.recordEvent('search.reference.operator', 'click')
+
             setQueryState(({ query }) => ({ query: query + ` ${info.operator} ` }))
         },
-        [setQueryState]
+        [setQueryState, telemetryRecorder]
     )
     const updateQueryWithExample = useCallback(
         (example: string) => {
             telemetryService.log(hasFilter ? 'SearchReferenceSearchedAndClicked' : 'SearchReferenceFilterClicked')
+            telemetryRecorder.recordEvent('search.reference.filter', 'click', {
+                metadata: { hasFilter: hasFilter ? 1 : 0 },
+            })
             setQueryState(({ query }) => ({ query: query.trimEnd() + ' ' + example }))
         },
-        [setQueryState, hasFilter, telemetryService]
+        [setQueryState, hasFilter, telemetryService, telemetryRecorder]
     )
 
     const filterList = (
@@ -619,5 +637,7 @@ const SearchReference = React.memo((props: SearchReferenceProps): ReactElement =
 export function getSearchReferenceFactory(
     props: Omit<SearchReferenceProps, 'filter'>
 ): (filter: string) => React.ReactNode {
-    return (filter: string) => <SearchReference {...props} filter={filter} />
+    return function SearchReferenceFactory(filter: string) {
+        return <SearchReference {...props} filter={filter} />
+    }
 }

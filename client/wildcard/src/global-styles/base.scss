@@ -1,8 +1,8 @@
-@import './colors.scss';
-@import './variables.scss';
+@import './colors';
+@import './variables';
 
-@import './functions.scss';
-@import './mixins.scss';
+@import './functions';
+@import './mixins';
 @import './reboot';
 @import './utilities';
 @import './breakpoints';
@@ -22,13 +22,15 @@
 @import './progress';
 @import './collapse';
 @import './grid';
+@import './jupyter';
 
 // Show a focus ring when performing keyboard navigation. Uses the polyfill at
 // https://github.com/WICG/focus-visible because few browsers support :focus-visible.
-:focus:not(:focus-visible) {
+:focus:not(.focus-visible) {
     outline: none;
 }
-:focus-visible {
+
+.focus-visible {
     outline: 0;
     box-shadow: var(--focus-box-shadow);
 }
@@ -41,10 +43,9 @@ input[type='checkbox'] {
     }
 }
 
-@import 'react-resizable/css/styles.css';
+@import 'react-resizable/css/styles';
 // Global styles provided by @reach packages. Should be imported once in the global scope.
-@import '@reach/combobox/styles.css';
-@import '@reach/menu-button/styles.css';
+@import '@reach/combobox/styles';
 
 // stylelint-disable-next-line selector-max-id
 html,

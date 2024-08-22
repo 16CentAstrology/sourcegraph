@@ -16,6 +16,7 @@ type Operations struct {
 	tryLock           *observation.Operation
 	up                *observation.Operation
 	versions          *observation.Operation
+	runDDLStatements  *observation.Operation
 	withMigrationLog  *observation.Operation
 }
 
@@ -26,7 +27,7 @@ var (
 
 func NewOperations(observationCtx *observation.Context) *Operations {
 	once.Do(func() {
-		metrics := metrics.NewREDMetrics(
+		redMetrics := metrics.NewREDMetrics(
 			observationCtx.Registerer,
 			"migrations",
 			metrics.WithLabels("op"),
@@ -37,7 +38,7 @@ func NewOperations(observationCtx *observation.Context) *Operations {
 			return observationCtx.Operation(observation.Op{
 				Name:              fmt.Sprintf("migrations.%s", name),
 				MetricLabelValues: []string{name},
-				Metrics:           metrics,
+				Metrics:           redMetrics,
 			})
 		}
 
@@ -49,6 +50,7 @@ func NewOperations(observationCtx *observation.Context) *Operations {
 			tryLock:           op("TryLock"),
 			up:                op("Up"),
 			versions:          op("Versions"),
+			runDDLStatements:  op("RunDDLStatements"),
 			withMigrationLog:  op("WithMigrationLog"),
 		}
 	})

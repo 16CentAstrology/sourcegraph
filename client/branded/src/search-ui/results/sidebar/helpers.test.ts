@@ -1,7 +1,8 @@
 import { renderHook } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 
 import { FilterType } from '@sourcegraph/shared/src/search/query/filters'
-import { Filter } from '@sourcegraph/shared/src/search/stream'
+import type { Filter } from '@sourcegraph/shared/src/search/stream'
 
 import { useLastRepoName } from './helpers'
 
@@ -16,7 +17,7 @@ function createRepoFilter(value: string): Filter {
         value: `${value}@HEAD`,
         label: value,
         count: 1,
-        limitHit: false,
+        exhaustive: true,
     }
 }
 

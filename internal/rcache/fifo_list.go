@@ -5,62 +5,92 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/gomodule/redigo/redis"
+	"github.com/sourcegraph/sourcegraph/internal/redispool"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 // FIFOList holds the most recently inserted items, discarding older ones if the total item count goes over the configured size.
 type FIFOList struct {
 	key     string
-	maxSize int
+	maxSize func() int
+	_kv     redispool.KeyValue
 }
 
 // NewFIFOList returns a FIFOList, storing only a fixed amount of elements, discarding old ones if needed.
-func NewFIFOList(key string, size int) *FIFOList {
+func NewFIFOList(kv redispool.KeyValue, key string, size int) *FIFOList {
 	return &FIFOList{
 		key:     key,
-		maxSize: size,
+		maxSize: func() int { return size },
+		_kv:     kv,
 	}
+}
+
+// NewFIFOListDynamic is like NewFIFOList except size will be called each time
+// we enforce list size invariants.
+func NewFIFOListDynamic(kv redispool.KeyValue, key string, size func() int) *FIFOList {
+	l := &FIFOList{
+		key:     key,
+		maxSize: size,
+		_kv:     kv,
+	}
+	return l
 }
 
 // Insert b in the cache and drops the oldest inserted item if the size exceeds the configured limit.
 func (l *FIFOList) Insert(b []byte) error {
-	c := pool.Get()
-	defer c.Close()
-
 	if !utf8.Valid(b) {
-		errors.Newf("rcache: keys must be valid utf8", "key", b)
+		return errors.Newf("rcache: keys must be valid utf8", "key", b)
 	}
 	key := l.globalPrefixKey()
 
+	// Special case maxSize 0 to mean keep the list empty. Used to handle
+	// disabling.
+	maxSize := l.MaxSize()
+	if maxSize == 0 {
+		if err := l.kv().LTrim(key, 0, 0); err != nil {
+			return errors.Wrap(err, "failed to execute redis command LTRIM")
+		}
+		return nil
+	}
+
 	// O(1) because we're just adding a single element.
-	_, err := c.Do("LPUSH", key, b)
-	if err != nil {
+	if err := l.kv().LPush(key, b); err != nil {
 		return errors.Wrap(err, "failed to execute redis command LPUSH")
 	}
 
 	// O(1) because the average case if just about dropping the last element.
-	_, err = c.Do("LTRIM", key, 0, l.maxSize-1)
-	if err != nil {
+	if err := l.kv().LTrim(key, 0, maxSize-1); err != nil {
 		return errors.Wrap(err, "failed to execute redis command LTRIM")
 	}
 	return nil
 }
 
+// Size returns the number of elements in the list.
 func (l *FIFOList) Size() (int, error) {
-	c := pool.Get()
-	defer c.Close()
-
 	key := l.globalPrefixKey()
-	n, err := redis.Int(c.Do("LLEN", key))
+	n, err := l.kv().LLen(key)
 	if err != nil {
 		return 0, errors.Wrap(err, "failed to execute redis command LLEN")
 	}
 	return n, nil
 }
 
+// IsEmpty returns true if the number of elements in the list is 0.
+func (l *FIFOList) IsEmpty() (bool, error) {
+	size, err := l.Size()
+	if err != nil {
+		return false, err
+	}
+	return size == 0, nil
+}
+
+// MaxSize returns the capacity of the list.
 func (l *FIFOList) MaxSize() int {
-	return l.maxSize
+	maxSize := l.maxSize()
+	if maxSize < 0 {
+		return 0
+	}
+	return maxSize
 }
 
 // All return all items stored in the FIFOList.
@@ -74,32 +104,41 @@ func (l *FIFOList) All(ctx context.Context) ([][]byte, error) {
 //
 // This a O(n) operation, where n is the list size.
 func (l *FIFOList) Slice(ctx context.Context, from, to int) ([][]byte, error) {
-	c, err := pool.GetContext(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "get redis conn")
-	}
-	defer c.Close()
-	select {
-	case <-ctx.Done():
+	// Return early if context is already cancelled
+	if ctx.Err() != nil {
 		return nil, ctx.Err()
-	default:
 	}
 
 	key := l.globalPrefixKey()
-	res, err := redis.Values(c.Do("LRANGE", key, from, to))
+	bs, err := l.kv().WithContext(ctx).LRange(key, from, to).ByteSlices()
 	if err != nil {
+		// Return ctx error if it expired
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
-	bs, err := redis.ByteSlices(res, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(bs) > l.maxSize {
-		bs = bs[:l.maxSize]
+	if maxSize := l.MaxSize(); len(bs) > maxSize {
+		bs = bs[:maxSize]
 	}
 	return bs, nil
 }
 
 func (l *FIFOList) globalPrefixKey() string {
 	return fmt.Sprintf("%s:%s", globalPrefix, l.key)
+}
+
+func (l *FIFOList) kv() redispool.KeyValue {
+	if testStore != nil {
+		return testStore
+	}
+	return l._kv
+}
+
+func bytes(s ...string) [][]byte {
+	t := make([][]byte, len(s))
+	for i, v := range s {
+		t[i] = []byte(v)
+	}
+	return t
 }

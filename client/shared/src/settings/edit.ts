@@ -1,12 +1,12 @@
-import { from } from 'rxjs'
+import { from, lastValueFrom } from 'rxjs'
 import { first, map, switchMap } from 'rxjs/operators'
 
 import { isErrorLike } from '@sourcegraph/common'
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
 
-import { SettingsEdit } from '../api/client/services/settings'
-import { Scalars, KeyPathSegment, ConfigurationEdit, SettingsEdit as SettingsEditArg } from '../graphql-operations'
-import { PlatformContext } from '../platform/context'
+import type { SettingsEdit } from '../api/client/services/settings'
+import type { Scalars, KeyPathSegment, ConfigurationEdit, SettingsEdit as SettingsEditArg } from '../graphql-operations'
+import type { PlatformContext } from '../platform/context'
 
 /**
  * A helper function for performing an update to settings.
@@ -24,8 +24,8 @@ export function updateSettings(
         edit: SettingsEditArg | string
     ) => Promise<void>
 ): Promise<void> {
-    return from(settings)
-        .pipe(
+    return lastValueFrom(
+        from(settings).pipe(
             first(),
             switchMap(settingsCascade => {
                 if (!settingsCascade.subjects) {
@@ -55,8 +55,9 @@ export function updateSettings(
                           }
                 )
             })
-        )
-        .toPromise()
+        ),
+        { defaultValue: undefined }
+    )
 }
 
 function toGQLKeyPath(keyPath: (string | number)[]): KeyPathSegment[] {
@@ -94,28 +95,28 @@ function editSettings(
     lastID: number | null,
     edit: ConfigurationEdit
 ): Promise<void> {
-    return from(
-        requestGraphQL({
-            request: gql`
-                mutation EditSettings($subject: ID!, $lastID: Int, $edit: ConfigurationEdit!) {
-                    configurationMutation(input: { subject: $subject, lastID: $lastID }) {
-                        editConfiguration(edit: $edit) {
-                            empty {
-                                alwaysNil
+    return lastValueFrom(
+        from(
+            requestGraphQL({
+                request: gql`
+                    mutation EditSettings($subject: ID!, $lastID: Int, $edit: ConfigurationEdit!) {
+                        configurationMutation(input: { subject: $subject, lastID: $lastID }) {
+                            editConfiguration(edit: $edit) {
+                                empty {
+                                    alwaysNil
+                                }
                             }
                         }
                     }
-                }
-            `,
-            variables: { subject, lastID, edit },
-            mightContainPrivateInfo: false,
-        })
-    )
-        .pipe(
+                `,
+                variables: { subject, lastID, edit },
+                mightContainPrivateInfo: false,
+            })
+        ).pipe(
             map(dataOrThrowErrors),
             map(() => undefined)
         )
-        .toPromise()
+    )
 }
 
 /**
@@ -132,26 +133,26 @@ export function overwriteSettings(
     lastID: number | null,
     contents: string
 ): Promise<void> {
-    return from(
-        requestGraphQL({
-            request: gql`
-                mutation OverwriteSettings($subject: ID!, $lastID: Int, $contents: String!) {
-                    settingsMutation(input: { subject: $subject, lastID: $lastID }) {
-                        overwriteSettings(contents: $contents) {
-                            empty {
-                                alwaysNil
+    return lastValueFrom(
+        from(
+            requestGraphQL({
+                request: gql`
+                    mutation OverwriteSettings($subject: ID!, $lastID: Int, $contents: String!) {
+                        settingsMutation(input: { subject: $subject, lastID: $lastID }) {
+                            overwriteSettings(contents: $contents) {
+                                empty {
+                                    alwaysNil
+                                }
                             }
                         }
                     }
-                }
-            `,
-            variables: { subject, lastID, contents },
-            mightContainPrivateInfo: false,
-        })
-    )
-        .pipe(
+                `,
+                variables: { subject, lastID, contents },
+                mightContainPrivateInfo: false,
+            })
+        ).pipe(
             map(dataOrThrowErrors),
             map(() => undefined)
         )
-        .toPromise()
+    )
 }

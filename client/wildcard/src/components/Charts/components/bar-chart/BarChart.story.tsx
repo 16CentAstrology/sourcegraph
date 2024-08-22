@@ -1,4 +1,4 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 import { ParentSize } from '@visx/responsive'
 import { ResizableBox } from 'react-resizable'
 
@@ -11,9 +11,7 @@ import { BarChart } from './BarChart'
 const StoryConfig: Meta = {
     title: 'wildcard/Charts',
     decorators: [story => <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>],
-    parameters: {
-        chromatic: { disableSnapshots: false, enableDarkMode: true },
-    },
+    parameters: {},
 }
 
 export default StoryConfig
@@ -59,7 +57,7 @@ const getLink = (datum: LanguageUsageDatum) => datum.linkURL
 const getName = (datum: LanguageUsageDatum) => datum.name
 const getGroup = (datum: LanguageUsageDatum) => datum.group
 
-export const BarChartDemo: Story = () => (
+export const BarChartDemo: StoryFn = () => (
     <main
         style={{
             display: 'flex',

@@ -1,4 +1,7 @@
 import * as H from 'history'
+import { describe, expect, test } from 'vitest'
+
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 
 import { SearchPatternType } from '../graphql-operations'
 
@@ -9,12 +12,14 @@ describe('search/helpers', () => {
         test('should update history', () => {
             const history = H.createMemoryHistory({})
             submitSearch({
-                history,
+                historyOrNavigate: history,
+                location: history.location,
                 query: 'querystring',
                 patternType: SearchPatternType.standard,
                 caseSensitive: false,
                 selectedSearchContextSpec: 'global',
                 source: 'home',
+                telemetryRecorder: noOpTelemetryRecorder,
             })
             expect(history.location.search).toMatchInlineSnapshot(
                 '"?q=context:global+querystring&patternType=standard&sm=0"'
@@ -23,12 +28,14 @@ describe('search/helpers', () => {
         test('should keep trace param when updating history', () => {
             const history = H.createMemoryHistory({ initialEntries: ['/?trace=1'] })
             submitSearch({
-                history,
+                historyOrNavigate: history,
+                location: history.location,
                 query: 'querystring',
                 patternType: SearchPatternType.standard,
                 caseSensitive: false,
                 selectedSearchContextSpec: 'global',
                 source: 'home',
+                telemetryRecorder: noOpTelemetryRecorder,
             })
             expect(history.location.search).toMatchInlineSnapshot(
                 '"?q=context:global+querystring&patternType=standard&sm=0&trace=1"'

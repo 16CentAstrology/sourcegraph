@@ -1,8 +1,11 @@
-import { DecoratorFn, Meta, Story } from '@storybook/react'
+import type { Decorator, Meta, StoryFn } from '@storybook/react'
 import { subDays } from 'date-fns'
-import { NEVER, Observable, of, throwError } from 'rxjs'
+import { NEVER, type Observable, of, throwError } from 'rxjs'
 
-import { SearchContextFields, SearchContextRepositoryRevisionsFields } from '@sourcegraph/shared/src/graphql-operations'
+import type {
+    SearchContextFields,
+    SearchContextRepositoryRevisionsFields,
+} from '@sourcegraph/shared/src/graphql-operations'
 import { mockAuthenticatedUser } from '@sourcegraph/shared/src/testing/searchContexts/testHelpers'
 import { NOOP_PLATFORM_CONTEXT } from '@sourcegraph/shared/src/testing/searchTestHelpers'
 
@@ -10,14 +13,12 @@ import { WebStory } from '../../components/WebStory'
 
 import { SearchContextPage } from './SearchContextPage'
 
-const decorator: DecoratorFn = story => <div className="p-3 container">{story()}</div>
+const decorator: Decorator = story => <div className="p-3 container">{story()}</div>
 
 const config: Meta = {
     title: 'web/enterprise/searchContexts/SearchContextPage',
     decorators: [decorator],
-    parameters: {
-        chromatic: { viewports: [1200], disableSnapshot: false },
-    },
+    parameters: {},
 }
 
 export default config
@@ -80,7 +81,7 @@ const fetchAutoDefinedContext = (): Observable<SearchContextFields> =>
         name: 'auto-ctx',
     })
 
-export const PublicContext: Story = () => (
+export const PublicContext: StoryFn = () => (
     <WebStory>
         {webProps => (
             <SearchContextPage
@@ -95,7 +96,7 @@ export const PublicContext: Story = () => (
 
 PublicContext.storyName = 'public context'
 
-export const PublicContextUnauthenticated: Story = () => (
+export const PublicContextUnauthenticated: StoryFn = () => (
     <WebStory>
         {webProps => (
             <SearchContextPage
@@ -110,7 +111,7 @@ export const PublicContextUnauthenticated: Story = () => (
 
 PublicContextUnauthenticated.storyName = 'public context, unauthenticated user'
 
-export const AutodefinedContext: Story = () => (
+export const AutodefinedContext: StoryFn = () => (
     <WebStory>
         {webProps => (
             <SearchContextPage
@@ -125,7 +126,7 @@ export const AutodefinedContext: Story = () => (
 
 AutodefinedContext.storyName = 'autodefined context'
 
-export const PrivateContext: Story = () => (
+export const PrivateContext: StoryFn = () => (
     <WebStory>
         {webProps => (
             <SearchContextPage
@@ -140,7 +141,7 @@ export const PrivateContext: Story = () => (
 
 PrivateContext.storyName = 'private context'
 
-export const Loading: Story = () => (
+export const Loading: StoryFn = () => (
     <WebStory>
         {webProps => (
             <SearchContextPage
@@ -155,12 +156,12 @@ export const Loading: Story = () => (
 
 Loading.storyName = 'loading'
 
-export const ErrorStory: Story = () => (
+export const ErrorStory: StoryFn = () => (
     <WebStory>
         {webProps => (
             <SearchContextPage
                 {...webProps}
-                fetchSearchContextBySpec={() => throwError(new Error('Failed to fetch search context'))}
+                fetchSearchContextBySpec={() => throwError(() => new Error('Failed to fetch search context'))}
                 platformContext={NOOP_PLATFORM_CONTEXT}
                 authenticatedUser={mockAuthenticatedUser}
             />

@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/grafana/regexp"
 	"github.com/sourcegraph/run"
+	"go.bobheadxi.dev/streamline/pipeline"
 
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/check"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
@@ -30,20 +30,18 @@ func categoryCloneRepositories() category {
 See here on how to set that up:
 
 https://docs.github.com/en/authentication/connecting-to-github-with-ssh`,
+				Enabled: disableInCI(),
 				Check: func(ctx context.Context, out *std.Output, args CheckArgs) error {
-					if args.Teammate {
-						return check.CommandOutputContains(
-							"ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -T git@github.com",
-							"successfully authenticated")(ctx)
-					}
-					// otherwise, we don't need auth set up at all, since everything is OSS
-					return nil
+					return check.CommandOutputContains(
+						"ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -T git@github.com",
+						"successfully authenticated")(ctx)
 				},
 				// TODO we might be able to automate this fix
 			},
 			{
 				Name:        "github.com/sourcegraph/sourcegraph",
 				Description: `The 'sourcegraph' repository contains the Sourcegraph codebase and everything to run Sourcegraph locally.`,
+				Enabled:     disableInCI(),
 				Check: func(ctx context.Context, out *std.Output, args CheckArgs) error {
 					if _, err := root.RepositoryRoot(); err == nil {
 						return nil
@@ -56,12 +54,7 @@ https://docs.github.com/en/authentication/connecting-to-github-with-ssh`,
 					return nil
 				},
 				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
-					var cmd *run.Command
-					if args.Teammate {
-						cmd = run.Cmd(ctx, `git clone git@github.com:sourcegraph/sourcegraph.git`)
-					} else {
-						cmd = run.Cmd(ctx, `git clone https://github.com/sourcegraph/sourcegraph.git`)
-					}
+					cmd := run.Cmd(ctx, `git clone git@github.com:sourcegraph/sourcegraph.git`)
 					return cmd.Run().StreamLines(cio.Write)
 				},
 			},
@@ -78,9 +71,8 @@ so they sit alongside each other, like this:
     /dir
     |-- dev-private
     +-- sourcegraph
-
-NOTE: You can ignore this if you're not a Sourcegraph teammate.`,
-				Enabled: enableForTeammatesOnly(),
+`,
+				Enabled: disableInCI(),
 				Check: func(ctx context.Context, out *std.Output, args CheckArgs) error {
 					ok, err := pathExists("dev-private")
 					if ok && err == nil {
@@ -126,7 +118,7 @@ func categoryProgrammingLanguagesAndTools(additionalChecks ...*dependency) categ
 		Checks: []*dependency{
 			{
 				Name:  "go",
-				Check: checkGoVersion,
+				Check: checkAction(check.Go),
 				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
 					if err := forceASDFPluginAdd(ctx, "golang", "https://github.com/kennyp/asdf-golang.git"); err != nil {
 						return err
@@ -135,8 +127,19 @@ func categoryProgrammingLanguagesAndTools(additionalChecks ...*dependency) categ
 				},
 			},
 			{
-				Name:  "pnpm",
-				Check: checkPnpmVersion,
+				Name:  "python",
+				Check: checkAction(check.Python),
+				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
+					if err := forceASDFPluginAdd(ctx, "python", ""); err != nil {
+						return err
+					}
+					return root.Run(usershell.Command(ctx, "asdf install python")).StreamLines(cio.Verbose)
+				},
+			},
+			{
+				Name:        "pnpm",
+				Description: "Run `asdf plugin add pnpm && asdf install pnpm`",
+				Check:       checkAction(check.PNPM),
 				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
 					if err := forceASDFPluginAdd(ctx, "pnpm", ""); err != nil {
 						return err
@@ -146,7 +149,7 @@ func categoryProgrammingLanguagesAndTools(additionalChecks ...*dependency) categ
 			},
 			{
 				Name:  "node",
-				Check: checkNodeVersion,
+				Check: checkAction(check.Node),
 				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
 					if err := forceASDFPluginAdd(ctx, "nodejs", "https://github.com/asdf-vm/asdf-nodejs.git"); err != nil {
 						return err
@@ -156,7 +159,7 @@ func categoryProgrammingLanguagesAndTools(additionalChecks ...*dependency) categ
 			},
 			{
 				Name:  "rust",
-				Check: checkRustVersion,
+				Check: checkAction(check.Rust),
 				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
 					if err := forceASDFPluginAdd(ctx, "rust", "https://github.com/asdf-community/asdf-rust.git"); err != nil {
 						return err
@@ -170,10 +173,10 @@ func categoryProgrammingLanguagesAndTools(additionalChecks ...*dependency) categ
 				Check: func(ctx context.Context, out *std.Output, args CheckArgs) error {
 					// If any of these fail with ErrNotInPath, we may need to regenerate
 					// all our asdf shims.
-					for _, c := range []check.CheckAction[CheckArgs]{
-						checkGoVersion, checkPnpmVersion, checkNodeVersion, checkRustVersion,
+					for _, c := range []check.CheckFunc{
+						check.Go, check.PNPM, check.Node, check.Rust, check.Python,
 					} {
-						if err := c(ctx, out, args); err != nil {
+						if err := c(ctx); err != nil {
 							return errors.Wrap(err, "we may need to regenerate asdf shims")
 						}
 					}
@@ -183,6 +186,36 @@ func categoryProgrammingLanguagesAndTools(additionalChecks ...*dependency) categ
 					`rm -rf ~/.asdf/shims`,
 					`asdf reshim`,
 				),
+			},
+			{
+				Name: "pre-commit.com is installed",
+				Check: func(ctx context.Context, out *std.Output, args CheckArgs) error {
+					if args.DisablePreCommits {
+						return nil
+					}
+
+					repoRoot, err := root.RepositoryRoot()
+					if err != nil {
+						return err
+					}
+					return check.Combine(
+						check.FileExists(filepath.Join(repoRoot, ".bin/pre-commit-3.3.2.pyz")),
+						func(context.Context) error {
+							return root.Run(usershell.Command(ctx, "cat .git/hooks/pre-commit | grep https://pre-commit.com")).Wait()
+						},
+					)(ctx)
+				},
+				Fix: func(ctx context.Context, cio check.IO, args CheckArgs) error {
+					err := root.Run(usershell.Command(ctx, "mkdir -p .bin && curl -L --retry 3 --retry-max-time 120 https://github.com/pre-commit/pre-commit/releases/download/v3.3.2/pre-commit-3.3.2.pyz --output .bin/pre-commit-3.3.2.pyz --silent")).StreamLines(cio.Verbose)
+					if err != nil {
+						return errors.Wrap(err, "failed to download pre-commit release")
+					}
+					err = root.Run(usershell.Command(ctx, "python .bin/pre-commit-3.3.2.pyz install")).StreamLines(cio.Verbose)
+					if err != nil {
+						return errors.Wrap(err, "failed to install pre-commit")
+					}
+					return nil
+				},
 			},
 		},
 	}
@@ -206,8 +239,13 @@ func categoryAdditionalSGConfiguration() category {
 					}
 					shell := usershell.ShellType(ctx)
 					autocompletePath := usershell.AutocompleteScriptPath(sgHome, shell)
-					if _, err := os.Stat(autocompletePath); err != nil {
+					completionScript, err := os.ReadFile(autocompletePath)
+					if err != nil {
 						return errors.Wrapf(err, "autocomplete script for shell %s not found", shell)
+					}
+
+					if string(completionScript) != usershell.AutocompleteScripts[shell] {
+						return errors.Wrapf(err, "autocomplete script for shell %s is not up to date", shell)
 					}
 
 					shellConfig := usershell.ShellConfigPath(ctx)
@@ -306,7 +344,7 @@ func dependencyGcloud() *dependency {
 					"curl https://sdk.cloud.google.com | bash -s -- --disable-prompts").
 					Input(cio.Input).
 					Run().
-					Map(func(_ context.Context, line []byte, dst io.Writer) (int, error) {
+					Pipeline(pipeline.Map(func(line []byte) []byte {
 						// Listen for gcloud telling us to source paths
 						if matches := gcloudSourceRegexp.FindSubmatch(line); len(matches) > 0 {
 							shouldSource := matches[gcloudSourceRegexp.SubexpIndex("path")]
@@ -314,9 +352,8 @@ func dependencyGcloud() *dependency {
 								pathsToSource = append(pathsToSource, string(shouldSource))
 							}
 						}
-						// Pass through to underlying writer
-						return dst.Write(line)
-					}).
+						return line
+					})).
 					StreamLines(cio.Write); err != nil {
 					return err
 				}

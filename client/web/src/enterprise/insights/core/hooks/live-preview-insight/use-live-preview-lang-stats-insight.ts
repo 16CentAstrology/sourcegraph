@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { escapeRegExp, partition, sum } from 'lodash'
-import { defer, Observable } from 'rxjs'
+import { defer, lastValueFrom, type Observable } from 'rxjs'
 import { map, retry } from 'rxjs/operators'
 
 import { asError } from '@sourcegraph/common'
@@ -11,13 +11,14 @@ import { createLinkUrl } from '@sourcegraph/wildcard'
 
 import { requestGraphQL } from '../../../../../backend/graphql'
 import {
-    LangStatsInsightContentResult,
-    LangStatsInsightContentVariables,
+    type LangStatsInsightContentResult,
+    type LangStatsInsightContentVariables,
     SearchPatternType,
+    SearchVersion,
 } from '../../../../../graphql-operations'
-import { CategoricalChartContent } from '../../backend/code-insights-backend-types'
+import type { CategoricalChartContent } from '../../backend/code-insights-backend-types'
 
-import { LivePreviewStatus, State } from './types'
+import { LivePreviewStatus, type State } from './types'
 
 interface LangStatsDatum {
     name: string
@@ -114,15 +115,16 @@ async function getLangStats(inputs: GetInsightContentInputs): Promise<Categorica
     const pathRegexp = path ? `file:^${escapeRegExp(path)}/` : ''
     const query = `repo:^${escapeRegExp(repository)}$ ${pathRegexp}`
 
-    const stats = await defer(() => fetchLangStatsInsight(query))
-        .pipe(
+    const stats = await lastValueFrom(
+        defer(() => fetchLangStatsInsight(query)).pipe(
             // The search may time out, but a retry is then likely faster because caches are warm
             retry(3),
             map(data => data.search!.stats)
-        )
-        .toPromise()
+        ),
+        { defaultValue: undefined }
+    )
 
-    if (stats.languages.length === 0) {
+    if (!stats || stats.languages.length === 0) {
         throw new Error("We couldn't find the language statistics, try changing the repository.")
     }
 
@@ -161,8 +163,8 @@ function quoteIfNeeded(value: string): string {
 }
 
 export const GET_LANG_STATS_GQL = gql`
-    query LangStatsInsightContent($query: String!) {
-        search(query: $query) {
+    query LangStatsInsightContent($query: String!, $version: SearchVersion!) {
+        search(query: $query, version: $version) {
             results {
                 limitHit
             }
@@ -179,6 +181,7 @@ export const GET_LANG_STATS_GQL = gql`
 function fetchLangStatsInsight(query: string): Observable<LangStatsInsightContentResult> {
     return requestGraphQL<LangStatsInsightContentResult, LangStatsInsightContentVariables>(GET_LANG_STATS_GQL, {
         query,
+        version: SearchVersion.V3,
     }).pipe(map(dataOrThrowErrors))
 }
 

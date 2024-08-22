@@ -1,12 +1,12 @@
-import { Observable, of } from 'rxjs'
+import { type Observable, of } from 'rxjs'
 import { map } from 'rxjs/operators'
 
 import { memoizeObservable } from '@sourcegraph/common'
 import { dataOrThrowErrors, gql } from '@sourcegraph/http-client'
-import { makeRepoURI, UIRange } from '@sourcegraph/shared/src/util/url'
+import { makeRepoGitURI, type UIRange } from '@sourcegraph/shared/src/util/url'
 
 import { requestGraphQL } from '../../backend/graphql'
-import { DefinitionFields } from '../../graphql-operations'
+import type { DefinitionFields } from '../../graphql-operations'
 
 const buildRangeKey = (range: UIRange): string => {
     const { start, end } = range
@@ -94,6 +94,7 @@ export const fetchDefinitionsFromRanges = memoizeObservable(
             $filePath: String!
         ) {
             repository(name: $repoName) {
+                id
                 commit(rev: $revision) {
                     blob(path: $filePath) {
                         lsif {
@@ -149,6 +150,6 @@ export const fetchDefinitionsFromRanges = memoizeObservable(
     },
     options => {
         const { repoName, revision, filePath, ranges } = options
-        return `${makeRepoURI({ repoName, revision, filePath })}?${ranges.map(buildRangeKey).join(',')}`
+        return `${makeRepoGitURI({ repoName, revision, filePath })}?${ranges.map(buildRangeKey).join(',')}`
     }
 )

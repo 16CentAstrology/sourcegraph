@@ -3,22 +3,27 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gomodule/redigo/redis"
-	"github.com/google/go-github/github"
+	"github.com/google/go-github/v55/github"
 	"github.com/jackc/pgx/v4"
+	"github.com/keegancsmith/sqlf"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/oauth2"
 
 	"github.com/sourcegraph/log"
 
+	"github.com/sourcegraph/sourcegraph/dev/sg/internal/category"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/db"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
+	"github.com/sourcegraph/sourcegraph/internal/accesstoken"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/database/basestore"
 	connections "github.com/sourcegraph/sourcegraph/internal/database/connections/live"
@@ -30,6 +35,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/database/postgresdsn"
 	"github.com/sourcegraph/sourcegraph/internal/encryption"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
+	"github.com/sourcegraph/sourcegraph/internal/hashutil"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/lib/cliutil/exit"
@@ -42,27 +48,16 @@ var (
 
 	dbCommand = &cli.Command{
 		Name:  "db",
-		Usage: "Interact with local Sourcegraph databases for development",
-		UsageText: `
-# Delete test databases
-sg db delete-test-dbs
+		Usage: "Interact with local Sourcegraph databases for development purposes",
+		UsageText: `# Create the the default site-admin user with a default token, i.e. it's always going to be
+# username: sourcegraph, pw: sourcegraph, token spg_local_f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
+sg db default-site-admin
 
-# Reset the Sourcegraph 'frontend' database
+# Reset the database entirely
 sg db reset-pg
 
-# Reset the 'frontend' and 'codeintel' databases
-sg db reset-pg -db=frontend,codeintel
-
-# Reset all databases ('frontend', 'codeintel', 'codeinsights')
-sg db reset-pg -db=all
-
-# Reset the redis database
-sg db reset-redis
-
-# Create a site-admin user whose email and password are foo@sourcegraph.com and sourcegraph.
-sg db add-user -name=foo
-`,
-		Category: CategoryDev,
+# ... (see below)`,
+		Category: category.Dev,
 		Subcommands: []*cli.Command{
 			{
 				Name:   "delete-test-dbs",
@@ -150,13 +145,45 @@ sg db add-user -name=foo
 				},
 				Action: dbAddUserAction,
 			},
+
+			{
+				Name:        "add-access-token",
+				Usage:       "Create a sourcegraph access token",
+				Description: `Run 'sg db add-access-token -username bob' to create an access token for the given username. The access token will be printed if the operation succeeds`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "username",
+						Value: "sourcegraph",
+						Usage: "Username for user",
+					},
+					&cli.BoolFlag{
+						Name:     "sudo",
+						Value:    false,
+						Usage:    "Set true to make a site-admin level token",
+						Required: false,
+					},
+					&cli.StringFlag{
+						Name:     "note",
+						Value:    "",
+						Usage:    "Note attached to the token",
+						Required: false,
+					},
+				},
+				Action: dbAddAccessTokenAction,
+			},
+
+			{
+				Name:   "default-site-admin",
+				Usage:  "Create a predefined site-admin user with a preset access token",
+				Action: dbDefaultSiteAdmin,
+			},
 		},
 	}
 )
 
 func dbAddUserAction(cmd *cli.Context) error {
 	ctx := cmd.Context
-	logger := log.Scoped("dbAddUserAction", "")
+	logger := log.Scoped("dbAddUserAction")
 
 	// Read the configuration.
 	conf, _ := getConfig()
@@ -169,49 +196,161 @@ func dbAddUserAction(cmd *cli.Context) error {
 	if err != nil {
 		return err
 	}
+
+	db := database.NewDB(logger, conn)
+	return db.WithTransact(ctx, func(tx database.DB) error {
+		username := cmd.String("username")
+		password := cmd.String("password")
+
+		// Create the user, generating an email based on the username.
+		email := fmt.Sprintf("%s@sourcegraph.com", username)
+		user, err := tx.Users().Create(ctx, database.NewUser{
+			Username:        username,
+			Email:           email,
+			EmailIsVerified: true,
+			Password:        password,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Make the user site admin.
+		err = tx.Users().SetIsSiteAdmin(ctx, user.ID, true)
+		if err != nil {
+			return err
+		}
+
+		// Report back the new user information.
+		std.Out.WriteSuccessf(
+			fmt.Sprintf("User '%[1]s%[3]s%[2]s' (%[1]s%[4]s%[2]s) has been created and its password is '%[1]s%[5]s%[6]s'.",
+				output.StyleOrange,
+				output.StyleSuccess,
+				username,
+				email,
+				password,
+				output.StyleReset,
+			),
+		)
+
+		return nil
+	})
+}
+
+func dbAddAccessTokenAction(cmd *cli.Context) error {
+	ctx := cmd.Context
+	logger := log.Scoped("dbAddAccessTokenAction")
+
+	// Read the configuration.
+	conf, _ := getConfig()
+	if conf == nil {
+		return errors.New("failed to read sg.config.yaml. This command needs to be run in the `sourcegraph` repository")
+	}
+
+	// Connect to the database.
+	conn, err := connections.EnsureNewFrontendDB(&observation.TestContext, postgresdsn.New("", "", conf.GetEnv), "frontend")
+	if err != nil {
+		return err
+	}
+
+	db := database.NewDB(logger, conn)
+	return db.WithTransact(ctx, func(tx database.DB) error {
+		username := cmd.String("username")
+		sudo := cmd.Bool("sudo")
+		note := cmd.String("note")
+
+		scopes := []string{"user:all"}
+		if sudo {
+			scopes = []string{"site-admin:sudo"}
+		}
+
+		// Fetch user
+		user, err := tx.Users().GetByUsername(ctx, username)
+		if err != nil {
+			return err
+		}
+
+		// Generate the token
+		_, token, err := tx.AccessTokens().Create(ctx, user.ID, scopes, note, user.ID, time.Time{})
+		if err != nil {
+			return err
+		}
+
+		// Print token
+		std.Out.WriteSuccessf("New token created: %q", token)
+		return nil
+	})
+}
+
+// equivalent to "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+var magicTokenSuffix = [20]byte{240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240}
+
+func dbDefaultSiteAdmin(cmd *cli.Context) error {
+	logger := log.Scoped("dbAddDefaultAccessTokenAction")
+	ttyOutput := output.NewOutput(os.Stdout, output.OutputOpts{})
+
+	conf, _ := getConfig()
+	if conf == nil {
+		return errors.New("failed to read sg.config.yaml. This command needs to be run in the `sourcegraph` repository")
+	}
+
+	conn, err := connections.EnsureNewFrontendDB(observation.NewContext(logger), postgresdsn.New("", "", conf.GetEnv), "frontend")
+	if err != nil {
+		return err
+	}
+
 	db := database.NewDB(logger, conn)
 
-	username := cmd.String("username")
-	password := cmd.String("password")
-
-	// Create the user, generating an email based on the username.
-	email := fmt.Sprintf("%s@sourcegraph.com", username)
-	user, err := db.Users().Create(ctx, database.NewUser{
-		Username:        username,
-		Email:           email,
-		EmailIsVerified: true,
-		Password:        password,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Make the user site admin.
-	err = db.Users().SetIsSiteAdmin(ctx, user.ID, true)
-	if err != nil {
-		return err
-	}
-
-	// Report back the new user information.
-	std.Out.WriteSuccessf(
-		// the space after the last %s is so the user can select the password easily in the shell to copy it.
-		"User '%s%s%s' (%s%s%s) has been created and its password is '%s%s%s'.",
-		output.StyleOrange,
-		username,
-		output.StyleReset,
-		output.StyleOrange,
-		email,
-		output.StyleReset,
-		output.StyleOrange,
-		password,
-		output.StyleReset,
+	const (
+		username = "sourcegraph"
+		password = "sourcegraph"
 	)
 
-	return nil
+	return db.WithTransact(cmd.Context, func(tx database.DB) error {
+		user, err := tx.Users().Create(cmd.Context, database.NewUser{
+			Username:        username,
+			Email:           "sourcegraph@sourcegraph.com",
+			EmailIsVerified: true,
+			Password:        password,
+		})
+		if err != nil && !database.IsUsernameExists(err) {
+			return err
+		} else if database.IsUsernameExists(err) {
+			user, err = tx.Users().GetByUsername(cmd.Context, username)
+			if err != nil {
+				return err
+			}
+			ttyOutput.WriteLine(output.Emojif(output.EmojiInfo, "User %q already exists, continuing...", username))
+		}
+
+		// Make the user site admin.
+		err = tx.Users().SetIsSiteAdmin(cmd.Context, user.ID, true)
+		if err != nil {
+			return err
+		}
+
+		token := fmt.Sprintf("%s%s_%s", accesstoken.PersonalAccessTokenPrefix, accesstoken.LocalInstanceIdentifier, hex.EncodeToString(magicTokenSuffix[:]))
+
+		if t, err := tx.AccessTokens().GetByToken(cmd.Context, token); t != nil || err != database.ErrAccessTokenNotFound {
+			if t != nil {
+				ttyOutput.WriteLine(output.Emojif(output.EmojiSuccess, "Default site-admin token already set for %q: %q", username, token))
+			}
+			return err
+		}
+
+		q := sqlf.Sprintf(`INSERT INTO access_tokens(subject_user_id, scopes, value_sha256, note, creator_user_id, expires_at, internal)
+			VALUES (%s, '{"user:all"}', %s, 'Default token for site-admin user created by sg', %s, NULL, false)`, user.ID, hashutil.ToSHA256Bytes(magicTokenSuffix[:]), user.ID)
+		if _, err = tx.ExecContext(cmd.Context, q.Query(sqlf.PostgresBindVar), q.Args()...); err != nil {
+			return err
+		}
+
+		ttyOutput.WriteLine(output.Emojif(output.EmojiSuccess, "Default site-admin successfully created with username %q, password %q and token %q", username, password, token))
+
+		return nil
+	})
 }
 
 func dbUpdateUserExternalAccount(cmd *cli.Context) error {
-	logger := log.Scoped("dbUpdateUserExternalAccount", "")
+	logger := log.Scoped("dbUpdateUserExternalAccount")
 	ctx := cmd.Context
 	username := cmd.String("sg.username")
 	serviceName := cmd.String("extsvc.display-name")
@@ -290,18 +429,20 @@ func dbUpdateUserExternalAccount(cmd *cli.Context) error {
 
 	logger.Info("Writing external account to the DB")
 
-	err = db.UserExternalAccounts().AssociateUserAndSave(
+	_, err = db.UserExternalAccounts().Upsert(
 		ctx,
-		user.ID,
-		extsvc.AccountSpec{
-			ServiceType: strings.ToLower(service.Kind),
-			ServiceID:   serviceID,
-			ClientID:    clientID,
-			AccountID:   fmt.Sprintf("%d", ghUser.GetID()),
-		},
-		extsvc.AccountData{
-			AuthData: authData,
-			Data:     nil,
+		&extsvc.Account{
+			UserID: user.ID,
+			AccountSpec: extsvc.AccountSpec{
+				ServiceType: strings.ToLower(service.Kind),
+				ServiceID:   serviceID,
+				ClientID:    clientID,
+				AccountID:   fmt.Sprintf("%d", ghUser.GetID()),
+			},
+			AccountData: extsvc.AccountData{
+				AuthData: authData,
+				Data:     nil,
+			},
 		},
 	)
 	return err
@@ -337,7 +478,7 @@ func githubClient(ctx context.Context, baseurl string, token string) (*github.Cl
 	}
 	baseURL.Path = "/api/v3"
 
-	gh, err := github.NewEnterpriseClient(baseURL.String(), baseURL.String(), tc)
+	gh, err := github.NewClient(tc).WithEnterpriseURLs(baseURL.String(), baseURL.String())
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +515,7 @@ func deleteTestDBsExec(ctx *cli.Context) error {
 	}
 	dsn := config.String()
 
-	db, err := dbconn.ConnectInternal(log.Scoped("sg", ""), dsn, "", "")
+	db, err := dbconn.ConnectInternal(log.Scoped("sg"), dsn, "", "")
 	if err != nil {
 		return err
 	}
@@ -461,7 +602,7 @@ func dbResetPGExec(ctx *cli.Context) error {
 	storeFactory := func(db *sql.DB, migrationsTable string) connections.Store {
 		return connections.NewStoreShim(store.NewWithDB(&observation.TestContext, db, migrationsTable))
 	}
-	r, err := connections.RunnerFromDSNs(log.Scoped("migrations.runner", ""), dsnMap, "sg", storeFactory)
+	r, err := connections.RunnerFromDSNs(std.Out.Output, log.Scoped("migrations.runner"), dsnMap, "sg", storeFactory)
 	if err != nil {
 		return err
 	}

@@ -1,10 +1,10 @@
 import React, { useCallback } from 'react'
 
-import { Meta } from '@storybook/react'
+import type { Meta } from '@storybook/react'
 
 import { BrandedStory } from '../../../stories/BrandedStory'
 
-import { Input } from './Input'
+import { Input, InputDescription, InputElement, InputErrorMessage, InputStatus, Label } from './Input'
 
 const Story: Meta = {
     title: 'wildcard/Input',
@@ -13,10 +13,7 @@ const Story: Meta = {
 
     parameters: {
         component: Input,
-        chromatic: {
-            enableDarkMode: true,
-            disableSnapshot: false,
-        },
+
         design: {
             type: 'figma',
             name: 'Figma',
@@ -58,7 +55,7 @@ export const Simple = () => {
                 value={selected}
                 label="Input error"
                 onChange={handleChange}
-                error="An error message that can contain `code` or other **Markdown** _formatting_. [Learn more](https://docs.sourcegraph.com)"
+                error="An error message that can contain `code` or other **Markdown** _formatting_. [Learn more](https://sourcegraph.com/docs)"
                 status="error"
                 placeholder="error status input"
             />
@@ -81,6 +78,25 @@ export const Simple = () => {
                 placeholder="testing this one"
                 variant="small"
             />
+
+            <section>
+                <Label htmlFor="customInput">Custom label layout</Label>
+                <InputElement
+                    id="customInput"
+                    placeholder="Field with custom label layout"
+                    status={InputStatus.error}
+                />
+                <InputErrorMessage message="Input custom error message" className="mt-2" />
+                <InputDescription className="mt-2">
+                    <ul>
+                        <li>Hint: you can use regular expressions within each of the available filters</li>
+                        <li>
+                            Datapoints will be automatically backfilled using the list of repositories resulting from
+                            today’s search. Future data points will use the list refreshed for every snapshot.
+                        </li>
+                    </ul>
+                </InputDescription>
+            </section>
         </>
     )
 }

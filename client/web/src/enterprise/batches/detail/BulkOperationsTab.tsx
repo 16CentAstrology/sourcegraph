@@ -9,7 +9,7 @@ import { Container, Icon } from '@sourcegraph/wildcard'
 import { dismissAlert } from '../../../components/DismissibleAlert'
 import {
     useShowMorePagination,
-    UseShowMorePaginationResult,
+    type UseShowMorePaginationResult,
 } from '../../../components/FilteredConnection/hooks/useShowMorePagination'
 import {
     ConnectionContainer,
@@ -20,7 +20,7 @@ import {
     ShowMoreButton,
     SummaryContainer,
 } from '../../../components/FilteredConnection/ui'
-import {
+import type {
     BatchChangeBulkOperationsResult,
     BatchChangeBulkOperationsVariables,
     BulkOperationFields,
@@ -54,7 +54,6 @@ export const BulkOperationsTab: React.FunctionComponent<React.PropsWithChildren<
                         <ConnectionSummary
                             noSummaryIfAllNodesVisible={true}
                             centered={true}
-                            first={BATCH_COUNT}
                             connection={connection}
                             noun="bulk operation"
                             pluralNoun="bulk operations"
@@ -80,7 +79,7 @@ const BATCH_COUNT = 15
 
 const useBulkOperationsListConnection = (
     batchChangeID: Scalars['ID']
-): UseShowMorePaginationResult<BulkOperationFields> => {
+): UseShowMorePaginationResult<BatchChangeBulkOperationsResult, BulkOperationFields> => {
     const { connection, startPolling, stopPolling, ...rest } = useShowMorePagination<
         BatchChangeBulkOperationsResult,
         BatchChangeBulkOperationsVariables,
@@ -89,11 +88,9 @@ const useBulkOperationsListConnection = (
         query: BULK_OPERATIONS,
         variables: {
             batchChange: batchChangeID,
-            after: null,
-            first: BATCH_COUNT,
         },
         options: {
-            useURL: true,
+            pageSize: BATCH_COUNT,
             fetchPolicy: 'cache-and-network',
         },
         getConnection: result => {

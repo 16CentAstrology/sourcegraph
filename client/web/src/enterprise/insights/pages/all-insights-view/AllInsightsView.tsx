@@ -1,14 +1,15 @@
-import { FC } from 'react'
+import { useEffect, type FC } from 'react'
 
 import { mdiPlus } from '@mdi/js'
 
 import { isDefined } from '@sourcegraph/common'
 import { dataOrThrowErrors } from '@sourcegraph/http-client'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { Card, Icon, Link, LoadingSpinner, Button, ErrorAlert } from '@sourcegraph/wildcard'
 
 import { useShowMorePagination } from '../../../../components/FilteredConnection/hooks/useShowMorePagination'
-import {
+import type {
     GetAllInsightConfigurationsResult,
     GetAllInsightConfigurationsVariables,
     InsightViewNode,
@@ -20,7 +21,7 @@ import { GET_ALL_INSIGHT_CONFIGURATIONS } from './query'
 
 import styles from './AllInsightsView.module.scss'
 
-interface AllInsightsViewProps extends TelemetryProps {}
+interface AllInsightsViewProps extends TelemetryProps, TelemetryV2Props {}
 
 export const AllInsightsView: FC<AllInsightsViewProps> = props => {
     const { connection, loading, hasNextPage, error, fetchMore } = useShowMorePagination<
@@ -35,8 +36,10 @@ export const AllInsightsView: FC<AllInsightsViewProps> = props => {
 
             return insightViews
         },
-        options: { fetchPolicy: 'cache-first' },
+        options: { fetchPolicy: 'cache-and-network' },
     })
+
+    useEffect(() => props.telemetryRecorder.recordEvent('insights.allInsights', 'view'), [props.telemetryRecorder])
 
     if (connection === undefined) {
         return <LoadingSpinner aria-hidden={true} inline={false} />
@@ -50,7 +53,13 @@ export const AllInsightsView: FC<AllInsightsViewProps> = props => {
 
     return insights.length > 0 ? (
         <div className={styles.content}>
-            <SmartInsightsViewGrid insights={insights} telemetryService={props.telemetryService} />
+            <SmartInsightsViewGrid
+                id="all-insights-dashboard"
+                insights={insights}
+                persistSizeAndOrder={false}
+                telemetryService={props.telemetryService}
+                telemetryRecorder={props.telemetryRecorder}
+            />
 
             <footer className={styles.footer}>
                 {hasNextPage && (

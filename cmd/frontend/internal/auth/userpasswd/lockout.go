@@ -10,9 +10,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v4"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/globals"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/rcache"
+	"github.com/sourcegraph/sourcegraph/internal/redispool"
 	"github.com/sourcegraph/sourcegraph/internal/txemail"
 	"github.com/sourcegraph/sourcegraph/internal/txemail/txtypes"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -36,7 +36,7 @@ type LockoutStore interface {
 	// SendUnlockAccountEmail sends an email to the locked account email providing a
 	// temporary unlock link.
 	SendUnlockAccountEmail(ctx context.Context, userID int32, userEmail string) error
-	// Returns true if the unlock account email has already been sent
+	// UnlockEmailSent returns true if the unlock account email has already been sent
 	UnlockEmailSent(userID int32) bool
 }
 
@@ -58,10 +58,10 @@ func NewLockoutStore(failedThreshold int, lockoutPeriod, consecutivePeriod time.
 
 	return &lockoutStore{
 		failedThreshold: failedThreshold,
-		lockouts:        rcache.NewWithTTL("account_lockout", int(lockoutPeriod.Seconds())),
-		failedAttempts:  rcache.NewWithTTL("account_failed_attempts", int(consecutivePeriod.Seconds())),
-		unlockToken:     rcache.NewWithTTL("account_unlock_token", int(lockoutPeriod.Seconds())),
-		unlockEmailSent: rcache.NewWithTTL("account_lockout_email_sent", int(lockoutPeriod.Seconds())),
+		lockouts:        rcache.NewWithTTL(redispool.Cache, "account_lockout", int(lockoutPeriod.Seconds())),
+		failedAttempts:  rcache.NewWithTTL(redispool.Cache, "account_failed_attempts", int(consecutivePeriod.Seconds())),
+		unlockToken:     rcache.NewWithTTL(redispool.Cache, "account_unlock_token", int(lockoutPeriod.Seconds())),
+		unlockEmailSent: rcache.NewWithTTL(redispool.Cache, "account_lockout_email_sent", int(lockoutPeriod.Seconds())),
 		sendEmail:       sendEmailF,
 	}
 }
@@ -123,7 +123,7 @@ func (s *lockoutStore) GenerateUnlockAccountURL(userID int32) (string, string, e
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS512, &unlockAccountClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    globals.ExternalURL().String(),
+			Issuer:    conf.ExternalURLParsed().String(),
 			ExpiresAt: jwt.NewNumericDate(expiryTime),
 			Subject:   strconv.FormatInt(int64(userID), 10),
 		},
@@ -144,7 +144,7 @@ func (s *lockoutStore) GenerateUnlockAccountURL(userID int32) (string, string, e
 
 	path := fmt.Sprintf("/unlock-account/%s", tokenString)
 
-	return globals.ExternalURL().ResolveReference(&url.URL{Path: path}).String(), tokenString, nil
+	return conf.ExternalURLParsed().ResolveReference(&url.URL{Path: path}).String(), tokenString, nil
 }
 
 // take site config link expiry into account as well when setting unlock expiry
@@ -249,8 +249,8 @@ Please, visit this link in your browser to unlock the account and try to sign in
 
 This link will expire in {{.ExpiryTime}}.
 
-To see our Terms of Service, please visit this link: https://about.sourcegraph.com/terms
-To see our Privacy Policy, please visit this link: https://about.sourcegraph.com/privacy
+To see our Terms of Service, please visit this link: https://sourcegraph.com/terms
+To see our Privacy Policy, please visit this link: https://sourcegraph.com/privacy
 
 Sourcegraph, 981 Mission St, San Francisco, CA 94103, USA
 `,
@@ -287,8 +287,8 @@ Sourcegraph, 981 Mission St, San Francisco, CA 94103, USA
     This link will expire in {{.ExpiryTime}}.
   </p>
   <p class="mtl">
-    <a href="https://about.sourcegraph.com/terms">Terms</a>&nbsp;&#8226;&nbsp;
-    <a href="https://about.sourcegraph.com/privacy">Privacy</a>
+    <a href="https://sourcegraph.com/terms">Terms</a>&nbsp;&#8226;&nbsp;
+    <a href="https://sourcegraph.com/privacy">Privacy</a>
   </p>
   <p>Sourcegraph, 981 Mission St, San Francisco, CA 94103, USA</p>
   </small>

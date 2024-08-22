@@ -1,19 +1,21 @@
-import React, { useEffect, Dispatch, SetStateAction, useCallback, useRef } from 'react'
+import React, { useEffect, type Dispatch, type SetStateAction, useCallback, useRef } from 'react'
 
-import * as H from 'history'
+import type * as H from 'history'
 
 import { Shortcut } from '@sourcegraph/shared/src/react-shortcuts'
-import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import type { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 
 import { FuzzyModal } from './FuzzyModal'
 import { useFuzzyShortcuts } from './FuzzyShortcuts'
-import { fuzzyIsActive, FuzzyTabsProps, FuzzyState, useFuzzyState, FuzzyTabKey } from './FuzzyTabs'
+import { fuzzyIsActive, type FuzzyTabsProps, type FuzzyState, useFuzzyState, type FuzzyTabKey } from './FuzzyTabs'
 
 const DEFAULT_MAX_RESULTS = 50
 
 export interface FuzzyFinderContainerProps
     extends TelemetryProps,
+        TelemetryV2Props,
         Pick<FuzzyFinderProps, 'location'>,
         SettingsCascadeProps,
         FuzzyTabsProps {
@@ -65,8 +67,9 @@ export const FuzzyFinderContainer: React.FunctionComponent<FuzzyFinderContainerP
                 switch (tab) {
                     case 'files':
                     case 'symbols':
-                    case 'all':
+                    case 'all': {
                         toggleScope()
+                    }
                 }
             } else {
                 const newTab = tabsRef.current.focusNamedTab(tab)
@@ -78,21 +81,26 @@ export const FuzzyFinderContainer: React.FunctionComponent<FuzzyFinderContainerP
         [setActiveTab, setIsVisible, toggleScope, setQuery]
     )
 
-    const shortcuts = useFuzzyShortcuts(props.settingsCascade.final)
+    const shortcuts = useFuzzyShortcuts()
 
     useEffect(() => {
         if (isVisible) {
             props.telemetryService.log('FuzzyFinderViewed', { action: 'shortcut open' })
+            props.telemetryRecorder.recordEvent('fuzzyFinder', 'view')
         }
-    }, [props.telemetryService, isVisible])
+    }, [props.telemetryService, props.telemetryRecorder, isVisible])
 
-    const handleItemClick = useCallback(
-        (eventName: 'FuzzyFinderResultClicked' | 'FuzzyFinderGoToResultsPageClicked') => {
-            props.telemetryService.log(eventName, { activeTab, scope }, { activeTab, scope })
-            setIsVisible(false)
-        },
-        [props.telemetryService, setIsVisible, activeTab, scope]
-    )
+    const handleResultClick = useCallback(() => {
+        props.telemetryService.log('FuzzyFinderResultClicked', { activeTab, scope }, { activeTab, scope })
+        props.telemetryRecorder.recordEvent('fuzzyFinder.result', 'click')
+        setIsVisible(false)
+    }, [props.telemetryService, props.telemetryRecorder, setIsVisible, activeTab, scope])
+
+    const handleGoToResultsPageClick = useCallback(() => {
+        props.telemetryService.log('FuzzyFinderGoToResultsPageClicked', { activeTab, scope }, { activeTab, scope })
+        props.telemetryRecorder.recordEvent('fuzzyFinder.goToResultsPage', 'click')
+        setIsVisible(false)
+    }, [props.telemetryService, props.telemetryRecorder, setIsVisible, activeTab, scope])
 
     if (tabs.isAllDisabled()) {
         return null
@@ -123,7 +131,8 @@ export const FuzzyFinderContainer: React.FunctionComponent<FuzzyFinderContainerP
                     {...state}
                     setIsVisible={setIsVisible}
                     location={props.location}
-                    onClickItem={handleItemClick}
+                    onClickResult={handleResultClick}
+                    onClickGoToResultsPage={handleGoToResultsPageClick}
                 />
             )}
         </>
@@ -136,7 +145,12 @@ interface FuzzyFinderProps extends FuzzyState {
     /**
      * Search result click handler.
      */
-    onClickItem: (eventName: 'FuzzyFinderResultClicked' | 'FuzzyFinderGoToResultsPageClicked') => void
+    onClickResult: () => void
+
+    /**
+     * Search results page click handler.
+     */
+    onClickGoToResultsPage: () => void
 
     location: H.Location
 

@@ -1,6 +1,16 @@
-// Jest Snapshot v1, https://goo.gl/fbAQLP
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`PersonLink no user account 1`] = `
+exports[`PersonLink > no display name, only email 1`] = `
+<DocumentFragment>
+  <span
+    class="a"
+  >
+    alice@example.com
+  </span>
+</DocumentFragment>
+`;
+
+exports[`PersonLink > no user account 1`] = `
 <DocumentFragment>
   <span
     class="a"
@@ -10,13 +20,13 @@ exports[`PersonLink no user account 1`] = `
 </DocumentFragment>
 `;
 
-exports[`PersonLink with user account 1`] = `
+exports[`PersonLink > with user account 1`] = `
 <DocumentFragment>
   <a
     class="a b"
     href="u"
   >
-    alice
+    Alice Smith
   </a>
 </DocumentFragment>
 `;

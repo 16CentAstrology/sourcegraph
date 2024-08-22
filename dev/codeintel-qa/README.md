@@ -7,9 +7,9 @@ This package provides integration and load testing utilities for precise code in
 Ensure that the following tools are available on your path:
 
 - [`src`](https://github.com/sourcegraph/src-cli)
-- [`lsif-go`](https://github.com/sourcegraph/lsif-go)
+- [`scip-go`](https://github.com/sourcegraph/scip-go)
 
-You should have enviornment variables that authenticate you to the `sourcegraph-dev` GCS project if you plan to upload or download index files (as we do in CI).
+You should have environment variables that authenticate you to the `sourcegraph-dev` GCS project if you plan to upload or download index files (as we do in CI).
 
 Set:
 
@@ -24,10 +24,12 @@ SOURCEGRAPH_SUDO_TOKEN=<YOUR SOURCEGRAPH API ACCESS TOKEN>
 
 ```
   "repos": [
-    "sourcegraph-testing/etcd",
-    "sourcegraph-testing/tidb",
-    "sourcegraph-testing/titan",
-    "sourcegraph-testing/zap"
+    "go-nacelle/config",
+    "go-nacelle/log",
+    "go-nacelle/nacelle",
+    "go-nacelle/process",
+    "go-nacelle/service",
+    "sourcegraph-testing/nav-test",
   ],
 ```
 

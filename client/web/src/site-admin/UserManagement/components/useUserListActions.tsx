@@ -1,23 +1,28 @@
 import React, { useState, useCallback } from 'react'
 
+import { lastValueFrom } from 'rxjs'
+
 import { logger } from '@sourcegraph/common'
 import { useMutation } from '@sourcegraph/http-client'
 import { Text } from '@sourcegraph/wildcard'
 
 import { CopyableText } from '../../../components/CopyableText'
 import { randomizeUserPassword, setUserIsSiteAdmin } from '../../backend'
-import { DELETE_USERS, DELETE_USERS_FOREVER, FORCE_SIGN_OUT_USERS } from '../queries'
+import { DELETE_USERS, DELETE_USERS_FOREVER, FORCE_SIGN_OUT_USERS, RECOVER_USERS } from '../queries'
 
-import { UseUserListActionReturnType, SiteUser, getUsernames } from './UsersList'
+import { type UseUserListActionReturnType, type SiteUser, getUsernames } from './UsersList'
 
 export function useUserListActions(onEnd: (error?: any) => void): UseUserListActionReturnType {
     const [forceSignOutUsers] = useMutation(FORCE_SIGN_OUT_USERS)
     const [deleteUsers] = useMutation(DELETE_USERS)
     const [deleteUsersForever] = useMutation(DELETE_USERS_FOREVER)
 
+    const [recoverUsers] = useMutation(RECOVER_USERS)
+
     const [notification, setNotification] = useState<UseUserListActionReturnType['notification']>()
 
     const handleDismissNotification = useCallback(() => setNotification(undefined), [])
+    const handleDisplayNotification = useCallback((text: React.ReactNode) => setNotification({ text }), [])
 
     const onError = useCallback(
         (error: any) => {
@@ -104,11 +109,29 @@ export function useUserListActions(onEnd: (error?: any) => void): UseUserListAct
         [deleteUsersForever, onError, createOnSuccess]
     )
 
+    const handleRecoverUsers = useCallback(
+        (users: SiteUser[]) => {
+            if (confirm('Are you sure you want to recover the selected user(s)?')) {
+                recoverUsers({ variables: { userIDs: users.map(user => user.id) } })
+                    .then(
+                        createOnSuccess(
+                            <Text as="span">
+                                Successfully recovered following {users.length} user(s):{' '}
+                                <strong>{getUsernames(users)}</strong>
+                            </Text>,
+                            true
+                        )
+                    )
+                    .catch(onError)
+            }
+        },
+        [recoverUsers, onError, createOnSuccess]
+    )
+
     const handlePromoteToSiteAdmin = useCallback(
         ([user]: SiteUser[]) => {
             if (confirm('Are you sure you want to promote the selected user to site admin?')) {
                 setUserIsSiteAdmin(user.id, true)
-                    .toPromise()
                     .then(
                         createOnSuccess(
                             <Text as="span">
@@ -162,7 +185,6 @@ export function useUserListActions(onEnd: (error?: any) => void): UseUserListAct
         ([user]: SiteUser[]) => {
             if (confirm('Are you sure you want to revoke the selected user from site admin?')) {
                 setUserIsSiteAdmin(user.id, false)
-                    .toPromise()
                     .then(
                         createOnSuccess(
                             <Text as="span">
@@ -180,25 +202,24 @@ export function useUserListActions(onEnd: (error?: any) => void): UseUserListAct
     const handleResetUserPassword = useCallback(
         ([user]: SiteUser[]) => {
             if (confirm('Are you sure you want to reset the selected user password?')) {
-                randomizeUserPassword(user.id)
-                    .toPromise()
+                lastValueFrom(randomizeUserPassword(user.id))
                     .then(({ resetPasswordURL, emailSent }) => {
                         if (resetPasswordURL === null || emailSent) {
                             createOnSuccess(
-                                <Text as="span">
+                                <Text className="mb-0">
                                     Password was reset. The reset link was sent to the primary email of the user:{' '}
                                     <strong>{user.username}</strong>
                                 </Text>
                             )()
                         } else {
                             createOnSuccess(
-                                <>
-                                    <Text>
+                                <div>
+                                    <Text className="mb-2">
                                         Password was reset. You must manually send <strong>{user.username}</strong> this
                                         reset link:
                                     </Text>
                                     <CopyableText text={resetPasswordURL} size={40} />
-                                </>
+                                </div>
                             )()
                         }
                     })
@@ -215,8 +236,10 @@ export function useUserListActions(onEnd: (error?: any) => void): UseUserListAct
         handleDeleteUsersForever,
         handlePromoteToSiteAdmin,
         handleUnlockUser,
+        handleRecoverUsers,
         handleRevokeSiteAdmin,
         handleResetUserPassword,
         handleDismissNotification,
+        handleDisplayNotification,
     }
 }

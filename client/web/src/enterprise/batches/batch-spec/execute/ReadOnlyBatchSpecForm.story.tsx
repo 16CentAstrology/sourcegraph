@@ -1,4 +1,6 @@
-import { DecoratorFn, Meta, Story } from '@storybook/react'
+import type { Decorator, Meta, StoryFn } from '@storybook/react'
+
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 
 import { WebStory } from '../../../../components/WebStory'
 import { BatchSpecSource, BatchSpecState } from '../../../../graphql-operations'
@@ -7,7 +9,7 @@ import { BatchSpecContextProvider } from '../BatchSpecContext'
 
 import { ReadOnlyBatchSpecForm } from './ReadOnlyBatchSpecForm'
 
-const decorator: DecoratorFn = story => (
+const decorator: Decorator = story => (
     <div className="p-3 d-flex" style={{ height: '95vh', width: '100%' }}>
         {story()}
     </div>
@@ -19,7 +21,7 @@ const config: Meta = {
 
 export default config
 
-export const Executing: Story = args => (
+export const Executing: StoryFn = args => (
     <WebStory>
         {props => (
             <BatchSpecContextProvider
@@ -28,7 +30,7 @@ export const Executing: Story = args => (
                     state: args.state,
                 })}
             >
-                <ReadOnlyBatchSpecForm {...props} />
+                <ReadOnlyBatchSpecForm {...props} telemetryRecorder={noOpTelemetryRecorder} />
             </BatchSpecContextProvider>
         )}
     </WebStory>
@@ -37,13 +39,15 @@ Executing.argTypes = {
     state: {
         name: 'batch spec state',
         control: { type: 'select', options: [BatchSpecState.PROCESSING, BatchSpecState.QUEUED] },
-        defaultValue: BatchSpecState.PROCESSING,
     },
+}
+Executing.args = {
+    state: BatchSpecState.PROCESSING,
 }
 
 Executing.storyName = 'while executing'
 
-export const ExecutionFinished: Story = args => (
+export const ExecutionFinished: StoryFn = args => (
     <WebStory>
         {props => (
             <BatchSpecContextProvider
@@ -52,7 +56,7 @@ export const ExecutionFinished: Story = args => (
                     state: args.state,
                 })}
             >
-                <ReadOnlyBatchSpecForm {...props} />
+                <ReadOnlyBatchSpecForm {...props} telemetryRecorder={noOpTelemetryRecorder} />
             </BatchSpecContextProvider>
         )}
     </WebStory>
@@ -70,20 +74,22 @@ ExecutionFinished.argTypes = {
                 BatchSpecState.PENDING,
             ],
         },
-        defaultValue: BatchSpecState.COMPLETED,
     },
+}
+ExecutionFinished.args = {
+    state: BatchSpecState.COMPLETED,
 }
 
 ExecutionFinished.storyName = 'after execution finishes'
 
-export const LocallyExecutedSpec: Story = () => (
+export const LocallyExecutedSpec: StoryFn = () => (
     <WebStory>
         {props => (
             <BatchSpecContextProvider
                 batchChange={mockBatchChange()}
                 batchSpec={mockFullBatchSpec({ source: BatchSpecSource.LOCAL })}
             >
-                <ReadOnlyBatchSpecForm {...props} />
+                <ReadOnlyBatchSpecForm {...props} telemetryRecorder={noOpTelemetryRecorder} />
             </BatchSpecContextProvider>
         )}
     </WebStory>

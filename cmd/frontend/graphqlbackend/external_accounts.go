@@ -6,19 +6,26 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/auth/sourcegraphoperator"
+	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
+	"github.com/sourcegraph/sourcegraph/internal/authz/permssync"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
+	gext "github.com/sourcegraph/sourcegraph/internal/extsvc/gerrit/externalaccount"
+	"github.com/sourcegraph/sourcegraph/internal/featureflag"
+	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
+	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 func (r *siteResolver) ExternalAccounts(ctx context.Context, args *struct {
-	graphqlutil.ConnectionArgs
+	gqlutil.ConnectionArgs
 	User        *graphql.ID
 	ServiceType *string
 	ServiceID   *string
 	ClientID    *string
-}) (*externalAccountConnectionResolver, error) {
+},
+) (*externalAccountConnectionResolver, error) {
 	// 🚨 SECURITY: Only site admins can list all external accounts.
 	if err := auth.CheckCurrentUserIsSiteAdmin(ctx, r.db); err != nil {
 		return nil, err
@@ -46,8 +53,9 @@ func (r *siteResolver) ExternalAccounts(ctx context.Context, args *struct {
 }
 
 func (r *UserResolver) ExternalAccounts(ctx context.Context, args *struct {
-	graphqlutil.ConnectionArgs
-}) (*externalAccountConnectionResolver, error) {
+	gqlutil.ConnectionArgs
+},
+) (*externalAccountConnectionResolver, error) {
 	// 🚨 SECURITY: Only site admins and the user can list a user's external accounts.
 	if err := auth.CheckSiteAdminOrSameUser(ctx, r.db, r.user.ID); err != nil {
 		return nil, err
@@ -106,17 +114,25 @@ func (r *externalAccountConnectionResolver) TotalCount(ctx context.Context) (int
 	return int32(count), err
 }
 
-func (r *externalAccountConnectionResolver) PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error) {
+func (r *externalAccountConnectionResolver) PageInfo(ctx context.Context) (*gqlutil.PageInfo, error) {
 	externalAccounts, err := r.compute(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return graphqlutil.HasNextPage(r.opt.LimitOffset != nil && len(externalAccounts) > r.opt.Limit), nil
+	return gqlutil.HasNextPage(r.opt.LimitOffset != nil && len(externalAccounts) > r.opt.Limit), nil
 }
 
 func (r *schemaResolver) DeleteExternalAccount(ctx context.Context, args *struct {
 	ExternalAccount graphql.ID
-}) (*EmptyResponse, error) {
+},
+) (*EmptyResponse, error) {
+	disallow := featureflag.FromContext(ctx).GetBoolOr("disallow-user-external-account-deletion", false)
+	if disallow {
+		// NOTE: The error message will be directly shown to the user, so we need to make
+		// it read like a sentence.
+		return nil, errors.New("Self-serve unlinking external account is not allowed, please contact Sourcegraph support.")
+	}
+
 	id, err := unmarshalExternalAccountID(args.ExternalAccount)
 	if err != nil {
 		return nil, err
@@ -135,6 +151,47 @@ func (r *schemaResolver) DeleteExternalAccount(ctx context.Context, args *struct
 	if err := r.db.UserExternalAccounts().Delete(ctx, deleteOpts); err != nil {
 		return nil, err
 	}
+
+	permssync.SchedulePermsSync(ctx, r.logger, r.db, permssync.ScheduleSyncOpts{
+		UserIDs: []int32{account.UserID},
+		Reason:  database.ReasonExternalAccountDeleted,
+	})
+
+	return &EmptyResponse{}, nil
+}
+
+func (r *schemaResolver) AddExternalAccount(ctx context.Context, args *struct {
+	ServiceType    string
+	ServiceID      string
+	AccountDetails string
+},
+) (*EmptyResponse, error) {
+	a := actor.FromContext(ctx)
+	if !a.IsAuthenticated() || a.IsInternal() {
+		return nil, auth.ErrNotAuthenticated
+	}
+
+	switch args.ServiceType {
+	case extsvc.TypeGerrit:
+		err := gext.AddGerritExternalAccount(ctx, r.db, a.UID, args.ServiceID, args.AccountDetails)
+		if err != nil {
+			return nil, err
+		}
+
+	case auth.SourcegraphOperatorProviderType:
+		err := sourcegraphoperator.AddSourcegraphOperatorExternalAccount(ctx, r.db, a.UID, args.ServiceID, args.AccountDetails)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to add Sourcegraph Operator external account")
+		}
+
+	default:
+		return nil, errors.Newf("unsupported service type %q", args.ServiceType)
+	}
+
+	permssync.SchedulePermsSync(ctx, r.logger, r.db, permssync.ScheduleSyncOpts{
+		UserIDs: []int32{a.UID},
+		Reason:  database.ReasonExternalAccountAdded,
+	})
 
 	return &EmptyResponse{}, nil
 }

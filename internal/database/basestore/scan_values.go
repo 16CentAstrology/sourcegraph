@@ -42,13 +42,14 @@ func ScanInt32Array(s dbutil.Scanner) ([]int32, error) {
 		return nil, err
 	}
 
-	return []int32(value), nil
+	return value, nil
 }
 
 var (
 	ScanInt             = ScanAny[int]
 	ScanStrings         = NewSliceScanner(ScanAny[string])
 	ScanFirstString     = NewFirstScanner(ScanAny[string])
+	ScanNullStrings     = NewSliceScanner(ScanNullString)
 	ScanFirstNullString = NewFirstScanner(ScanNullString)
 	ScanInts            = NewSliceScanner(ScanAny[int])
 	ScanInt32s          = NewSliceScanner(ScanAny[int32])

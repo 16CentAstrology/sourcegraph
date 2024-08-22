@@ -1,16 +1,15 @@
-import { Remote } from 'comlink'
-import { concat, from, of, Subscription, Unsubscribable } from 'rxjs'
-import { first } from 'rxjs/operators'
+import type { Remote } from 'comlink'
+import { firstValueFrom, lastValueFrom, Subscription, type Unsubscribable } from 'rxjs'
 
-import { ActionContributionClientCommandUpdateConfiguration, Evaluated, KeyPath } from '@sourcegraph/client-api'
-import { formatSearchParameters } from '@sourcegraph/common'
-import { Position } from '@sourcegraph/extension-api-types'
+import type { ActionContributionClientCommandUpdateConfiguration, Evaluated, KeyPath } from '@sourcegraph/client-api'
+import { SourcegraphURL } from '@sourcegraph/common'
+import type { Position } from '@sourcegraph/extension-api-types'
 
 import { wrapRemoteObservable } from '../api/client/api/common'
-import { CommandEntry } from '../api/client/mainthread-api'
-import { SettingsEdit, updateSettings } from '../api/client/services/settings'
-import { FlatExtensionHostAPI } from '../api/contract'
-import { PlatformContext } from '../platform/context'
+import type { CommandEntry } from '../api/client/mainthread-api'
+import { type SettingsEdit, updateSettings } from '../api/client/services/settings'
+import type { FlatExtensionHostAPI } from '../api/contract'
+import type { PlatformContext } from '../platform/context'
 
 /**
  * Registers the builtin client commands that are required for Sourcegraph extensions. See
@@ -18,7 +17,10 @@ import { PlatformContext } from '../platform/context'
  * documentation.
  */
 export function registerBuiltinClientCommands(
-    context: Pick<PlatformContext, 'requestGraphQL' | 'telemetryService' | 'settings' | 'updateSettings'>,
+    context: Pick<
+        PlatformContext,
+        'requestGraphQL' | 'telemetryService' | 'telemetryRecorder' | 'settings' | 'updateSettings'
+    >,
     extensionHost: Remote<FlatExtensionHostAPI>,
     registerCommand: (entryToRegister: CommandEntry) => Unsubscribable
 ): Unsubscribable {
@@ -66,14 +68,10 @@ export function registerBuiltinClientCommands(
         registerCommand({
             command: 'executeLocationProvider',
             run: (id: string, uri: string, position: Position) =>
-                concat(
+                firstValueFrom(
                     wrapRemoteObservable(extensionHost.getLocations(id, { textDocument: { uri }, position })),
-                    // Concat with [] to avoid undefined promise value when the getLocation observable completes
-                    // without emitting. See https://github.com/ReactiveX/rxjs/issues/1736.
-                    of([])
-                )
-                    .pipe(first())
-                    .toPromise(),
+                    { defaultValue: [] }
+                ),
         })
     )
 
@@ -101,13 +99,13 @@ export function registerBuiltinClientCommands(
                 // is set to `true`. It is up to the client (e.g. browser
                 // extension) to check that parameter and prevent the request
                 // from being sent to Sourcegraph.com.
-                from(
+                lastValueFrom(
                     context.requestGraphQL({
                         request: query,
                         variables,
                         mightContainPrivateInfo: true,
                     })
-                ).toPromise(),
+                ),
         })
     )
 
@@ -121,6 +119,8 @@ export function registerBuiltinClientCommands(
                 if (context.telemetryService) {
                     context.telemetryService.log(eventName, eventProperties)
                 }
+                // TODO (dadlerj): cannot log telemetry v2 events here as the name isn't a known string.
+                // TBD whether this is needed.
                 return Promise.resolve()
             },
         })
@@ -137,13 +137,7 @@ export function registerBuiltinClientCommands(
  * @param urlHash The current URL hash (beginning with '#' if non-empty).
  */
 export function urlForOpenPanel(viewID: string, urlHash: string): string {
-    // Preserve the existing URL fragment, if any.
-    const parameters = new URLSearchParams(urlHash.slice('#'.length))
-    parameters.set('tab', viewID)
-    // In the URL fragment, the 'L1:2-3:4' is treated as a parameter with no value. Undo the escaping of ':'
-    // and the addition of the '=' for the empty value, for aesthetic reasons.
-    const parametersString = formatSearchParameters(parameters)
-    return `#${parametersString}`
+    return SourcegraphURL.from({ hash: urlHash }).setViewState(viewID).toString()
 }
 
 /**

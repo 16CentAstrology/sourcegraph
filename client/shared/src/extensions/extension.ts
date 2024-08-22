@@ -1,14 +1,14 @@
-import { asError, ErrorLike, isErrorLike } from '@sourcegraph/common'
+import { asError, type ErrorLike, isErrorLike } from '@sourcegraph/common'
 
-import { Settings, SettingsCascadeOrError } from '../settings/settings'
+import type { Settings, SettingsCascadeOrError } from '../settings/settings'
 
-import { ExtensionManifest } from './extensionManifest'
+import type { ExtensionManifest } from './extensionManifest'
 
 /**
  * The default fields in the {@link ConfiguredExtension} manifest (i.e., the default value of the
  * `K` type parameter).
  */
-export const CONFIGURED_EXTENSION_DEFAULT_MANIFEST_FIELDS = ['contributes', 'activationEvents', 'url'] as const
+const CONFIGURED_EXTENSION_DEFAULT_MANIFEST_FIELDS = ['contributes', 'activationEvents', 'url'] as const
 export type ConfiguredExtensionManifestDefaultFields = typeof CONFIGURED_EXTENSION_DEFAULT_MANIFEST_FIELDS[number]
 
 /**

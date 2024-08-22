@@ -1,28 +1,28 @@
-import { DecoratorFn, Meta, Story } from '@storybook/react'
-import * as H from 'history'
+import type { Decorator, Meta, StoryFn } from '@storybook/react'
 import { MATCH_ANY_PARAMETERS, WildcardMockLink } from 'wildcard-mock-link'
 
 import { getDocumentNode } from '@sourcegraph/http-client'
 import { ExternalServiceKind } from '@sourcegraph/shared/src/graphql-operations'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 import { NOOP_TELEMETRY_SERVICE } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { MockedTestProvider } from '@sourcegraph/shared/src/testing/apollo'
 
 import { WebStory } from '../components/WebStory'
-import { WebhookFields } from '../graphql-operations'
+import type { WebhookFields } from '../graphql-operations'
 
 import { WEBHOOKS, WEBHOOK_PAGE_HEADER } from './backend'
 import { SiteAdminWebhooksPage } from './SiteAdminWebhooksPage'
 
-const decorator: DecoratorFn = Story => <Story />
+const decorator: Decorator = Story => <Story />
 
 const config: Meta = {
-    title: 'web/src/site-admin/SiteAdminWebhooksPage',
+    title: 'web/site-admin/webhooks/incoming/SiteAdminWebhooksPage',
     decorators: [decorator],
 }
 
 export default config
 
-export const NoWebhooksFound: Story = () => (
+export const NoWebhooksFound: StoryFn = () => (
     <WebStory>
         {() => (
             <MockedTestProvider
@@ -56,8 +56,8 @@ export const NoWebhooksFound: Story = () => (
                                     webhooks: {
                                         nodes: [],
                                     },
-                                    webhookLogs: {
-                                        totalCount: 0,
+                                    errorsOnly: {
+                                        nodes: [],
                                     },
                                 },
                             },
@@ -66,12 +66,12 @@ export const NoWebhooksFound: Story = () => (
                     ])
                 }
             >
-                <SiteAdminWebhooksPage
-                    match={{} as any}
-                    history={H.createMemoryHistory()}
-                    location={{} as any}
-                    telemetryService={NOOP_TELEMETRY_SERVICE}
-                />
+                <div className="container p-4">
+                    <SiteAdminWebhooksPage
+                        telemetryService={NOOP_TELEMETRY_SERVICE}
+                        telemetryRecorder={noOpTelemetryRecorder}
+                    />
+                </div>
             </MockedTestProvider>
         )}
     </WebStory>
@@ -79,7 +79,7 @@ export const NoWebhooksFound: Story = () => (
 
 NoWebhooksFound.storyName = 'No webhooks found'
 
-export const FiveWebhooksFound: Story = () => (
+export const FiveWebhooksFound: StoryFn = () => (
     <WebStory>
         {() => (
             <MockedTestProvider
@@ -165,8 +165,8 @@ export const FiveWebhooksFound: Story = () => (
                                             },
                                         ],
                                     },
-                                    webhookLogs: {
-                                        totalCount: 5,
+                                    errorsOnly: {
+                                        nodes: [],
                                     },
                                 },
                             },
@@ -175,12 +175,12 @@ export const FiveWebhooksFound: Story = () => (
                     ])
                 }
             >
-                <SiteAdminWebhooksPage
-                    match={{} as any}
-                    history={H.createMemoryHistory()}
-                    location={{} as any}
-                    telemetryService={NOOP_TELEMETRY_SERVICE}
-                />
+                <div className="container p-4">
+                    <SiteAdminWebhooksPage
+                        telemetryService={NOOP_TELEMETRY_SERVICE}
+                        telemetryRecorder={noOpTelemetryRecorder}
+                    />
+                </div>
             </MockedTestProvider>
         )}
     </WebStory>

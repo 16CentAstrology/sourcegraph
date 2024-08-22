@@ -1,9 +1,8 @@
 import React from 'react'
 
-import { Args } from '@storybook/addons'
-import { Meta, Story } from '@storybook/react'
+import type { Args, Meta, StoryFn } from '@storybook/react'
 
-import { PopoverTrigger, H1 } from '../..'
+import { H1, PopoverTrigger } from '../..'
 import { BrandedStory } from '../../../stories/BrandedStory'
 import { Button } from '../../Button'
 
@@ -16,13 +15,6 @@ const config: Meta = {
 
     decorators: [story => <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>],
     parameters: {
-        /**
-         * Uncomment this once Storybook is upgraded to v6.4.* and the `play` function
-         * is used to show the feedback prompt component.
-         *
-         * https://www.chromatic.com/docs/hoverfocus#javascript-triggered-hover-states
-         */
-        // chromatic: { disableSnapshot: false },
         component: FeedbackPrompt,
         design: {
             type: 'figma',
@@ -33,12 +25,14 @@ const config: Meta = {
     argTypes: {
         authenticatedUser: {
             control: { type: 'boolean' },
-            defaultValue: true,
         },
         productResearchEnabled: {
             control: { type: 'boolean' },
-            defaultValue: true,
         },
+    },
+    args: {
+        authenticatedUser: true,
+        productResearchEnabled: true,
     },
 }
 
@@ -66,7 +60,7 @@ const commonProps = (
     productResearchEnabled: props.productResearchEnabled,
 })
 
-export const FeedbackPromptWithSuccessResponse: Story = args => (
+export const FeedbackPromptWithSuccessResponse: StoryFn = args => (
     <>
         <H1>This is a feedbackPrompt with success response</H1>
         <FeedbackPrompt onSubmit={handleSuccessSubmit} {...commonProps(args)}>
@@ -84,7 +78,7 @@ export const FeedbackPromptWithSuccessResponse: Story = args => (
     </>
 )
 
-export const FeedbackPromptWithErrorResponse: Story = args => (
+export const FeedbackPromptWithErrorResponse: StoryFn = args => (
     <>
         <H1>This is a feedbackPrompt with error response</H1>
         <FeedbackPrompt onSubmit={handleErrorSubmit} {...commonProps(args)}>
@@ -102,7 +96,7 @@ export const FeedbackPromptWithErrorResponse: Story = args => (
     </>
 )
 
-export const FeedbackPromptWithInModal: Story = args => (
+export const FeedbackPromptWithInModal: StoryFn = args => (
     <>
         <H1>This is a feedbackPrompt in modal</H1>
         <FeedbackPrompt onSubmit={handleSuccessSubmit} modal={true} {...commonProps(args)}>

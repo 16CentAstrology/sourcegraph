@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback } from 'react'
 
 import { compact, head } from 'lodash'
-import { combineLatest, concat, EMPTY, Observable, of, ReplaySubject, zip } from 'rxjs'
+import { combineLatest, concat, EMPTY, type Observable, of, ReplaySubject, zip } from 'rxjs'
 import { catchError, map, switchMap, tap, debounceTime } from 'rxjs/operators'
 
 import { asError } from '@sourcegraph/common'
@@ -180,7 +180,7 @@ export function createValidationPipeline(
         combineLatest([
             // Validate immediately if the user has provided an initial input value
             concat(
-                initialValue !== undefined ? of<InputValidationEvent>({ value: initialValue, validate: true }) : EMPTY,
+                initialValue !== undefined ? of({ value: initialValue, validate: true }) : EMPTY,
                 inputValidationEvents
             ),
             inputReferences,

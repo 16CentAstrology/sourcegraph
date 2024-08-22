@@ -1,15 +1,15 @@
-import { DecoratorFn, Meta, Story } from '@storybook/react'
+import type { Decorator, Meta, StoryFn } from '@storybook/react'
 import { addMinutes, formatRFC3339 } from 'date-fns'
 
 import { WebStory } from '../components/WebStory'
-import { ExternalServiceKind, WebhookFields } from '../graphql-operations'
+import { ExternalServiceKind, type WebhookFields } from '../graphql-operations'
 
 import { WebhookInformation } from './WebhookInformation'
 
-const decorator: DecoratorFn = Story => <Story />
+const decorator: Decorator = Story => <Story />
 
 const config: Meta = {
-    title: 'web/src/site-admin/WebhookInformation',
+    title: 'web/site-admin/webhooks/incoming/WebhookInformation',
     decorators: [decorator],
 }
 
@@ -17,7 +17,7 @@ export default config
 
 const TIMESTAMP_MOCK = new Date(2021, 10, 8, 16, 40, 30)
 
-export const WebhookDescription: Story = () => (
+export const WebhookDescription: StoryFn = () => (
     <WebStory>{() => <WebhookInformation webhook={createWebhook()} />}</WebStory>
 )
 
@@ -29,17 +29,17 @@ function createWebhook(): WebhookFields {
         name: 'webhook with name',
         secret: 'secret-secret',
         updatedAt: formatRFC3339(addMinutes(TIMESTAMP_MOCK, 5)),
-        url: 'sg.com/.api/webhooks/1aa2b42c-a14c-4aaa-b756-70c82e94d3e7',
+        url: 'https://sg.com/.api/webhooks/1aa2b42c-a14c-4aaa-b756-70c82e94d3e7',
         uuid: '1aa2b42c-a14c-4aaa-b756-70c82e94d3e7',
         codeHostKind: ExternalServiceKind.GITHUB,
-        codeHostURN: 'github.com/repo1',
+        codeHostURN: 'https://github.com/',
         createdBy: {
             username: 'alice',
             url: 'users/alice',
         },
         updatedBy: {
-            username: 'alice',
-            url: 'users/alice',
+            username: 'bob',
+            url: 'users/bob',
         },
     }
 }

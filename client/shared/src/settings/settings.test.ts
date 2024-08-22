@@ -1,13 +1,15 @@
+import { describe, expect, test } from 'vitest'
+
 import { createAggregateError, isErrorLike } from '@sourcegraph/common'
 
 import {
-    CustomMergeFunctions,
     gqlToCascade,
     merge,
     mergeSettings,
-    Settings,
-    SettingsCascade,
-    SettingsSubject,
+    type CustomMergeFunctions,
+    type Settings,
+    type SettingsCascade,
+    type SettingsSubject,
 } from './settings'
 
 const FIXTURE_ORG: SettingsSubject = {
@@ -136,41 +138,6 @@ describe('mergeSettings', () => {
                 { name: 'mycorp extensions', url: 'https://sourcegraph.com/extensions?query=mycorp%2F' },
             ],
         }))
-    test('merges search.repositoryGroups property', () =>
-        expect(
-            mergeSettings<{ a?: { [key: string]: string }; b?: { [key: string]: string } } & Settings>([
-                {
-                    'search.repositoryGroups': {
-                        sourcegraph: ['github.com/sourcegraph/sourcegraph', 'github.com/sourcegraph/codeintellify'],
-                    },
-                },
-                {
-                    'search.repositoryGroups': {
-                        k8s: ['github.com/kubernetes/kubernetes'],
-                    },
-                },
-                {
-                    'search.repositoryGroups': {
-                        docker: ['github.com/docker/docker'],
-                        sourcegraph: [
-                            'github.com/sourcegraph/sourcegraph',
-                            'github.com/sourcegraph/codeintellify',
-                            'github.com/sourcegraph/sourcegraph-typescript',
-                        ],
-                    },
-                },
-            ])
-        ).toEqual({
-            'search.repositoryGroups': {
-                k8s: ['github.com/kubernetes/kubernetes'],
-                docker: ['github.com/docker/docker'],
-                sourcegraph: [
-                    'github.com/sourcegraph/sourcegraph',
-                    'github.com/sourcegraph/codeintellify',
-                    'github.com/sourcegraph/sourcegraph-typescript',
-                ],
-            },
-        }))
     test('merges notices property', () =>
         expect(
             mergeSettings<{ a?: { [key: string]: string }; b?: { [key: string]: string } } & Settings>([
@@ -231,7 +198,6 @@ describe('mergeSettings', () => {
                             key: '1',
                             description: 'global saved query',
                             query: 'type:diff global',
-                            notify: true,
                         },
                     ],
                 },
@@ -241,7 +207,6 @@ describe('mergeSettings', () => {
                             key: '2',
                             description: 'org saved query',
                             query: 'type:diff org',
-                            notify: true,
                         },
                     ],
                 },
@@ -251,7 +216,6 @@ describe('mergeSettings', () => {
                             key: '3',
                             description: 'user saved query',
                             query: 'type:diff user',
-                            notify: true,
                         },
                     ],
                 },
@@ -262,19 +226,16 @@ describe('mergeSettings', () => {
                     key: '1',
                     description: 'global saved query',
                     query: 'type:diff global',
-                    notify: true,
                 },
                 {
                     key: '2',
                     description: 'org saved query',
                     query: 'type:diff org',
-                    notify: true,
                 },
                 {
                     key: '3',
                     description: 'user saved query',
                     query: 'type:diff user',
-                    notify: true,
                 },
             ],
         }))

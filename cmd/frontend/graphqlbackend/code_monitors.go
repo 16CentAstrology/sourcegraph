@@ -5,13 +5,21 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
+	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 )
 
+func (s *schemaResolver) Monitors(ctx context.Context, args *ListMonitorsArgs) (MonitorConnectionResolver, error) {
+	if err := auth.CheckCurrentUserIsSiteAdmin(ctx, s.db); err != nil {
+		return nil, err
+	}
+
+	return s.CodeMonitorsResolver.Monitors(ctx, nil, args)
+}
+
 type CodeMonitorsResolver interface {
 	// Query
-	Monitors(ctx context.Context, userID int32, args *ListMonitorsArgs) (MonitorConnectionResolver, error)
+	Monitors(ctx context.Context, userID *int32, args *ListMonitorsArgs) (MonitorConnectionResolver, error)
 	MonitorByID(ctx context.Context, id graphql.ID) (MonitorResolver, error)
 
 	// Mutations
@@ -30,7 +38,7 @@ type CodeMonitorsResolver interface {
 type MonitorConnectionResolver interface {
 	Nodes() []MonitorResolver
 	TotalCount() int32
-	PageInfo() *graphqlutil.PageInfo
+	PageInfo() *gqlutil.PageInfo
 }
 
 type MonitorResolver interface {
@@ -57,7 +65,7 @@ type MonitorQueryResolver interface {
 type MonitorTriggerEventConnectionResolver interface {
 	Nodes() []MonitorTriggerEventResolver
 	TotalCount() int32
-	PageInfo() *graphqlutil.PageInfo
+	PageInfo() *gqlutil.PageInfo
 }
 
 type MonitorTriggerEventResolver interface {
@@ -73,7 +81,7 @@ type MonitorTriggerEventResolver interface {
 type MonitorActionConnectionResolver interface {
 	Nodes() []MonitorAction
 	TotalCount() int32
-	PageInfo() *graphqlutil.PageInfo
+	PageInfo() *gqlutil.PageInfo
 }
 
 type MonitorAction interface {
@@ -116,13 +124,13 @@ type MonitorEmailRecipient interface {
 type MonitorActionEmailRecipientsConnectionResolver interface {
 	Nodes() []NamespaceResolver
 	TotalCount() int32
-	PageInfo() *graphqlutil.PageInfo
+	PageInfo() *gqlutil.PageInfo
 }
 
 type MonitorActionEventConnectionResolver interface {
 	Nodes() []MonitorActionEventResolver
 	TotalCount() int32
-	PageInfo() *graphqlutil.PageInfo
+	PageInfo() *gqlutil.PageInfo
 }
 
 type MonitorActionEventResolver interface {

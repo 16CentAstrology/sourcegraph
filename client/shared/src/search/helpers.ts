@@ -1,10 +1,12 @@
-import * as H from 'history'
+import type * as H from 'history'
 
-import { SearchPatternType } from '../graphql-operations'
+import type { HistoryOrNavigate } from '@sourcegraph/common'
 
-import { SearchContextProps } from './helpers/searchContext'
-import { CharacterRange } from './query/token'
-import { SearchMode } from './searchQueryState'
+import type { SearchPatternType } from '../graphql-operations'
+
+import type { SearchContextProps } from './helpers/searchContext'
+import type { CharacterRange } from './query/token'
+import type { SearchMode } from './types'
 
 export interface SearchPatternTypeProps {
     patternType: SearchPatternType
@@ -42,11 +44,12 @@ export enum EditorHint {
      * Showing suggestions also implies focusing the input.
      */
     ShowSuggestions = 2 | Focus,
+    Blur = 4,
 }
 
 /**
  * The search query and additional information depending on how the query was
- * changed. See MonacoQueryInput for how this data is applied to the editor.
+ * changed.
  */
 export type QueryState =
     | {
@@ -71,7 +74,8 @@ export interface SubmitSearchParameters
     extends SearchPatternTypeProps,
         Pick<CaseSensitivityProps, 'caseSensitive'>,
         Pick<SearchContextProps, 'selectedSearchContextSpec'> {
-    history: H.History
+    historyOrNavigate: HistoryOrNavigate
+    location: H.Location
     query: string
     source:
         | 'home'
@@ -85,6 +89,19 @@ export interface SubmitSearchParameters
         | 'excludedResults'
         | 'smartSearchDisabled'
     searchMode?: SearchMode
+}
+
+export const TELEMETRY_SEARCH_SOURCE_TYPE: { [key in SubmitSearchParameters['source']]: number } = {
+    home: 1,
+    nav: 2,
+    repo: 3,
+    tree: 4,
+    filter: 5,
+    type: 6,
+    scopePage: 7,
+    communitySearchContextPage: 8,
+    excludedResults: 9,
+    smartSearchDisabled: 10,
 }
 
 export interface SubmitSearchProps {

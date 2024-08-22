@@ -1,25 +1,24 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 import { NEVER, of } from 'rxjs'
 import sinon from 'sinon'
 
 import { EMPTY_SETTINGS_CASCADE } from '@sourcegraph/shared/src/settings/settings'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 
-import { AuthenticatedUser } from '../../auth'
+import type { AuthenticatedUser } from '../../auth'
 import { WebStory } from '../../components/WebStory'
-import { ListCodeMonitors, ListUserCodeMonitorsVariables } from '../../graphql-operations'
+import type {
+    ListAllCodeMonitorsVariables,
+    ListCodeMonitors,
+    ListUserCodeMonitorsVariables,
+} from '../../graphql-operations'
 
 import { CodeMonitoringPage } from './CodeMonitoringPage'
 import { mockCodeMonitorNodes } from './testing/util'
 
 const config: Meta = {
     title: 'web/enterprise/code-monitoring/CodeMonitoringPage',
-    parameters: {
-        chromatic: {
-            // Delay screenshot taking, so <CodeMonitoringPage /> is ready to show content.
-            delay: 600,
-            disableSnapshot: false,
-        },
-    },
+    parameters: {},
 }
 
 export default config
@@ -27,6 +26,20 @@ export default config
 const generateMockFetchMonitors =
     (count: number) =>
     ({ id, first, after }: ListUserCodeMonitorsVariables) => {
+        const result: ListCodeMonitors = {
+            nodes: mockCodeMonitorNodes.slice(0, count),
+            pageInfo: {
+                endCursor: `foo${count}`,
+                hasNextPage: count > 10,
+            },
+            totalCount: count,
+        }
+        return of(result)
+    }
+
+const generateMockFetchAllMonitors =
+    (count: number) =>
+    ({ first, after }: ListAllCodeMonitorsVariables) => {
         const result: ListCodeMonitors = {
             nodes: mockCodeMonitorNodes.slice(0, count),
             pageInfo: {
@@ -48,13 +61,31 @@ const additionalProps = {
     settingsCascade: EMPTY_SETTINGS_CASCADE,
 }
 
-const additionalPropsShortList = { ...additionalProps, fetchUserCodeMonitors: generateMockFetchMonitors(3) }
-const additionalPropsLongList = { ...additionalProps, fetchUserCodeMonitors: generateMockFetchMonitors(12) }
-const additionalPropsEmptyList = { ...additionalProps, fetchUserCodeMonitors: generateMockFetchMonitors(0) }
+const additionalPropsShortList = {
+    ...additionalProps,
+    fetchUserCodeMonitors: generateMockFetchMonitors(3),
+}
+const additionalPropsLongList = {
+    ...additionalProps,
+    fetchUserCodeMonitors: generateMockFetchMonitors(12),
+}
+const additionalPropsEmptyList = {
+    ...additionalProps,
+    fetchUserCodeMonitors: generateMockFetchMonitors(0),
+}
 const additionalPropsAlwaysLoading = { ...additionalProps, fetchUserCodeMonitors: () => NEVER }
+const siteAdminProps = {
+    ...additionalProps,
+    fetchCodeMonitors: generateMockFetchAllMonitors(3),
+    authenticatedUser: { ...additionalProps.authenticatedUser, siteAdmin: true },
+}
 
-export const LessThan10Results: Story = () => (
-    <WebStory>{props => <CodeMonitoringPage {...props} {...additionalPropsShortList} />}</WebStory>
+export const LessThan10Results: StoryFn = () => (
+    <WebStory>
+        {props => (
+            <CodeMonitoringPage {...props} {...additionalPropsShortList} telemetryRecorder={noOpTelemetryRecorder} />
+        )}
+    </WebStory>
 )
 
 LessThan10Results.storyName = 'Code monitoring list page - less than 10 results'
@@ -65,8 +96,12 @@ LessThan10Results.parameters = {
     },
 }
 
-export const MoreThan10Results: Story = () => (
-    <WebStory>{props => <CodeMonitoringPage {...props} {...additionalPropsLongList} />}</WebStory>
+export const MoreThan10Results: StoryFn = () => (
+    <WebStory>
+        {props => (
+            <CodeMonitoringPage {...props} {...additionalPropsLongList} telemetryRecorder={noOpTelemetryRecorder} />
+        )}
+    </WebStory>
 )
 
 MoreThan10Results.storyName = 'Code monitoring list page - more than 10 results'
@@ -77,8 +112,16 @@ MoreThan10Results.parameters = {
     },
 }
 
-export const PageLoading: Story = () => (
-    <WebStory>{props => <CodeMonitoringPage {...props} {...additionalPropsAlwaysLoading} />}</WebStory>
+export const PageLoading: StoryFn = () => (
+    <WebStory>
+        {props => (
+            <CodeMonitoringPage
+                {...props}
+                {...additionalPropsAlwaysLoading}
+                telemetryRecorder={noOpTelemetryRecorder}
+            />
+        )}
+    </WebStory>
 )
 
 PageLoading.storyName = 'Code monitoring list page - loading'
@@ -89,8 +132,12 @@ PageLoading.parameters = {
     },
 }
 
-export const ListPageEmptyShowGettingStarted: Story = () => (
-    <WebStory>{props => <CodeMonitoringPage {...props} {...additionalPropsEmptyList} />}</WebStory>
+export const ListPageEmptyShowGettingStarted: StoryFn = () => (
+    <WebStory>
+        {props => (
+            <CodeMonitoringPage {...props} {...additionalPropsEmptyList} telemetryRecorder={noOpTelemetryRecorder} />
+        )}
+    </WebStory>
 )
 
 ListPageEmptyShowGettingStarted.storyName = 'Code monitoring list page - empty, show getting started'
@@ -101,18 +148,32 @@ ListPageEmptyShowGettingStarted.parameters = {
     },
 }
 
-export const ListPageUnauthenticatedShowGettingStarted: Story = () => (
+export const ListPageUnauthenticatedShowGettingStarted: StoryFn = () => (
     <WebStory initialEntries={['/code-monitoring']}>
-        {props => <CodeMonitoringPage {...props} {...additionalProps} authenticatedUser={null} />}
+        {props => (
+            <CodeMonitoringPage
+                {...props}
+                {...additionalProps}
+                authenticatedUser={null}
+                telemetryRecorder={noOpTelemetryRecorder}
+            />
+        )}
     </WebStory>
 )
 
 ListPageUnauthenticatedShowGettingStarted.storyName =
     'Code monitoring list page - unauthenticated, show getting started'
 
-export const EmptyListPage: Story = () => (
+export const EmptyListPage: StoryFn = () => (
     <WebStory initialEntries={['/code-monitoring/getting-started']}>
-        {props => <CodeMonitoringPage {...props} {...additionalPropsEmptyList} testForceTab="list" />}
+        {props => (
+            <CodeMonitoringPage
+                {...props}
+                {...additionalPropsEmptyList}
+                telemetryRecorder={noOpTelemetryRecorder}
+                testForceTab="list"
+            />
+        )}
     </WebStory>
 )
 
@@ -124,10 +185,16 @@ EmptyListPage.parameters = {
     },
 }
 
-export const EmptyListPageUnauthenticated: Story = () => (
+export const EmptyListPageUnauthenticated: StoryFn = () => (
     <WebStory initialEntries={['/code-monitoring/getting-started']}>
         {props => (
-            <CodeMonitoringPage {...props} {...additionalPropsEmptyList} authenticatedUser={null} testForceTab="list" />
+            <CodeMonitoringPage
+                {...props}
+                {...additionalPropsEmptyList}
+                authenticatedUser={null}
+                telemetryRecorder={noOpTelemetryRecorder}
+                testForceTab="list"
+            />
         )}
     </WebStory>
 )
@@ -139,3 +206,18 @@ EmptyListPageUnauthenticated.parameters = {
         url: 'https://www.figma.com/file/6WMfHdPt2ovTE1P527brwc/Code-monitor-getting-started-21161?node-id=1%3A1650',
     },
 }
+
+export const SiteAdminUser: StoryFn = () => (
+    <WebStory initialEntries={['/code-monitoring']}>
+        {props => (
+            <CodeMonitoringPage
+                {...props}
+                {...siteAdminProps}
+                telemetryRecorder={noOpTelemetryRecorder}
+                testForceTab="list"
+            />
+        )}
+    </WebStory>
+)
+
+SiteAdminUser.storyName = 'Code monitoring list page - site admin user'

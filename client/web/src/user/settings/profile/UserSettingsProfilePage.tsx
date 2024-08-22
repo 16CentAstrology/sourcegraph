@@ -2,11 +2,13 @@ import React, { useEffect } from 'react'
 
 import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
 import { gql } from '@sourcegraph/http-client'
-import { PageHeader, Link, Text } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { Link, PageHeader, Text } from '@sourcegraph/wildcard'
 
 import { PageTitle } from '../../../components/PageTitle'
-import { EditUserProfilePage as EditUserProfilePageFragment } from '../../../graphql-operations'
-import { eventLogger } from '../../../tracking/eventLogger'
+import type { EditUserProfilePage as EditUserProfilePageFragment } from '../../../graphql-operations'
+import { ScimAlert } from '../ScimAlert'
 
 import { EditUserProfileForm } from './EditUserProfileForm'
 
@@ -20,18 +22,22 @@ export const EditUserProfilePageGQLFragment = gql`
         avatarURL
         viewerCanChangeUsername
         createdAt
+        scimControlled
     }
 `
 
-interface Props {
+interface Props extends TelemetryV2Props {
     user: EditUserProfilePageFragment
 }
 
 export const UserSettingsProfilePage: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
     user,
-    ...props
+    telemetryRecorder,
 }) => {
-    useEffect(() => eventLogger.logViewEvent('UserProfile'), [])
+    useEffect(() => {
+        telemetryRecorder.recordEvent('settings.profile', 'view')
+        EVENT_LOGGER.logViewEvent('UserProfile')
+    }, [telemetryRecorder])
 
     return (
         <div>
@@ -53,15 +59,19 @@ export const UserSettingsProfilePage: React.FunctionComponent<React.PropsWithChi
                 }
                 className={styles.heading}
             />
+            {user.scimControlled && <ScimAlert />}
             {user && (
                 <EditUserProfileForm
                     user={user}
                     initialValue={user}
+                    telemetryRecorder={telemetryRecorder}
                     after={
                         window.context.sourcegraphDotComMode && (
                             <Text className="mt-4">
-                                <Link to="https://about.sourcegraph.com/contact">Contact support</Link> to delete your
-                                account.
+                                <Link to="mailto:support@sourcegraph.com" target="_blank" rel="noopener noreferrer">
+                                    Contact support
+                                </Link>{' '}
+                                to delete your account.
                             </Text>
                         )
                     }

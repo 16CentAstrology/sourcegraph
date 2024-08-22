@@ -8,7 +8,6 @@ import (
 
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
@@ -16,33 +15,21 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/rcache"
+	"github.com/sourcegraph/sourcegraph/internal/redispool"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
-
-// slowRequestRedisFIFOListDefaultSize sets a default value for the FIFO list.
-const slowRequestRedisFIFOListDefaultSize = 5000
 
 // slowRequestRedisFIFOListPerPage sets the default count of returned request.
 const slowRequestRedisFIFOListPerPage = 50
 
 // slowRequestRedisFIFOList is a FIFO redis cache to store the slow requests.
-var slowRequestRedisFIFOList = rcache.NewFIFOList("slow-graphql-requests-list", slowRequestRedisFIFOListDefaultSize)
-
-// slowRequestConfWatchOnce enables to ensure we're not watching for conf updates more than once.
-var slowRequestConfWatchOnce sync.Once
+var slowRequestRedisFIFOList = rcache.NewFIFOListDynamic(redispool.Cache, "slow-graphql-requests-list", func() int {
+	return conf.Get().ObservabilityCaptureSlowGraphQLRequestsLimit
+})
 
 // captureSlowRequest stores in a redis cache slow GraphQL requests.
 func captureSlowRequest(logger log.Logger, req *types.SlowRequest) {
-	slowRequestConfWatchOnce.Do(func() {
-		conf.Watch(func() {
-			limit := conf.Get().ObservabilityCaptureSlowGraphQLRequestsLimit
-			if limit != slowRequestRedisFIFOList.MaxSize() {
-				slowRequestRedisFIFOList = rcache.NewFIFOList("slow-graphql-requests-list", limit)
-			}
-		})
-	})
-
 	b, err := json.Marshal(req)
 	if err != nil {
 		logger.Warn("failed to marshal slowRequest", log.Error(err))
@@ -126,7 +113,7 @@ func (r *slowRequestConnectionResolver) fetch(ctx context.Context) ([]*types.Slo
 		r.reqs, r.err = getSlowRequestsAfter(ctx, slowRequestRedisFIFOList, n, r.perPage)
 		size, err := slowRequestRedisFIFOList.Size()
 		if err != nil {
-			errors.Append(r.err, err)
+			r.err = errors.Append(r.err, err)
 		} else {
 			r.totalCount = int32(size)
 		}
@@ -156,7 +143,7 @@ func (r *slowRequestConnectionResolver) TotalCount(ctx context.Context) (int32, 
 	return r.totalCount, err
 }
 
-func (r *slowRequestConnectionResolver) PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error) {
+func (r *slowRequestConnectionResolver) PageInfo(ctx context.Context) (*gqlutil.PageInfo, error) {
 	reqs, err := r.fetch(ctx)
 	if err != nil {
 		return nil, err
@@ -171,13 +158,13 @@ func (r *slowRequestConnectionResolver) PageInfo(ctx context.Context) (*graphqlu
 		return nil, err
 	}
 	if int32(n+r.perPage) >= total {
-		return graphqlutil.HasNextPage(false), nil
+		return gqlutil.HasNextPage(false), nil
 	} else {
-		return graphqlutil.NextPageCursor(reqs[len(reqs)-1].Index), nil
+		return gqlutil.NextPageCursor(reqs[len(reqs)-1].Index), nil
 	}
 }
 
-// ID returns an opaque ID for that node.
+// Index returns an opaque ID for that node.
 func (r *slowRequestResolver) Index() string {
 	return r.req.Index
 }
@@ -190,16 +177,6 @@ func (r *slowRequestResolver) Start() gqlutil.DateTime {
 // Duration returns the recorded duration of the slow request.
 func (r *slowRequestResolver) Duration() float64 {
 	return r.req.Duration.Seconds()
-}
-
-// UserId returns the user identifier if there is one associated with the
-// slow request. Blank if none.
-func (r *slowRequestResolver) userId() *string {
-	if r.req.UserID != 0 {
-		n := strconv.Itoa(int(r.req.UserID))
-		return &n
-	}
-	return nil
 }
 
 func (r *slowRequestResolver) User(ctx context.Context) (*UserResolver, error) {

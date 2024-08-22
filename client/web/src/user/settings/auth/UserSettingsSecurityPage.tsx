@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react'
 
-import { ErrorLike } from '@sourcegraph/common'
+import type { ErrorLike } from '@sourcegraph/common'
 import { useMutation, useQuery } from '@sourcegraph/http-client'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
 import {
     Container,
     PageHeader,
@@ -17,43 +19,43 @@ import {
     Form,
 } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../../auth'
+import type { AuthenticatedUser } from '../../../auth'
 import { PasswordInput } from '../../../auth/SignInSignUpCommon'
 import { PageTitle } from '../../../components/PageTitle'
-import {
-    UserAreaUserFields,
-    ExternalAccountFields,
-    MinExternalAccountsVariables,
-    UpdatePasswordVariables,
-    UpdatePasswordResult,
-    CreatePasswordVariables,
+import type {
     CreatePasswordResult,
+    CreatePasswordVariables,
+    UpdatePasswordResult,
+    UpdatePasswordVariables,
+    UserAreaUserFields,
+    UserExternalAccountFields,
+    UserExternalAccountsWithAccountDataVariables,
 } from '../../../graphql-operations'
-import { AuthProvider, SourcegraphContext } from '../../../jscontext'
-import { eventLogger } from '../../../tracking/eventLogger'
+import type { AuthProvider, SourcegraphContext } from '../../../jscontext'
 import { getPasswordRequirements } from '../../../util/security'
 import { CREATE_PASSWORD, USER_EXTERNAL_ACCOUNTS, UPDATE_PASSWORD } from '../backend'
 
 import { ExternalAccountsSignIn } from './ExternalAccountsSignIn'
 
 // pick only the fields we need
-type MinExternalAccount = Pick<ExternalAccountFields, 'id' | 'serviceID' | 'serviceType' | 'accountData'>
-export type UserExternalAccount = UserExternalAccountsResult['user']['externalAccounts']['nodes'][0]
+export type UserExternalAccount = Pick<
+    UserExternalAccountFields,
+    'id' | 'serviceID' | 'serviceType' | 'publicAccountData' | 'clientID'
+>
 type ServiceType = AuthProvider['serviceType']
 
 export type ExternalAccountsByType = Partial<Record<ServiceType, UserExternalAccount>>
 export type AuthProvidersByBaseURL = Partial<Record<string, AuthProvider>>
-export type AccountByServiceID = Partial<Record<string, UserExternalAccount>>
 
-interface UserExternalAccountsResult {
+export interface UserExternalAccountsResult {
     user: {
         externalAccounts: {
-            nodes: MinExternalAccount[]
+            nodes: UserExternalAccount[]
         }
     }
 }
 
-interface Props {
+interface Props extends TelemetryV2Props {
     user: UserAreaUserFields
     authenticatedUser: AuthenticatedUser
     context: Pick<SourcegraphContext, 'authProviders'>
@@ -63,7 +65,7 @@ export const UserSettingsSecurityPage: React.FunctionComponent<React.PropsWithCh
     const [oldPassword, setOldPassword] = useState<string>('')
     const [newPassword, setNewPassword] = useState<string>('')
     const [newPasswordConfirmation, setNewPasswordConfirmation] = useState<string>('')
-    const [accounts, setAccounts] = useState<{ fetched?: MinExternalAccount[]; lastRemoved?: string }>({
+    const [accounts, setAccounts] = useState<{ fetched?: UserExternalAccount[]; lastRemoved?: string }>({
         fetched: [],
         lastRemoved: '',
     })
@@ -76,34 +78,35 @@ export const UserSettingsSecurityPage: React.FunctionComponent<React.PropsWithCh
         return []
     }
 
-    const { data, loading } = useQuery<UserExternalAccountsResult, MinExternalAccountsVariables>(
-        USER_EXTERNAL_ACCOUNTS,
-        {
-            variables: { username: props.user.username },
-            onError: handleError,
-        }
-    )
+    const { data, loading, refetch } = useQuery<
+        UserExternalAccountsResult,
+        UserExternalAccountsWithAccountDataVariables
+    >(USER_EXTERNAL_ACCOUNTS, {
+        variables: { username: props.user.username },
+        onError: handleError,
+    })
 
     let newPasswordConfirmationField: HTMLInputElement | null = null
     const setNewPasswordConfirmationField = (element: HTMLInputElement | null): void => {
         newPasswordConfirmationField = element
     }
 
-    // auth providers by service ID
-    const accountByServiceID = accounts.fetched?.reduce((accumulator: AccountByServiceID, account) => {
-        accumulator[account.serviceID] = account
-        return accumulator
-    }, {})
-
     useEffect(() => {
-        eventLogger.logPageView('UserSettingsPassword')
+        EVENT_LOGGER.logPageView('UserSettingsPassword')
+        props.telemetryRecorder.recordEvent('settings.security', 'view')
 
         setAccounts({ fetched: data?.user?.externalAccounts.nodes, lastRemoved: '' })
-    }, [data])
+    }, [data, props.telemetryRecorder])
 
     const onAccountRemoval = (removeId: string, name: string): void => {
         // keep every account that doesn't match removeId
         setAccounts({ fetched: accounts.fetched?.filter(({ id }) => id !== removeId), lastRemoved: name })
+    }
+
+    const onAccountAdd = (): void => {
+        refetch({ username: props.user.username })
+            .then(() => {})
+            .catch(handleError)
     }
 
     const onOldPasswordFieldChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
@@ -187,7 +190,7 @@ export const UserSettingsSecurityPage: React.FunctionComponent<React.PropsWithCh
                 headingElement="h2"
                 path={[{ text: 'Account security' }]}
                 description="Connect your account with a third-party login service to make signing in easier."
-                className="mb-3"
+                className="mb-3 user-settings-account-security-page"
             />
 
             {/* external accounts not fetched yet */}
@@ -198,13 +201,15 @@ export const UserSettingsSecurityPage: React.FunctionComponent<React.PropsWithCh
             )}
 
             {/* fetched external accounts */}
-            {accountByServiceID && (
+            {accounts.fetched && (
                 <Container>
                     <ExternalAccountsSignIn
-                        accounts={accountByServiceID}
+                        accounts={accounts.fetched}
                         authProviders={props.context.authProviders}
                         onDidError={handleError}
                         onDidRemove={onAccountRemoval}
+                        onDidAdd={onAccountAdd}
+                        telemetryRecorder={props.telemetryRecorder}
                     />
                 </Container>
             )}

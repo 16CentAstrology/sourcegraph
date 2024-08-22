@@ -1,14 +1,14 @@
 import { useContext, useMemo } from 'react'
 
-import { Observable, of } from 'rxjs'
+import { type Observable, of } from 'rxjs'
 import { map } from 'rxjs/operators'
 
-import { useCodeInsightsState } from '../../../stores'
-import { CodeInsightsBackendContext, CustomInsightDashboard, Insight, isSearchBasedInsight } from '../core'
+import { CodeInsightsBackendContext, type CustomInsightDashboard, type Insight, isSearchBasedInsight } from '../core'
 import {
     getDashboardPermissions,
     getTooltipMessage,
 } from '../pages/dashboards/dashboard-view/utils/get-dashboard-permissions'
+import { useCodeInsightsLicenseState } from '../stores'
 
 interface DashboardMenuItem {
     disabled?: boolean
@@ -44,7 +44,7 @@ export interface UseUiFeatures {
 
 export function useUiFeatures(): UseUiFeatures {
     const { getActiveInsightsCount } = useContext(CodeInsightsBackendContext)
-    const { licensed, insightsLimit } = useCodeInsightsState()
+    const { licensed, insightsLimit } = useCodeInsightsLicenseState()
 
     return useMemo(
         () => ({

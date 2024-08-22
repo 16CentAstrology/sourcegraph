@@ -2,326 +2,315 @@
 package shared
 
 import (
-	"container/list"
 	"context"
 	"database/sql"
-	"net"
+	"encoding/json"
+	"fmt"
 	"net/http"
-	"net/url"
-	"os"
-	"os/signal"
+	"os/exec"
 	"path/filepath"
-	"syscall"
-	"time"
+	"strings"
 
-	"github.com/getsentry/sentry-go"
-	jsoniter "github.com/json-iterator/go"
-	"github.com/sourcegraph/log"
-	"github.com/tidwall/gjson"
-	"golang.org/x/sync/semaphore"
-	"golang.org/x/time/rate"
-
-	"github.com/sourcegraph/sourcegraph/cmd/gitserver/server"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
+	internalgrpc "github.com/sourcegraph/sourcegraph/internal/grpc"
+	"github.com/sourcegraph/sourcegraph/internal/httpserver"
+	"github.com/sourcegraph/sourcegraph/internal/instrumentation"
+	"github.com/sourcegraph/sourcegraph/internal/requestclient"
+	"github.com/sourcegraph/sourcegraph/internal/requestinteraction"
+	"github.com/sourcegraph/sourcegraph/internal/tenant"
+	"github.com/sourcegraph/sourcegraph/internal/trace"
+	"github.com/sourcegraph/sourcegraph/internal/vcs"
+
+	"github.com/sourcegraph/log"
+	"google.golang.org/grpc"
+
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal"
+	server "github.com/sourcegraph/sourcegraph/cmd/gitserver/internal"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/accesslog"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/cloneurl"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/common"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/git"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/git/gitcli"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/gitserverfs"
+	"github.com/sourcegraph/sourcegraph/cmd/gitserver/internal/vcssyncer"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/authz"
+	"github.com/sourcegraph/sourcegraph/internal/authz/subrepoperms"
 	"github.com/sourcegraph/sourcegraph/internal/codeintel/dependencies"
+	"github.com/sourcegraph/sourcegraph/internal/collections"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/conf/conftypes"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	connections "github.com/sourcegraph/sourcegraph/internal/database/connections/live"
-	"github.com/sourcegraph/sourcegraph/internal/debugserver"
 	"github.com/sourcegraph/sourcegraph/internal/encryption/keyring"
 	"github.com/sourcegraph/sourcegraph/internal/env"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/crates"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/gomodproxy"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/npm"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/pypi"
-	"github.com/sourcegraph/sourcegraph/internal/extsvc/rubygems"
+	proto "github.com/sourcegraph/sourcegraph/internal/gitserver/v1"
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
-	"github.com/sourcegraph/sourcegraph/internal/hostname"
-	"github.com/sourcegraph/sourcegraph/internal/httpcli"
-	"github.com/sourcegraph/sourcegraph/internal/instrumentation"
-	"github.com/sourcegraph/sourcegraph/internal/jsonc"
-	"github.com/sourcegraph/sourcegraph/internal/logging"
+	"github.com/sourcegraph/sourcegraph/internal/goroutine/recorder"
+	"github.com/sourcegraph/sourcegraph/internal/grpc/defaults"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
-	"github.com/sourcegraph/sourcegraph/internal/profiler"
 	"github.com/sourcegraph/sourcegraph/internal/ratelimit"
-	"github.com/sourcegraph/sourcegraph/internal/repos"
-	"github.com/sourcegraph/sourcegraph/internal/requestclient"
-	"github.com/sourcegraph/sourcegraph/internal/trace"
-	"github.com/sourcegraph/sourcegraph/internal/tracer"
-	"github.com/sourcegraph/sourcegraph/internal/types"
-	"github.com/sourcegraph/sourcegraph/internal/version"
+	"github.com/sourcegraph/sourcegraph/internal/service"
+	"github.com/sourcegraph/sourcegraph/internal/wrexec"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
-	"github.com/sourcegraph/sourcegraph/schema"
 )
 
-var (
-	reposDir = env.Get("SRC_REPOS_DIR", "/data/repos", "Root dir containing repos.")
+type LazyDebugserverEndpoint struct {
+	lockerStatusEndpoint http.HandlerFunc
+}
 
-	// Align these variables with the 'disk_space_remaining' alerts in monitoring
-	wantPctFree     = env.MustGetInt("SRC_REPOS_DESIRED_PERCENT_FREE", 10, "Target percentage of free space on disk.")
-	janitorInterval = env.MustGetDuration("SRC_REPOS_JANITOR_INTERVAL", 1*time.Minute, "Interval between cleanup runs")
+func Main(ctx context.Context, observationCtx *observation.Context, ready service.ReadyFunc, debugserverEndpoints *LazyDebugserverEndpoint, config *Config) error {
+	logger := observationCtx.Logger
 
-	syncRepoStateInterval          = env.MustGetDuration("SRC_REPOS_SYNC_STATE_INTERVAL", 10*time.Minute, "Interval between state syncs")
-	syncRepoStateBatchSize         = env.MustGetInt("SRC_REPOS_SYNC_STATE_BATCH_SIZE", 500, "Number of updates to perform per batch")
-	syncRepoStateUpdatePerSecond   = env.MustGetInt("SRC_REPOS_SYNC_STATE_UPSERT_PER_SEC", 500, "The number of updated rows allowed per second across all gitserver instances")
-	batchLogGlobalConcurrencyLimit = env.MustGetInt("SRC_BATCH_LOG_GLOBAL_CONCURRENCY_LIMIT", 256, "The maximum number of in-flight Git commands from all /batch-log requests combined")
-
-	// 80 per second (4800 per minute) is well below our alert threshold of 30k per minute.
-	rateLimitSyncerLimitPerSecond = env.MustGetInt("SRC_REPOS_SYNC_RATE_LIMIT_RATE_PER_SECOND", 80, "Rate limit applied to rate limit syncing")
-)
-
-type EnterpriseInit func(db database.DB)
-
-func Main(enterpriseInit EnterpriseInit) {
-	ctx := context.Background()
-
-	logging.Init() //nolint:staticcheck // Deprecated, but logs unmigrated to sourcegraph/log look really bad without this.
-
-	liblog := log.Init(log.Resource{
-		Name:       env.MyName,
-		Version:    version.Version(),
-		InstanceID: hostname.Get(),
-	}, log.NewSentrySinkWith(
-		log.SentrySink{
-			ClientOptions: sentry.ClientOptions{SampleRate: 0.2},
-		},
-	))
-	defer liblog.Sync()
-
-	conf.Init()
-	go conf.Watch(liblog.Update(conf.GetLogSinks))
-
-	tracer.Init(log.Scoped("tracer", "internal tracer package"), conf.DefaultClient())
-	profiler.Init()
-
-	logger := log.Scoped("server", "the gitserver service")
-	observationCtx := observation.NewContext(logger)
-
-	if reposDir == "" {
-		logger.Fatal("SRC_REPOS_DIR is required")
-	}
-	if err := os.MkdirAll(reposDir, os.ModePerm); err != nil {
-		logger.Fatal("failed to create SRC_REPOS_DIR", log.Error(err))
+	// Load and validate configuration.
+	if err := config.Validate(); err != nil {
+		return errors.Wrap(err, "failed to validate configuration")
 	}
 
-	wantPctFree2, err := getPercent(wantPctFree)
-	if err != nil {
-		logger.Fatal("SRC_REPOS_DESIRED_PERCENT_FREE is out of range", log.Error(err))
+	// Prepare the file system.
+	fs := gitserverfs.New(observationCtx, config.ReposDir)
+	if err := fs.Initialize(); err != nil {
+		return err
 	}
 
+	// Create a database connection.
 	sqlDB, err := getDB(observationCtx)
 	if err != nil {
-		logger.Fatal("failed to initialize database stores", log.Error(err))
+		return errors.Wrap(err, "initializing database stores")
 	}
-	db := database.NewDB(logger, sqlDB)
+	db := database.NewDB(observationCtx.Logger, sqlDB)
 
-	repoStore := db.Repos()
-	dependenciesSvc := dependencies.NewService(observationCtx, db)
-	externalServiceStore := db.ExternalServices()
-
+	// Initialize the keyring.
 	err = keyring.Init(ctx)
 	if err != nil {
-		logger.Fatal("failed to initialise keyring", log.Error(err))
+		return errors.Wrap(err, "initializing keyring")
 	}
 
-	if enterpriseInit != nil {
-		enterpriseInit(db)
-	}
+	authz.DefaultSubRepoPermsChecker = subrepoperms.NewSubRepoPermsClient(db.SubRepoPerms())
 
-	if err != nil {
-		logger.Fatal("Failed to create sub-repo client", log.Error(err))
+	// Setup our server megastruct.
+	recordingCommandFactory := wrexec.NewRecordingCommandFactory(nil, 0)
+	locker := server.NewRepositoryLocker()
+	hostname := config.ExternalAddress
+	backendSource := func(dir common.GitDir, repoName api.RepoName) git.GitBackend {
+		return git.NewObservableBackend(gitcli.NewBackend(logger, recordingCommandFactory, dir, repoName))
 	}
-
-	gitserver := server.Server{
-		Logger:             logger,
-		ObservationCtx:     observationCtx,
-		ReposDir:           reposDir,
-		DesiredPercentFree: wantPctFree2,
-		GetRemoteURLFunc: func(ctx context.Context, repo api.RepoName) (string, error) {
-			return getRemoteURLFunc(ctx, externalServiceStore, repoStore, nil, repo)
+	gitserver := makeServer(
+		observationCtx,
+		fs,
+		db,
+		recordingCommandFactory,
+		backendSource,
+		hostname,
+		config.CoursierCacheDir,
+		locker,
+		func(ctx context.Context, repo api.RepoName) (string, error) {
+			return getRemoteURLFunc(ctx, db, repo)
 		},
-		GetVCSSyncer: func(ctx context.Context, repo api.RepoName) (server.VCSSyncer, error) {
-			return getVCSSyncer(ctx, externalServiceStore, repoStore, dependenciesSvc, repo, reposDir)
-		},
-		Hostname:                hostname.Get(),
-		DB:                      db,
-		CloneQueue:              server.NewCloneQueue(list.New()),
-		GlobalBatchLogSemaphore: semaphore.NewWeighted(int64(batchLogGlobalConcurrencyLimit)),
-	}
+	)
 
-	gitserver.RegisterMetrics(observationCtx, db)
+	// Make sure we watch for config updates that affect the recordingCommandFactory.
+	go conf.Watch(func() {
+		// We update the factory with a predicate func. Each subsequent recordable command will use this predicate
+		// to determine whether a command should be recorded or not.
+		recordingConf := conf.Get().SiteConfig().GitRecorder
+		if recordingConf == nil {
+			recordingCommandFactory.Disable()
+			return
+		}
+		recordingCommandFactory.Update(recordCommandsOnRepos(recordingConf.Repos, recordingConf.IgnoredGitCommands), recordingConf.Size)
+	})
 
-	if tmpDir, err := gitserver.SetupAndClearTmp(); err != nil {
-		logger.Fatal("failed to setup temporary directory", log.Error(err))
-	} else if err := os.Setenv("TMP_DIR", tmpDir); err != nil {
-		// Additionally, set TMP_DIR so other temporary files we may accidentally
-		// create are on the faster RepoDir mount.
-		logger.Fatal("Setting TMP_DIR", log.Error(err))
-	}
-
-	// Create Handler now since it also initializes state
-	// TODO: Why do we set server state as a side effect of creating our handler?
-	handler := gitserver.Handler()
-	handler = actor.HTTPMiddleware(logger, handler)
-	handler = requestclient.HTTPMiddleware(handler)
-	handler = trace.HTTPMiddleware(logger, handler, conf.DefaultClient())
-	handler = instrumentation.HTTPMiddleware("", handler)
-
-	// Ready immediately
-	ready := make(chan struct{})
-	close(ready)
+	internal.RegisterEchoMetric(logger.Scoped("echoMetricReporter"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Best effort attempt to sync rate limiters for external services early on. If
-	// it fails, we'll try again in the background sync below.
-	if err := syncExternalServiceRateLimiters(ctx, externalServiceStore); err != nil {
-		logger.Warn("error performing initial rate limit sync", log.Error(err))
+	routines := []goroutine.BackgroundRoutine{
+		makeHTTPServer(logger, fs, makeGRPCServer(logger, gitserver, config), config.ListenAddress),
+		server.NewRepoStateSyncer(
+			ctx,
+			logger,
+			db,
+			locker,
+			hostname,
+			fs,
+			config.SyncRepoStateInterval,
+			config.SyncRepoStateBatchSize,
+			config.SyncRepoStateUpdatePerSecond,
+		),
+		server.NewJanitor(
+			ctx,
+			server.JanitorConfig{
+				ShardID:                        hostname,
+				JanitorInterval:                config.JanitorInterval,
+				DisableDeleteReposOnWrongShard: config.JanitorDisableDeleteReposOnWrongShard,
+			},
+			db,
+			fs,
+			backendSource,
+			recordingCommandFactory,
+			logger,
+		),
 	}
 
-	go syncRateLimiters(ctx, logger, externalServiceStore, rateLimitSyncerLimitPerSecond)
-	go debugserver.NewServerRoutine(ready).Start()
-	go gitserver.Janitor(actor.WithInternalActor(ctx), janitorInterval)
-	go gitserver.SyncRepoState(syncRepoStateInterval, syncRepoStateBatchSize, syncRepoStateUpdatePerSecond)
-
-	gitserver.StartClonePipeline(ctx)
-
-	addr := os.Getenv("GITSERVER_ADDR")
-	if addr == "" {
-		port := "3178"
-		host := ""
-		if env.InsecureDev {
-			host = "127.0.0.1"
+	// Register recorder in all routines that support it.
+	recorderCache := recorder.GetCache()
+	rec := recorder.New(observationCtx.Logger, env.MyName, recorderCache)
+	for _, r := range routines {
+		if recordable, ok := r.(recorder.Recordable); ok {
+			// Set the hostname to the shardID so we record the routines per
+			// gitserver instance.
+			recordable.SetJobName(fmt.Sprintf("gitserver %s", hostname))
+			recordable.RegisterRecorder(rec)
+			rec.Register(recordable)
 		}
-		addr = net.JoinHostPort(host, port)
 	}
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
-	}
-	logger.Info("git-server: listening", log.String("addr", srv.Addr))
+	rec.RegistrationDone()
 
-	go func() {
-		err := srv.ListenAndServe()
-		if err != http.ErrServerClosed {
-			logger.Fatal(err.Error())
+	debugserverEndpoints.lockerStatusEndpoint = func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(locker.AllStatuses()); err != nil {
+			logger.Error("failed to encode locker statuses", log.Error(err))
 		}
-	}()
+	}
 
-	// Listen for shutdown signals. When we receive one attempt to clean up,
-	// but do an insta-shutdown if we receive more than one signal.
-	c := make(chan os.Signal, 2)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
+	logger.Info("git-server: listening", log.String("addr", config.ListenAddress))
 
-	// Once we receive one of the signals from above, continues with the shutdown
-	// process.
-	<-c
-	go func() {
-		// If a second signal is received, exit immediately.
-		<-c
-		os.Exit(0)
-	}()
+	// We're ready!
+	ready()
 
-	// Wait for at most for the configured shutdown timeout.
-	ctx, cancel = context.WithTimeout(ctx, goroutine.GracefulShutdownTimeout)
-	defer cancel()
-	// Stop accepting requests.
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("shutting down http server", log.Error(err))
+	// Launch all routines!
+	err = goroutine.MonitorBackgroundRoutines(ctx, routines...)
+	if err != nil {
+		logger.Error("error monitoring background routines", log.Error(err))
 	}
 
 	// The most important thing this does is kill all our clones. If we just
 	// shutdown they will be orphaned and continue running.
 	gitserver.Stop()
+
+	return nil
 }
 
-func configureFusionClient(conn schema.PerforceConnection) server.FusionConfig {
-	// Set up default settings first
-	fc := server.FusionConfig{
-		Enabled:             false,
-		Client:              conn.P4Client,
-		LookAhead:           2000,
-		NetworkThreads:      12,
-		NetworkThreadsFetch: 12,
-		PrintBatch:          10,
-		Refresh:             100,
-		Retries:             10,
-		MaxChanges:          -1,
-		IncludeBinaries:     false,
-		FsyncEnable:         false,
-	}
+// makeServer creates a new gitserver.Server instance.
+func makeServer(
+	observationCtx *observation.Context,
+	fs gitserverfs.FS,
+	db database.DB,
+	recordingCommandFactory *wrexec.RecordingCommandFactory,
+	backendSource func(dir common.GitDir, repoName api.RepoName) git.GitBackend,
+	hostname string,
+	coursierCacheDir string,
+	locker internal.RepositoryLocker,
+	getRemoteURLFunc func(ctx context.Context, repo api.RepoName) (string, error),
+) *internal.Server {
+	return server.NewServer(&server.ServerOpts{
+		Logger:           observationCtx.Logger,
+		GitBackendSource: backendSource,
+		GetRemoteURLFunc: getRemoteURLFunc,
+		GetVCSSyncer: func(ctx context.Context, repo api.RepoName) (vcssyncer.VCSSyncer, error) {
+			return vcssyncer.NewVCSSyncer(ctx, &vcssyncer.NewVCSSyncerOpts{
+				ExternalServiceStore:    db.ExternalServices(),
+				RepoStore:               db.Repos(),
+				DepsSvc:                 dependencies.NewService(observationCtx, db),
+				Repo:                    repo,
+				CoursierCacheDir:        coursierCacheDir,
+				RecordingCommandFactory: recordingCommandFactory,
+				Logger:                  observationCtx.Logger,
+				FS:                      fs,
+				GetRemoteURLSource: func(ctx context.Context, repo api.RepoName) (vcssyncer.RemoteURLSource, error) {
+					return vcssyncer.RemoteURLSourceFunc(func(ctx context.Context) (*vcs.URL, error) {
+						rawURL, err := getRemoteURLFunc(ctx, repo)
+						if err != nil {
+							return nil, errors.Wrapf(err, "getting remote URL for %q", repo)
 
-	if conn.FusionClient == nil {
-		return fc
-	}
+						}
 
-	// Required
-	fc.Enabled = conn.FusionClient.Enabled
-	fc.LookAhead = conn.FusionClient.LookAhead
+						u, err := vcs.ParseURL(rawURL)
+						if err != nil {
+							// TODO@ggilmore: Note that we can't redact the URL here because we can't
+							// parse it to know where the sensitive information is.
+							return nil, errors.Wrapf(err, "parsing remote URL %q", rawURL)
+						}
 
-	// Optional
-	if conn.FusionClient.NetworkThreads > 0 {
-		fc.NetworkThreads = conn.FusionClient.NetworkThreads
-	}
-	if conn.FusionClient.NetworkThreadsFetch > 0 {
-		fc.NetworkThreadsFetch = conn.FusionClient.NetworkThreadsFetch
-	}
-	if conn.FusionClient.PrintBatch > 0 {
-		fc.PrintBatch = conn.FusionClient.PrintBatch
-	}
-	if conn.FusionClient.Refresh > 0 {
-		fc.Refresh = conn.FusionClient.Refresh
-	}
-	if conn.FusionClient.Retries > 0 {
-		fc.Retries = conn.FusionClient.Retries
-	}
-	if conn.FusionClient.MaxChanges > 0 {
-		fc.MaxChanges = conn.FusionClient.MaxChanges
-	}
-	fc.IncludeBinaries = conn.FusionClient.IncludeBinaries
-	fc.FsyncEnable = conn.FusionClient.FsyncEnable
+						return u, nil
 
-	return fc
+					}), nil
+				},
+			})
+		},
+		FS:                      fs,
+		Hostname:                hostname,
+		DB:                      db,
+		RecordingCommandFactory: recordingCommandFactory,
+		Locker:                  locker,
+		RPSLimiter: ratelimit.NewInstrumentedLimiter(
+			ratelimit.GitRPSLimiterBucketName,
+			ratelimit.NewGlobalRateLimiter(observationCtx.Logger, ratelimit.GitRPSLimiterBucketName),
+		),
+	})
 }
 
-func getPercent(p int) (int, error) {
-	if p < 0 {
-		return 0, errors.Errorf("negative value given for percentage: %d", p)
-	}
-	if p > 100 {
-		return 0, errors.Errorf("excessively high value given for percentage: %d", p)
-	}
-	return p, nil
+// makeHTTPServer creates a new *http.Server for the gitserver endpoints and registers
+// it with methods on the given server. It multiplexes HTTP requests and gRPC requests
+// from a single port.
+func makeHTTPServer(logger log.Logger, fs gitserverfs.FS, grpcServer *grpc.Server, listenAddress string) goroutine.BackgroundRoutine {
+	handler := internal.NewHTTPHandler(logger, fs)
+	handler = actor.HTTPMiddleware(logger, handler)
+	handler = tenant.InternalHTTPMiddleware(logger, handler)
+	handler = requestclient.InternalHTTPMiddleware(handler)
+	handler = requestinteraction.HTTPMiddleware(handler)
+	handler = trace.HTTPMiddleware(logger, handler)
+	handler = instrumentation.HTTPMiddleware("", handler)
+	handler = internalgrpc.MultiplexHandlers(grpcServer, handler)
+
+	return httpserver.NewFromAddr(listenAddress, &http.Server{
+		Handler: handler,
+	})
+}
+
+// makeGRPCServer creates a new *grpc.Server for the gitserver endpoints and registers
+// it with methods on the given server.
+func makeGRPCServer(logger log.Logger, s *server.Server, c *Config) *grpc.Server {
+	configurationWatcher := conf.DefaultClient()
+	scopedLogger := logger.Scoped("gitserver.accesslog")
+
+	grpcServer := defaults.NewServer(
+		logger,
+		grpc.ChainStreamInterceptor(accesslog.StreamServerInterceptor(scopedLogger, configurationWatcher)),
+		grpc.ChainUnaryInterceptor(accesslog.UnaryServerInterceptor(scopedLogger, configurationWatcher)),
+	)
+	proto.RegisterGitserverServiceServer(grpcServer, server.NewGRPCServer(s, &server.GRPCServerConfig{
+		ExhaustiveRequestLoggingEnabled: c.ExhaustiveRequestLoggingEnabled,
+	}))
+	proto.RegisterGitserverRepositoryServiceServer(grpcServer, server.NewRepositoryServiceServer(s, &server.GRPCRepositoryServiceConfig{
+		ExhaustiveRequestLoggingEnabled: c.ExhaustiveRequestLoggingEnabled,
+	}))
+
+	return grpcServer
 }
 
 // getDB initializes a connection to the database and returns a dbutil.DB
 func getDB(observationCtx *observation.Context) (*sql.DB, error) {
-	// Gitserver is an internal actor. We rely on the frontend to do authz checks for
-	// user requests.
-	//
-	// This call to SetProviders is here so that calls to GetProviders don't block.
-	authz.SetProviders(true, []authz.Provider{})
-
 	dsn := conf.GetServiceConnectionValueAndRestartOnChange(func(serviceConnections conftypes.ServiceConnections) string {
 		return serviceConnections.PostgresDSN
 	})
 	return connections.EnsureNewFrontendDB(observationCtx, dsn, "gitserver")
 }
 
+// getRemoteURLFunc returns a remote URL for the given repo, if any external service
+// connections reference it. The first external service mentioned in repo.Sources
+// will be used to construct the URL and get credentials.
+// Since r.Sources is a map, a random referencing service will be used, so this
+// function is not idempotent.
+// This allows us to try different tokens, to maximize the chances of a repo eventually
+// cloning successfully.
 func getRemoteURLFunc(
 	ctx context.Context,
-	externalServiceStore database.ExternalServiceStore,
-	repoStore database.RepoStore,
-	cli httpcli.Doer,
+	db database.DB,
 	repo api.RepoName,
 ) (string, error) {
-	r, err := repoStore.GetByName(ctx, repo)
+	r, err := db.Repos().GetByName(ctx, repo)
 	if err != nil {
 		return "", err
 	}
@@ -329,257 +318,76 @@ func getRemoteURLFunc(
 	for _, info := range r.Sources {
 		// build the clone url using the external service config instead of using
 		// the source CloneURL field
-		svc, err := externalServiceStore.GetByID(ctx, info.ExternalServiceID())
+		svc, err := db.ExternalServices().GetByID(ctx, info.ExternalServiceID())
 		if err != nil {
 			return "", err
 		}
 
-		if svc.CloudDefault && r.Private {
-			// We won't be able to use this remote URL, so we should skip it. This can happen
-			// if a repo moves from being public to private while belonging to both a cloud
-			// default external service and another external service with a token that has
-			// access to the private repo.
-			continue
-		}
-
-		if svc.Kind == extsvc.KindGitHub {
-			config, err := conf.GitHubAppConfig()
-			if err != nil {
-				return "", err
-			}
-			if config.Configured() {
-				rawConfig, err := svc.Config.Decrypt(ctx)
-				if err != nil {
-					return "", err
-				}
-				installationID := gjson.Get(rawConfig, "githubAppInstallationID").Int()
-				if installationID > 0 {
-					rawConfig, err = editGitHubAppExternalServiceConfigToken(ctx, externalServiceStore, svc, rawConfig, config.PrivateKey, config.AppID, installationID, cli)
-					if err != nil {
-						return "", errors.Wrap(err, "edit GitHub App external service config token")
-					}
-					svc.Config.Set(rawConfig)
-				}
-			}
-		}
-		return repos.EncryptableCloneURL(ctx, log.Scoped("repos.CloneURL", ""), svc.Kind, svc.Config, r)
+		return cloneurl.ForEncryptableConfig(ctx, db, svc.Kind, svc.Config, r)
 	}
 	return "", errors.Errorf("no sources for %q", repo)
 }
 
-// editGitHubAppExternalServiceConfigToken updates the "token" field of the given
-// external service config through GitHub App and returns a new copy of the
-// config ensuring the token is always valid.
-func editGitHubAppExternalServiceConfigToken(
-	ctx context.Context,
-	externalServiceStore database.ExternalServiceStore,
-	svc *types.ExternalService,
-	rawConfig string,
-	privateKey []byte,
-	appID string,
-	installationID int64,
-	cli httpcli.Doer,
-) (string, error) {
-	logger := log.Scoped("editGitHubAppExternalServiceConfigToken", "updates the 'token' field of the given external service")
-
-	baseURL, err := url.Parse(gjson.Get(rawConfig, "url").String())
-	if err != nil {
-		return "", errors.Wrap(err, "parse base URL")
-	}
-
-	apiURL, githubDotCom := github.APIRoot(baseURL)
-	if !githubDotCom {
-		return "", errors.Errorf("only GitHub App on GitHub.com is supported, but got %q", baseURL)
-	}
-
-	var c schema.GitHubConnection
-	if err := jsonc.Unmarshal(rawConfig, &c); err != nil {
-		return "", nil
-	}
-
-	appAuther, err := github.NewGitHubAppAuthenticator(appID, privateKey)
-	if err != nil {
-		return "", errors.Wrap(err, "new authenticator with GitHub App")
-	}
-
-	scopedLogger := logger.Scoped("app", "github client for github app").With(log.String("appID", appID))
-	appClient := github.NewV3Client(scopedLogger, svc.URN(), apiURL, appAuther, cli)
-
-	token, err := appClient.CreateAppInstallationAccessToken(ctx, installationID)
-	if err != nil {
-		return "", errors.Wrap(err, "get or renew GitHub App installation access token")
-	}
-
-	// NOTE: Use `json.Marshal` breaks the actual external service config that fails
-	// validation with missing "repos" property when no repository has been selected,
-	// due to generated JSON tag of ",omitempty".
-	config, err := jsonc.Edit(rawConfig, token.Token, "token")
-	if err != nil {
-		return "", errors.Wrap(err, "edit token")
-	}
-	err = externalServiceStore.Update(ctx, conf.Get().AuthProviders, svc.ID,
-		&database.ExternalServiceUpdate{
-			Config:         &config,
-			TokenExpiresAt: token.ExpiresAt,
-		})
-	return config, err
+var defaultIgnoredGitCommands = []string{
+	"show",
+	"rev-parse",
+	"log",
+	"diff",
+	"ls-tree",
 }
 
-func getVCSSyncer(
-	ctx context.Context,
-	externalServiceStore database.ExternalServiceStore,
-	repoStore database.RepoStore,
-	depsSvc *dependencies.Service,
-	repo api.RepoName,
-	reposDir string,
-) (server.VCSSyncer, error) {
-	// We need an internal actor in case we are trying to access a private repo. We
-	// only need access in order to find out the type of code host we're using, so
-	// it's safe.
-	r, err := repoStore.GetByName(actor.WithInternalActor(ctx), repo)
-	if err != nil {
-		return nil, errors.Wrap(err, "get repository")
+// recordCommandsOnRepos returns a ShouldRecordFunc which determines whether the given command should be recorded
+// for a particular repository.
+func recordCommandsOnRepos(repos []string, ignoredGitCommands []string) wrexec.ShouldRecordFunc {
+	// empty repos, means we should never record since there is nothing to match on
+	if len(repos) == 0 {
+		return func(ctx context.Context, c *exec.Cmd) bool {
+			return false
+		}
 	}
 
-	extractOptions := func(connection any) (string, error) {
-		for _, info := range r.Sources {
-			extSvc, err := externalServiceStore.GetByID(ctx, info.ExternalServiceID())
-			if err != nil {
-				return "", errors.Wrap(err, "get external service")
-			}
-			rawConfig, err := extSvc.Config.Decrypt(ctx)
-			if err != nil {
-				return "", err
-			}
-			normalized, err := jsonc.Parse(rawConfig)
-			if err != nil {
-				return "", errors.Wrap(err, "normalize JSON")
-			}
-			if err = jsoniter.Unmarshal(normalized, connection); err != nil {
-				return "", errors.Wrap(err, "unmarshal JSON")
-			}
-			return extSvc.URN(), nil
-		}
-		return "", errors.Errorf("unexpected empty Sources map in %v", r)
+	if len(ignoredGitCommands) == 0 {
+		ignoredGitCommands = append(ignoredGitCommands, defaultIgnoredGitCommands...)
 	}
 
-	switch r.ExternalRepo.ServiceType {
-	case extsvc.TypePerforce:
-		var c schema.PerforceConnection
-		if _, err := extractOptions(&c); err != nil {
-			return nil, err
+	// we won't record any git commands with these commands since they are considered to be not destructive
+	ignoredGitCommandsMap := collections.NewSet(ignoredGitCommands...)
+
+	return func(_ context.Context, cmd *exec.Cmd) bool {
+		base := filepath.Base(cmd.Path)
+		if base != "git" {
+			return false
 		}
 
-		p4Home := filepath.Join(reposDir, server.P4HomeName)
-		// Ensure the directory exists
-		if err := os.MkdirAll(p4Home, os.ModePerm); err != nil {
-			return nil, errors.Wrapf(err, "ensuring p4Home exists: %q", p4Home)
-		}
-
-		return &server.PerforceDepotSyncer{
-			MaxChanges:   int(c.MaxChanges),
-			Client:       c.P4Client,
-			FusionConfig: configureFusionClient(c),
-			P4Home:       p4Home,
-		}, nil
-	case extsvc.TypeJVMPackages:
-		var c schema.JVMPackagesConnection
-		if _, err := extractOptions(&c); err != nil {
-			return nil, err
-		}
-		return server.NewJVMPackagesSyncer(&c, depsSvc), nil
-	case extsvc.TypeNpmPackages:
-		var c schema.NpmPackagesConnection
-		urn, err := extractOptions(&c)
-		if err != nil {
-			return nil, err
-		}
-		cli := npm.NewHTTPClient(urn, c.Registry, c.Credentials, httpcli.ExternalDoer)
-		return server.NewNpmPackagesSyncer(c, depsSvc, cli), nil
-	case extsvc.TypeGoModules:
-		var c schema.GoModulesConnection
-		urn, err := extractOptions(&c)
-		if err != nil {
-			return nil, err
-		}
-		cli := gomodproxy.NewClient(urn, c.Urls, httpcli.ExternalDoer)
-		return server.NewGoModulesSyncer(&c, depsSvc, cli), nil
-	case extsvc.TypePythonPackages:
-		var c schema.PythonPackagesConnection
-		urn, err := extractOptions(&c)
-		if err != nil {
-			return nil, err
-		}
-		cli := pypi.NewClient(urn, c.Urls, httpcli.ExternalDoer)
-		return server.NewPythonPackagesSyncer(&c, depsSvc, cli), nil
-	case extsvc.TypeRustPackages:
-		var c schema.RustPackagesConnection
-		urn, err := extractOptions(&c)
-		if err != nil {
-			return nil, err
-		}
-		cli := crates.NewClient(urn, httpcli.ExternalDoer)
-		return server.NewRustPackagesSyncer(&c, depsSvc, cli), nil
-	case extsvc.TypeRubyPackages:
-		var c schema.RubyPackagesConnection
-		urn, err := extractOptions(&c)
-		if err != nil {
-			return nil, err
-		}
-		cli := rubygems.NewClient(urn, c.Repository, httpcli.ExternalDoer)
-		return server.NewRubyPackagesSyncer(&c, depsSvc, cli), nil
-	}
-	return &server.GitRepoSyncer{}, nil
-}
-
-func syncExternalServiceRateLimiters(ctx context.Context, store database.ExternalServiceStore) error {
-	svcs, err := store.List(ctx, database.ExternalServicesListOptions{})
-	if err != nil {
-		return errors.Wrap(err, "listing external services")
-	}
-	syncer := repos.NewRateLimitSyncer(ratelimit.DefaultRegistry, store, repos.RateLimitSyncerOpts{})
-	return syncer.SyncServices(ctx, svcs)
-}
-
-// Sync rate limiters from config. Since we don't have a trigger that watches for
-// changes to rate limits we'll run this periodically in the background.
-func syncRateLimiters(ctx context.Context, logger log.Logger, store database.ExternalServiceStore, perSecond int) {
-	backoff := 5 * time.Second
-	batchSize := 50
-	logger = logger.Scoped("syncRateLimiters", "sync rate limiters from config")
-
-	// perSecond should be spread across all gitserver instances and we want to wait
-	// until we know about at least one instance.
-	var instanceCount int
-	for {
-		instanceCount = len(conf.Get().ServiceConnectionConfig.GitServers)
-		if instanceCount > 0 {
-			break
-		}
-
-		logger.Warn("found zero gitserver instance, trying again after backoff", log.Duration("backoff", backoff))
-	}
-
-	limiter := ratelimit.NewInstrumentedLimiter("RateLimitSyncer", rate.NewLimiter(rate.Limit(float64(perSecond)/float64(instanceCount)), batchSize))
-	syncer := repos.NewRateLimitSyncer(ratelimit.DefaultRegistry, store, repos.RateLimitSyncerOpts{
-		PageSize: batchSize,
-		Limiter:  limiter,
-	})
-
-	var lastSuccessfulSync time.Time
-	ticker := time.NewTicker(1 * time.Minute)
-	for {
-		start := time.Now()
-		if err := syncer.SyncLimitersSince(ctx, lastSuccessfulSync); err != nil {
-			logger.Warn("syncRateLimiters: error syncing rate limits", log.Error(err))
+		repoMatch := false
+		// If repos contains a single "*" element, it means to record commands
+		// for all repositories.
+		if len(repos) == 1 && repos[0] == "*" {
+			repoMatch = true
 		} else {
-			lastSuccessfulSync = start
+			for _, repo := range repos {
+				// We need to check the suffix, because we can have some common parts in
+				// different repo names. E.g. "sourcegraph/sourcegraph" and
+				// "sourcegraph/sourcegraph-code-ownership" will both be allowed even if only the
+				// first name is included in the config.
+				if strings.HasSuffix(cmd.Dir, repo+"/.git") {
+					repoMatch = true
+					break
+				}
+			}
 		}
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+		// If the repo doesn't match, no use in checking if it is a command we should record.
+		if !repoMatch {
+			return false
 		}
+		// we have to scan the Args, since it isn't guaranteed that the Arg at index 1 is the git command:
+		// git -c "protocol.version=2" remote show
+		for _, arg := range cmd.Args {
+			if ok := ignoredGitCommandsMap.Has(arg); ok {
+				return false
+			}
+		}
+		return true
 	}
 }

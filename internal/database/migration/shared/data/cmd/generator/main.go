@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/sourcegraph/log"
 	"github.com/sourcegraph/sourcegraph/internal/database/migration/schemas"
 	"github.com/sourcegraph/sourcegraph/internal/database/migration/shared"
 	"github.com/sourcegraph/sourcegraph/internal/database/migration/stitch"
@@ -13,22 +16,27 @@ import (
 )
 
 func main() {
+	liblog := log.Init(log.Resource{Name: "stitched-migration-generator"})
+	defer liblog.Sync()
+
 	if err := mainErr(); err != nil {
 		panic(fmt.Sprintf("error: %s", err))
 	}
 }
 
+var frozenMigrationsFlag = flag.Bool("write-frozen", true, "write frozen revision migration files")
+var outputPath = flag.String("output", "data/stitched-migration-graph.json", "where to put the stitched migration graph JSON")
+var frozenOutputPath = flag.String("frozen-output", "data/frozen", "where to put the stitched migration graph JSON")
+var archivePath = flag.String("archive", "", "where to find migration dump")
+
 func mainErr() error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
+	flag.Parse()
+
+	if *archivePath == "" {
+		return errors.New("missing -archive flag")
 	}
-	// This script is invoked via a go:generate directive in internal/database/migration/shared (embed.go)
-	repoRoot := filepath.Join(wd, "..", "..", "..", "..")
 
-	//
 	// Write stitched migrations
-
 	versions, err := oobmigration.UpgradeRange(MinVersion, MaxVersion)
 	if err != nil {
 		return err
@@ -37,26 +45,33 @@ func mainErr() error {
 	for _, version := range versions {
 		versionTags = append(versionTags, version.GitTag())
 	}
-	if err := stitchAndWrite(repoRoot, filepath.Join(wd, "data", "stitched-migration-graph.json"), versionTags); err != nil {
+	fmt.Printf("Generating stitched migration files for range [%s, %s]\n", MinVersion, MaxVersion)
+	if err := stitchAndWrite(*archivePath, *outputPath, versionTags); err != nil {
 		return err
 	}
 
-	//
-	// Write frozen migrations
-
-	for _, rev := range FrozenRevisions {
-		if err := stitchAndWrite(repoRoot, filepath.Join(wd, "data", "frozen", fmt.Sprintf("%s.json", rev)), []string{rev}); err != nil {
-			return err
+	if *frozenMigrationsFlag {
+		fmt.Println("Generating frozen migrations")
+		// Write frozen migrations. There is an optional flag that will short circuit this step. This is useful for
+		// clients that are only interested in the stitch graph, such as the release tool.
+		for _, rev := range FrozenRevisions {
+			if err := stitchAndWrite(*archivePath, filepath.Join(*frozenOutputPath, fmt.Sprintf("%s.json", rev)), []string{rev}); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func stitchAndWrite(repoRoot, filepath string, versionTags []string) error {
+func stitchAndWrite(archivesPath string, filepath string, versionTags []string) error {
 	stitchedMigrationBySchemaName := map[string]shared.StitchedMigration{}
+	ma, err := stitch.NewLocalMigrationsReader(archivesPath, maxVersionString)
+	if err != nil {
+		return err
+	}
 	for _, schemaName := range schemas.SchemaNames {
-		stitched, err := stitch.StitchDefinitions(schemaName, repoRoot, versionTags)
+		stitched, err := stitch.StitchDefinitions(ma, schemaName, versionTags)
 		if err != nil {
 			return err
 		}

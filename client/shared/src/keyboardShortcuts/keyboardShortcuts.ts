@@ -1,9 +1,8 @@
 import { isMacPlatform, isSafari } from '@sourcegraph/common'
 
-import { KeyboardShortcut } from '../keyboardShortcuts'
+import type { KeyboardShortcut } from '../keyboardShortcuts'
 
 type KEYBOARD_SHORTCUT_IDENTIFIERS =
-    | 'commandPalette'
     | 'switchTheme'
     | 'keyboardShortcutsHelp'
     | 'focusSearch'
@@ -12,15 +11,36 @@ type KEYBOARD_SHORTCUT_IDENTIFIERS =
     | 'fuzzyFinderRepos'
     | 'fuzzyFinderSymbols'
     | 'fuzzyFinderFiles'
-    | 'copyFullQuery'
+    | 'focusCodeEditor'
+    | 'focusFileTree'
+    | 'focusSymbols'
+    | 'focusCody'
 
 export type KEYBOARD_SHORTCUT_MAPPING = Record<KEYBOARD_SHORTCUT_IDENTIFIERS, KeyboardShortcut>
 
-export const KEYBOARD_SHORTCUTS: KEYBOARD_SHORTCUT_MAPPING = {
-    commandPalette: {
-        title: 'Show command palette',
-        keybindings: [{ held: ['Control'], ordered: ['p'] }, { ordered: ['F1'] }, { held: ['Alt'], ordered: ['x'] }],
+export const EXPERIMENTAL_BLOB_PAGE_SHORTCUTS: Record<
+    'focusCodeEditor' | 'focusFileTree' | 'focusSymbols' | 'focusCody',
+    KeyboardShortcut
+> = {
+    focusCodeEditor: {
+        title: 'Focus editor',
+        keybindings: [{ ordered: ['c'] }],
     },
+    focusFileTree: {
+        title: 'Focus file tree',
+        keybindings: [{ ordered: ['f'] }],
+    },
+    focusSymbols: {
+        title: 'Focus symbols',
+        keybindings: [{ ordered: ['s'] }],
+    },
+    focusCody: {
+        title: 'Focus Cody',
+        keybindings: [{ held: ['Alt'], ordered: ['/'] }],
+    },
+}
+
+export const KEYBOARD_SHORTCUTS: KEYBOARD_SHORTCUT_MAPPING = {
     switchTheme: {
         title: 'Switch color theme',
         // use '†' here to make `Alt + t` works on macos
@@ -35,6 +55,7 @@ export const KEYBOARD_SHORTCUTS: KEYBOARD_SHORTCUT_MAPPING = {
         title: 'Focus search bar',
         keybindings: [{ ordered: ['/'] }],
     },
+    ...EXPERIMENTAL_BLOB_PAGE_SHORTCUTS,
     fuzzyFinder: {
         title: 'Fuzzy finder',
         keybindings: [{ held: ['Mod'], ordered: ['k'] }],
@@ -58,9 +79,5 @@ export const KEYBOARD_SHORTCUTS: KEYBOARD_SHORTCUT_MAPPING = {
         title: 'Fuzzy find symbols',
         keybindings: [{ held: isSafari() ? ['Mod', 'Shift'] : ['Mod'], ordered: ['o'] }],
         hideInHelp: true,
-    },
-    copyFullQuery: {
-        title: 'Copy full query',
-        keybindings: [{ held: ['Mod', 'Shift'], ordered: ['c'] }],
     },
 }

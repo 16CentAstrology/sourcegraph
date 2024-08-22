@@ -22,9 +22,9 @@ import (
 type signalAdapter struct {
 	// Exporter should send signals using the configured protocol to the configured
 	// backend.
-	component.Exporter
+	Exporter component.Component
 	// Receiver should receive http/json signals and pass it to the Exporter
-	component.Receiver
+	Receiver component.Component
 }
 
 // Start initializes the exporter and receiver of this adapter.
@@ -52,7 +52,7 @@ type adaptedSignal struct {
 
 // Register attaches a route to the router that adapts requests on the `/otlp` path.
 func (sig *adaptedSignal) Register(ctx context.Context, logger log.Logger, r *mux.Router, receiverURL *url.URL) {
-	adapterLogger := logger.Scoped(path.Base(sig.PathPrefix), "OpenTelemetry signal-specific tunnel")
+	adapterLogger := logger.Scoped(path.Base(sig.PathPrefix))
 
 	// Set up an http/json -> ${configured_protocol} adapter
 	adapter, err := sig.CreateAdapter()

@@ -8,8 +8,7 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
-	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/backend"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
@@ -22,12 +21,13 @@ import (
 )
 
 func (r *RepositoryResolver) MirrorInfo() *repositoryMirrorInfoResolver {
-	return &repositoryMirrorInfoResolver{repository: r, db: r.db}
+	return &repositoryMirrorInfoResolver{repository: r, db: r.db, gitServerClient: r.gitserverClient}
 }
 
 type repositoryMirrorInfoResolver struct {
-	repository *RepositoryResolver
-	db         database.DB
+	repository      *RepositoryResolver
+	db              database.DB
+	gitServerClient gitserver.Client
 
 	// memoize the repo-updater RepoUpdateSchedulerInfo call
 	repoUpdateSchedulerInfoOnce   sync.Once
@@ -90,7 +90,7 @@ func (r *repositoryMirrorInfoResolver) RemoteURL(ctx context.Context) (string, e
 		return strings.Replace(strings.Replace(u.String(), "fake://", "", 1), "/", ":", 1)
 	}
 
-	repo, err := r.repository.repo(ctx)
+	repo, err := r.repository.getRepo(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -125,17 +125,12 @@ func (r *repositoryMirrorInfoResolver) CloneInProgress(ctx context.Context) (boo
 }
 
 func (r *repositoryMirrorInfoResolver) CloneProgress(ctx context.Context) (*string, error) {
-	progress, err := gitserver.NewClient(r.db).RepoCloneProgress(ctx, r.repository.RepoName())
+	progress, err := r.gitServerClient.RepoCloneProgress(ctx, r.repository.RepoName())
 	if err != nil {
 		return nil, err
 	}
 
-	result, ok := progress.Results[r.repository.RepoName()]
-	if !ok {
-		return nil, errors.New("got empty result for repo from RepoCloneProgress")
-	}
-
-	return strptr(result.CloneProgress), nil
+	return strptr(progress.CloneProgress), nil
 }
 
 func (r *repositoryMirrorInfoResolver) LastError(ctx context.Context) (*string, error) {
@@ -145,6 +140,18 @@ func (r *repositoryMirrorInfoResolver) LastError(ctx context.Context) (*string, 
 	}
 
 	return strptr(info.LastError), nil
+}
+
+func (r *repositoryMirrorInfoResolver) LastSyncOutput(ctx context.Context) (*string, error) {
+	output, ok, err := r.db.GitserverRepos().GetLastSyncOutput(ctx, r.repository.name)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	return &output, nil
 }
 
 func (r *repositoryMirrorInfoResolver) UpdatedAt(ctx context.Context) (*gqlutil.DateTime, error) {
@@ -158,6 +165,18 @@ func (r *repositoryMirrorInfoResolver) UpdatedAt(ctx context.Context) (*gqlutil.
 	}
 
 	return &gqlutil.DateTime{Time: info.LastFetched}, nil
+}
+
+func (r *repositoryMirrorInfoResolver) NextSyncAt(ctx context.Context) (*gqlutil.DateTime, error) {
+	info, err := r.repoUpdateSchedulerInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if info == nil || info.Schedule == nil || info.Schedule.Due.IsZero() {
+		return nil, nil
+	}
+	return &gqlutil.DateTime{Time: info.Schedule.Due}, nil
 }
 
 func (r *repositoryMirrorInfoResolver) IsCorrupted(ctx context.Context) (bool, error) {
@@ -285,8 +304,7 @@ func (r *updateQueueResolver) Total() int32 {
 }
 
 func (r *schemaResolver) CheckMirrorRepositoryConnection(ctx context.Context, args *struct {
-	Repository *graphql.ID
-	Name       *string
+	Repository graphql.ID
 }) (*checkMirrorRepositoryConnectionResult, error) {
 	// 🚨 SECURITY: This is an expensive operation and the errors may contain secrets,
 	// so only site admins may run it.
@@ -294,29 +312,17 @@ func (r *schemaResolver) CheckMirrorRepositoryConnection(ctx context.Context, ar
 		return nil, err
 	}
 
-	if (args.Repository != nil && args.Name != nil) || (args.Repository == nil && args.Name == nil) {
-		return nil, errors.New("exactly one of the repository and name arguments must be set")
+	repoID, err := UnmarshalRepositoryID(args.Repository)
+	if err != nil {
+		return nil, err
 	}
-
-	gsClient := gitserver.NewClient(r.db)
-	var repo *types.Repo
-	switch {
-	case args.Repository != nil:
-		repoID, err := UnmarshalRepositoryID(*args.Repository)
-		if err != nil {
-			return nil, err
-		}
-		repo, err = backend.NewRepos(r.logger, r.db, gsClient).Get(ctx, repoID)
-		if err != nil {
-			return nil, err
-		}
-	case args.Name != nil:
-		// Use just the name to look up the repository from gitserver.
-		repo = &types.Repo{Name: api.RepoName(*args.Name)}
+	repo, err := backend.NewRepos(r.logger, r.db, r.gitserverClient).Get(ctx, repoID)
+	if err != nil {
+		return nil, err
 	}
 
 	var result checkMirrorRepositoryConnectionResult
-	if err := gsClient.IsRepoCloneable(ctx, repo.Name); err != nil {
+	if err := r.gitserverClient.IsRepoCloneable(ctx, repo.Name); err != nil {
 		result.errorMessage = err.Error()
 	}
 	return &result, nil

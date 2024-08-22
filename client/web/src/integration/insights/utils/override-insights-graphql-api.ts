@@ -1,23 +1,13 @@
-import { SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
+import type { SharedGraphQlOperations } from '@sourcegraph/shared/src/graphql-operations'
 import { testUserID } from '@sourcegraph/shared/src/testing/integration/graphQlResults'
 
-import { BulkSearchRepositories, WebGraphQlOperations } from '../../../graphql-operations'
-import { WebIntegrationTestContext } from '../../context'
+import type { WebGraphQlOperations } from '../../../graphql-operations'
+import type { WebIntegrationTestContext } from '../../context'
 import { commonWebGraphQlResults } from '../../graphQlResults'
-
-/**
- * Some insight creation UI gql api requests do not have
- * generated types due their dynamic nature. Because of that we
- * must write these api call types below manually for testing purposes.
- */
-interface CustomInsightsOperations {
-    /** API handler used for repositories field async validation. */
-    BulkRepositoriesSearch: () => Record<string, BulkSearchRepositories>
-}
 
 export interface OverrideGraphQLExtensionsProps {
     testContext: WebIntegrationTestContext
-    overrides?: Partial<WebGraphQlOperations & SharedGraphQlOperations & CustomInsightsOperations>
+    overrides?: Partial<WebGraphQlOperations & SharedGraphQlOperations>
 }
 
 /**
@@ -87,10 +77,10 @@ export function overrideInsightsGraphQLApi(props: OverrideGraphQLExtensionsProps
                 email: 'vova@sourcegraph.com',
                 displayName: null,
                 siteAdmin: true,
-                tags: [],
                 tosAccepted: true,
                 url: '/users/test',
                 settingsURL: '/users/test/settings',
+                hasVerifiedEmail: true,
                 organizations: {
                     nodes: [
                         {
@@ -105,9 +95,9 @@ export function overrideInsightsGraphQLApi(props: OverrideGraphQLExtensionsProps
                 },
                 session: { canSignOut: true },
                 viewerCanAdminister: true,
-                searchable: true,
                 emails: [],
                 latestSettings: null,
+                permissions: { nodes: [] },
             },
         }),
         ...overrides,

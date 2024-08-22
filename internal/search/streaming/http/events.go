@@ -30,6 +30,7 @@ type EventContentMatch struct {
 	Hunks           []DecoratedHunk  `json:"hunks"`
 	LineMatches     []EventLineMatch `json:"lineMatches,omitempty"`
 	ChunkMatches    []ChunkMatch     `json:"chunkMatches,omitempty"`
+	Language        string           `json:"language,omitempty"`
 	Debug           string           `json:"debug,omitempty"`
 }
 
@@ -51,6 +52,7 @@ type EventPathMatch struct {
 	RepoLastFetched *time.Time `json:"repoLastFetched,omitempty"`
 	Branches        []string   `json:"branches,omitempty"`
 	Commit          string     `json:"commit,omitempty"`
+	Language        string     `json:"language,omitempty"`
 	Debug           string     `json:"debug,omitempty"`
 }
 
@@ -80,9 +82,10 @@ type DecoratedContent struct {
 }
 
 type ChunkMatch struct {
-	Content      string   `json:"content"`
-	ContentStart Location `json:"contentStart"`
-	Ranges       []Range  `json:"ranges"`
+	Content          string   `json:"content"`
+	ContentStart     Location `json:"contentStart"`
+	Ranges           []Range  `json:"ranges"`
+	ContentTruncated bool     `json:"contentTruncated,omitempty"`
 }
 
 // EventLineMatch is a subset of zoekt.LineMatch for our Event API.
@@ -108,7 +111,8 @@ type EventRepoMatch struct {
 	Fork               bool               `json:"fork,omitempty"`
 	Archived           bool               `json:"archived,omitempty"`
 	Private            bool               `json:"private,omitempty"`
-	KeyValuePairs      map[string]*string `json:"keyValuePairs,omitempty"`
+	Metadata           map[string]*string `json:"metadata,omitempty"`
+	Topics             []string           `json:"topics,omitempty"`
 }
 
 func (e *EventRepoMatch) eventMatch() {}
@@ -125,6 +129,7 @@ type EventSymbolMatch struct {
 	RepoLastFetched *time.Time `json:"repoLastFetched,omitempty"`
 	Branches        []string   `json:"branches,omitempty"`
 	Commit          string     `json:"commit,omitempty"`
+	Language        string     `json:"language,omitempty"`
 
 	Symbols []Symbol `json:"symbols"`
 }
@@ -167,14 +172,47 @@ type EventCommitMatch struct {
 
 func (e *EventCommitMatch) eventMatch() {}
 
+type EventPersonMatch struct {
+	// Type is always PersonMatchType. Included here for marshalling.
+	Type MatchType `json:"type"`
+
+	Handle string `json:"handle"`
+	Email  string `json:"email"`
+
+	// User will not be set if no user was matched.
+	User *UserMetadata `json:"user,omitempty"`
+}
+
+type UserMetadata struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarURL"`
+}
+
+func (e *EventPersonMatch) eventMatch() {}
+
+type EventTeamMatch struct {
+	// Type is always TeamMatchType. Included here for marshalling.
+	Type MatchType `json:"type"`
+
+	Handle string `json:"handle"`
+	Email  string `json:"email"`
+
+	// The following are a subset of types.Team fields.
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+}
+
+func (e *EventTeamMatch) eventMatch() {}
+
 // EventFilter is a suggestion for a search filter. Currently has a 1-1
 // correspondance with the SearchFilter graphql type.
 type EventFilter struct {
-	Value    string `json:"value"`
-	Label    string `json:"label"`
-	Count    int    `json:"count"`
-	LimitHit bool   `json:"limitHit"`
-	Kind     string `json:"kind"`
+	Value      string `json:"value"`
+	Label      string `json:"label"`
+	Count      int    `json:"count"`
+	Exhaustive bool   `json:"exhaustive"`
+	Kind       string `json:"kind"`
 }
 
 // EventAlert is GQL.SearchAlert. It replaces when sent to match existing
@@ -212,6 +250,8 @@ const (
 	SymbolMatchType
 	CommitMatchType
 	PathMatchType
+	PersonMatchType
+	TeamMatchType
 )
 
 func (t MatchType) MarshalJSON() ([]byte, error) {
@@ -226,6 +266,10 @@ func (t MatchType) MarshalJSON() ([]byte, error) {
 		return []byte(`"commit"`), nil
 	case PathMatchType:
 		return []byte(`"path"`), nil
+	case PersonMatchType:
+		return []byte(`"person"`), nil
+	case TeamMatchType:
+		return []byte(`"team"`), nil
 	default:
 		return nil, errors.Errorf("unknown MatchType: %d", t)
 	}
@@ -242,6 +286,10 @@ func (t *MatchType) UnmarshalJSON(b []byte) error {
 		*t = CommitMatchType
 	} else if bytes.Equal(b, []byte(`"path"`)) {
 		*t = PathMatchType
+	} else if bytes.Equal(b, []byte(`"person"`)) {
+		*t = PersonMatchType
+	} else if bytes.Equal(b, []byte(`"team"`)) {
+		*t = TeamMatchType
 	} else {
 		return errors.Errorf("unknown MatchType: %s", b)
 	}

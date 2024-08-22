@@ -18,7 +18,6 @@ import (
 	"github.com/sourcegraph/zoekt"
 
 	"github.com/sourcegraph/sourcegraph/lib/errors"
-	"github.com/sourcegraph/sourcegraph/schema"
 )
 
 func TestHorizontalSearcher(t *testing.T) {
@@ -32,12 +31,12 @@ func TestHorizontalSearcher(t *testing.T) {
 			var rle zoekt.RepoListEntry
 			rle.Repository.Name = endpoint
 			rle.Repository.ID = uint32(repoID)
-			client := &FakeSearcher{
-				Result: &zoekt.SearchResult{
+			client := &FakeStreamer{
+				Results: []*zoekt.SearchResult{{
 					Files: []zoekt.FileMatch{{
 						Repository: endpoint,
 					}},
-				},
+				}},
 				Repos: []*zoekt.RepoListEntry{&rle},
 			}
 			// Return metered searcher to test that codepath
@@ -48,7 +47,7 @@ func TestHorizontalSearcher(t *testing.T) {
 
 	// Start up background goroutines which continuously hit the searcher
 	// methods to ensure we are safe under concurrency.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		cleanup := backgroundSearch(searcher)
 		defer cleanup(t)
 	}
@@ -108,12 +107,12 @@ func TestHorizontalSearcher(t *testing.T) {
 			t.Errorf("list mismatch (-want +got):\n%s", cmp.Diff(want, got))
 		}
 
-		rle, err = searcher.List(context.Background(), nil, &zoekt.ListOptions{Minimal: true})
+		rle, err = searcher.List(context.Background(), nil, &zoekt.ListOptions{Field: zoekt.RepoListFieldReposMap})
 		if err != nil {
 			t.Fatal(err)
 		}
 		got = []string{}
-		for r := range rle.Minimal { //nolint:staticcheck // See https://github.com/sourcegraph/sourcegraph/issues/45814
+		for r := range rle.ReposMap {
 			got = append(got, strconv.Itoa(int(r)))
 		}
 		sort.Strings(got)
@@ -125,6 +124,85 @@ func TestHorizontalSearcher(t *testing.T) {
 	searcher.Close()
 }
 
+func TestHorizontalSearcherWithFileRanks(t *testing.T) {
+	var endpoints atomicMap
+	endpoints.Store(prefixMap{})
+
+	searcher := &HorizontalSearcher{
+		Map: &endpoints,
+		Dial: func(endpoint string) zoekt.Streamer {
+			repoID, _ := strconv.Atoi(endpoint)
+			var rle zoekt.RepoListEntry
+			rle.Repository.Name = endpoint
+			rle.Repository.ID = uint32(repoID)
+			return &FakeStreamer{
+				Results: []*zoekt.SearchResult{{
+					Files: []zoekt.FileMatch{{
+						Score:      float64(repoID),
+						Repository: endpoint,
+					}},
+				}},
+				Repos: []*zoekt.RepoListEntry{&rle},
+			}
+		},
+	}
+	defer searcher.Close()
+
+	// Start up background goroutines which continuously hit the searcher
+	// methods to ensure we are safe under concurrency.
+	for range 5 {
+		cleanup := backgroundSearch(searcher)
+		defer cleanup(t)
+	}
+
+	// each map is the set of servers at a point in time. This is to mainly
+	// stress the management code.
+	maps := []prefixMap{
+		// Start with a normal config of two replicas
+		{"1", "2"},
+
+		// Add two
+		{"1", "2", "3", "4"},
+
+		// Lose two
+		{"2", "4"},
+
+		// Lose and add
+		{"1", "2"},
+
+		// Lose all
+		{},
+
+		// Lots
+		{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
+	}
+
+	opts := zoekt.SearchOptions{
+		UseDocumentRanks: true,
+		FlushWallTime:    100 * time.Millisecond,
+	}
+
+	for _, m := range maps {
+		t.Log("current", searcher.String(), "next", m)
+		endpoints.Store(m)
+
+		// Our search results should be one per server
+		sr, err := searcher.Search(context.Background(), nil, &opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, fm := range sr.Files {
+			got = append(got, fm.Repository)
+		}
+		sort.Strings(got)
+		want := []string(m)
+		if !cmp.Equal(want, got, cmpopts.EquateEmpty()) {
+			t.Errorf("search mismatch (-want +got):\n%s", cmp.Diff(want, got))
+		}
+	}
+}
+
 func TestDoStreamSearch(t *testing.T) {
 	var endpoints atomicMap
 	endpoints.Store(prefixMap{"1"})
@@ -132,7 +210,7 @@ func TestDoStreamSearch(t *testing.T) {
 	searcher := &HorizontalSearcher{
 		Map: &endpoints,
 		Dial: func(endpoint string) zoekt.Streamer {
-			client := &FakeSearcher{
+			client := &FakeStreamer{
 				SearchError: errors.Errorf("test error"),
 			}
 			// Return metered searcher to test that codepath
@@ -163,7 +241,7 @@ func TestSyncSearchers(t *testing.T) {
 	endpoints.Store(prefixMap{"a"})
 
 	type mock struct {
-		FakeSearcher
+		FakeStreamer
 		dialNum int
 	}
 
@@ -181,7 +259,7 @@ func TestSyncSearchers(t *testing.T) {
 
 	// First call initializes the list, second should use the fast-path so
 	// should have the same dialNum.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		t.Log("gen", i)
 		m, err := searcher.syncSearchers()
 		if err != nil {
@@ -203,7 +281,7 @@ func TestZoektRolloutErrors(t *testing.T) {
 	searcher := &HorizontalSearcher{
 		Map: &endpoints,
 		Dial: func(endpoint string) zoekt.Streamer {
-			var client *FakeSearcher
+			var client *FakeStreamer
 			switch endpoint {
 			case "dns-not-found":
 				err := &net.DNSError{
@@ -211,7 +289,7 @@ func TestZoektRolloutErrors(t *testing.T) {
 					Name:       "down",
 					IsNotFound: true,
 				}
-				client = &FakeSearcher{
+				client = &FakeStreamer{
 					SearchError: err,
 					ListError:   err,
 				}
@@ -223,7 +301,7 @@ func TestZoektRolloutErrors(t *testing.T) {
 					Addr: fakeAddr("10.164.42.39:6070"),
 					Err:  &timeoutError{},
 				}
-				client = &FakeSearcher{
+				client = &FakeStreamer{
 					SearchError: err,
 					ListError:   err,
 				}
@@ -235,7 +313,7 @@ func TestZoektRolloutErrors(t *testing.T) {
 					Addr: fakeAddr("10.164.51.47:6070"),
 					Err:  errors.New("connect: connection refused"),
 				}
-				client = &FakeSearcher{
+				client = &FakeStreamer{
 					SearchError: err,
 					ListError:   err,
 				}
@@ -249,7 +327,7 @@ func TestZoektRolloutErrors(t *testing.T) {
 						Err:     syscall.EINTR,
 					},
 				}
-				client = &FakeSearcher{
+				client = &FakeStreamer{
 					SearchError: err,
 					ListError:   err,
 				}
@@ -257,16 +335,16 @@ func TestZoektRolloutErrors(t *testing.T) {
 				var rle zoekt.RepoListEntry
 				rle.Repository.Name = "repo"
 
-				client = &FakeSearcher{
-					Result: &zoekt.SearchResult{
+				client = &FakeStreamer{
+					Results: []*zoekt.SearchResult{{
 						Files: []zoekt.FileMatch{{
 							Repository: "repo",
 						}},
-					},
+					}},
 					Repos: []*zoekt.RepoListEntry{&rle},
 				}
 			case "error":
-				client = &FakeSearcher{
+				client = &FakeStreamer{
 					SearchError: errors.New("boom"),
 					ListError:   errors.New("boom"),
 				}
@@ -311,85 +389,6 @@ func TestZoektRolloutErrors(t *testing.T) {
 	_, err = searcher.List(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("List: expected error")
-	}
-}
-
-func TestResultQueueSettingsFromConfig(t *testing.T) {
-	dummy := 100
-
-	cases := []struct {
-		name                   string
-		siteConfig             schema.SiteConfiguration
-		wantMaxQueueDepth      int
-		wantMaxReorderDuration time.Duration
-		wantMaxQueueMatchCount int
-		wantMaxSizeBytes       int
-	}{
-		{
-			name:                   "defaults",
-			siteConfig:             schema.SiteConfiguration{},
-			wantMaxQueueDepth:      24,
-			wantMaxQueueMatchCount: -1,
-			wantMaxSizeBytes:       -1,
-		},
-		{
-			name: "MaxReorderDurationMS",
-			siteConfig: schema.SiteConfiguration{ExperimentalFeatures: &schema.ExperimentalFeatures{Ranking: &schema.Ranking{
-				MaxReorderDurationMS: 5,
-			}}},
-			wantMaxQueueDepth:      24,
-			wantMaxReorderDuration: 5 * time.Millisecond,
-			wantMaxQueueMatchCount: -1,
-			wantMaxSizeBytes:       -1,
-		},
-		{
-			name: "MaxReorderQueueSize",
-			siteConfig: schema.SiteConfiguration{ExperimentalFeatures: &schema.ExperimentalFeatures{Ranking: &schema.Ranking{
-				MaxReorderQueueSize: &dummy}}},
-			wantMaxQueueDepth:      dummy,
-			wantMaxQueueMatchCount: -1,
-			wantMaxSizeBytes:       -1,
-		},
-		{
-			name: "MaxQueueMatchCount",
-			siteConfig: schema.SiteConfiguration{ExperimentalFeatures: &schema.ExperimentalFeatures{Ranking: &schema.Ranking{
-				MaxQueueMatchCount: &dummy,
-			}}},
-			wantMaxQueueDepth:      24,
-			wantMaxQueueMatchCount: dummy,
-			wantMaxSizeBytes:       -1,
-		},
-		{
-			name: "MaxSizeBytes",
-			siteConfig: schema.SiteConfiguration{ExperimentalFeatures: &schema.ExperimentalFeatures{Ranking: &schema.Ranking{
-				MaxQueueSizeBytes: &dummy,
-			}}},
-			wantMaxQueueDepth:      24,
-			wantMaxQueueMatchCount: -1,
-			wantMaxSizeBytes:       dummy,
-		},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			settings := newRankingSiteConfig(tt.siteConfig)
-
-			if settings.maxQueueDepth != tt.wantMaxQueueDepth {
-				t.Fatalf("want %d, got %d", tt.wantMaxQueueDepth, settings.maxQueueDepth)
-			}
-
-			if settings.maxReorderDuration != tt.wantMaxReorderDuration {
-				t.Fatalf("want %d, got %d", tt.wantMaxReorderDuration, settings.maxReorderDuration)
-			}
-
-			if settings.maxMatchCount != tt.wantMaxQueueMatchCount {
-				t.Fatalf("want %d, got %d", tt.wantMaxQueueMatchCount, settings.maxMatchCount)
-			}
-
-			if settings.maxSizeBytes != tt.wantMaxSizeBytes {
-				t.Fatalf("want %d, got %d", tt.wantMaxSizeBytes, settings.maxSizeBytes)
-			}
-		})
 	}
 }
 
@@ -497,7 +496,7 @@ func BenchmarkDedup(b *testing.B) {
 		shard := []zoekt.FileMatch{}
 		for i := stride; i <= nRepos; i += stride {
 			repo := fmt.Sprintf("repo-%d", i)
-			for j := 0; j < nMatchPerRepo; j++ {
+			for j := range nMatchPerRepo {
 				path := fmt.Sprintf("%d.go", j)
 				shard = append(shard, zoekt.FileMatch{
 					Repository: repo,
@@ -509,7 +508,7 @@ func BenchmarkDedup(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		// Create copy since we mutate the input in Deddup
 		b.StopTimer()
 		shards := make([][]zoekt.FileMatch, 0, len(shardsOrig))

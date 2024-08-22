@@ -10,7 +10,7 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
-	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -20,6 +20,7 @@ import (
 func TestDetectSearchType(t *testing.T) {
 	typeRegexp := "regexp"
 	typeLiteral := "literal"
+	typeLucky := "lucky"
 	testCases := []struct {
 		name        string
 		version     string
@@ -40,6 +41,8 @@ func TestDetectSearchType(t *testing.T) {
 		{"V2, override regex variant pattern type with single quotes", "V2", &typeLiteral, `patterntype:'regex'`, query.SearchTypeRegex},
 		{"V1, override literal pattern type", "V1", &typeRegexp, "patterntype:literal", query.SearchTypeLiteral},
 		{"V1, override literal pattern type, with case-insensitive query", "V1", &typeRegexp, "pAtTErNTypE:literal", query.SearchTypeLiteral},
+		{"V1, lucky pattern type should be mapped to standard", "V1", &typeLucky, "", query.SearchTypeStandard},
+		{"V1, lucky pattern type in query should be mapped to standard", "V1", nil, "patternType:lucky", query.SearchTypeStandard},
 	}
 
 	for _, test := range testCases {
@@ -67,9 +70,9 @@ func TestDetectSearchType(t *testing.T) {
 			patternType: &typeInvalid,
 			errorString: `unrecognized patternType "invalid"`,
 		}, {
-			version:     "V4",
+			version:     "V99",
 			patternType: nil,
-			errorString: "unrecognized version: want \"V1\", \"V2\", or \"V3\", got \"V4\"",
+			errorString: "unrecognized version: want \"V1\", \"V2\", or \"V3\", got \"V99\"",
 		}}
 
 		for _, tc := range cases {
@@ -154,21 +157,21 @@ func TestSanitizeSearchPatterns(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			conf.DefaultClient().Mock(tc.conf)
 
-			mockUserStore := database.NewMockUserStore()
+			mockUserStore := dbmocks.NewMockUserStore()
 			if tc.userDBError {
 				mockUserStore.GetByIDFunc.SetDefaultReturn(nil, errors.New("test error"))
 			} else {
 				mockUserStore.GetByIDFunc.SetDefaultReturn(tc.user, nil)
 			}
 
-			mockOrgStore := database.NewMockOrgStore()
+			mockOrgStore := dbmocks.NewMockOrgStore()
 			if tc.orgDBError {
 				mockOrgStore.GetByUserIDFunc.SetDefaultReturn(nil, errors.New("test error"))
 			} else {
 				mockOrgStore.GetByUserIDFunc.SetDefaultReturn(tc.userOrgs, nil)
 			}
 
-			mockDB := database.NewMockDB()
+			mockDB := dbmocks.NewMockDB()
 			mockDB.UsersFunc.SetDefaultReturn(mockUserStore)
 			mockDB.OrgsFunc.SetDefaultReturn(mockOrgStore)
 

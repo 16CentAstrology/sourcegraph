@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -8,30 +9,34 @@ import (
 	gcontext "github.com/gorilla/context"
 	"github.com/gorilla/mux"
 	"github.com/graph-gophers/graphql-go"
+	"google.golang.org/grpc"
 
 	"github.com/sourcegraph/log"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/auth"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/enterprise"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/hooks"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app/assetsutil"
-	internalauth "github.com/sourcegraph/sourcegraph/cmd/frontend/internal/auth"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/auth/ipallowlist"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/auth/session"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/authz"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/cli/middleware"
-	internalhttpapi "github.com/sourcegraph/sourcegraph/cmd/frontend/internal/httpapi"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/httpapi/router"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/session"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/httpapi"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
+	internalauth "github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/deviceid"
+	"github.com/sourcegraph/sourcegraph/internal/dotcom"
 	"github.com/sourcegraph/sourcegraph/internal/featureflag"
 	"github.com/sourcegraph/sourcegraph/internal/instrumentation"
 	"github.com/sourcegraph/sourcegraph/internal/requestclient"
+	"github.com/sourcegraph/sourcegraph/internal/requestinteraction"
+	"github.com/sourcegraph/sourcegraph/internal/tenant"
 	tracepkg "github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/version"
+	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 // newExternalHTTPHandler creates and returns the HTTP handler that serves the app and API pages to
@@ -40,59 +45,59 @@ func newExternalHTTPHandler(
 	db database.DB,
 	schema *graphql.Schema,
 	rateLimitWatcher graphqlbackend.LimitWatcher,
-	handlers *internalhttpapi.Handlers,
+	handlers *httpapi.Handlers,
 	newExecutorProxyHandler enterprise.NewExecutorProxyHandler,
-	newGitHubAppSetupHandler enterprise.NewGitHubAppSetupHandler,
-) http.Handler {
-	logger := log.Scoped("external", "external http handlers")
+) (http.Handler, error) {
+	logger := log.Scoped("external")
+
+	ipAllowlistMiddleware := ipallowlist.New(logger)
 
 	// Each auth middleware determines on a per-request basis whether it should be enabled (if not, it
 	// immediately delegates the request to the next middleware in the chain).
 	authMiddlewares := auth.AuthMiddleware()
 
 	// HTTP API handler, the call order of middleware is LIFO.
-	r := router.New(mux.NewRouter().PathPrefix("/.api/").Subrouter())
-	apiHandler := internalhttpapi.NewHandler(db, r, schema, rateLimitWatcher, handlers)
-	if hooks.PostAuthMiddleware != nil {
-		// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
-		apiHandler = hooks.PostAuthMiddleware(apiHandler)
+	apiHandler, err := httpapi.NewHandler(db, schema, rateLimitWatcher, handlers)
+	if err != nil {
+		return nil, errors.Errorf("create external HTTP API handler: %v", err)
 	}
+	// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
+	apiHandler = authz.PostAuthMiddleware(logger, db, apiHandler)
 	apiHandler = featureflag.Middleware(db.FeatureFlags(), apiHandler)
 	apiHandler = actor.AnonymousUIDMiddleware(apiHandler)
 	apiHandler = authMiddlewares.API(apiHandler) // 🚨 SECURITY: auth middleware
 	// 🚨 SECURITY: The HTTP API should not accept cookies as authentication, except from trusted
 	// origins, to avoid CSRF attacks. See session.CookieMiddlewareWithCSRFSafety for details.
 	apiHandler = session.CookieMiddlewareWithCSRFSafety(logger, db, apiHandler, corsAllowHeader, isTrustedOrigin) // API accepts cookies with special header
-	apiHandler = internalhttpapi.AccessTokenAuthMiddleware(db, logger, apiHandler)                                // API accepts access tokens
-	apiHandler = requestclient.HTTPMiddleware(apiHandler)
+	apiHandler = httpapi.AccessTokenAuthMiddleware(db, logger, apiHandler)                                        // API accepts access tokens
+	apiHandler = requestclient.ExternalHTTPMiddleware(apiHandler)
+	apiHandler = requestinteraction.HTTPMiddleware(apiHandler)
 	apiHandler = gziphandler.GzipHandler(apiHandler)
-	if envvar.SourcegraphDotComMode() {
+	if dotcom.SourcegraphDotComMode() {
 		apiHandler = deviceid.Middleware(apiHandler)
 	}
 
 	// 🚨 SECURITY: This handler implements its own token auth inside enterprise
 	executorProxyHandler := newExecutorProxyHandler()
 
-	githubAppSetupHandler := newGitHubAppSetupHandler()
-
 	// App handler (HTML pages), the call order of middleware is LIFO.
-	appHandler := app.NewHandler(db, logger, githubAppSetupHandler)
-	if hooks.PostAuthMiddleware != nil {
-		// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
-		appHandler = hooks.PostAuthMiddleware(appHandler)
-	}
+	appHandler := app.NewHandler(db, logger)
+	// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
+	appHandler = authz.PostAuthMiddleware(logger, db, appHandler)
 	appHandler = featureflag.Middleware(db.FeatureFlags(), appHandler)
 	appHandler = actor.AnonymousUIDMiddleware(appHandler)
 	appHandler = authMiddlewares.App(appHandler) // 🚨 SECURITY: auth middleware
 	appHandler = middleware.OpenGraphMetadataMiddleware(db.FeatureFlags(), appHandler)
-	appHandler = session.CookieMiddleware(logger, db, appHandler)                  // app accepts cookies
-	appHandler = internalhttpapi.AccessTokenAuthMiddleware(db, logger, appHandler) // app accepts access tokens
-	appHandler = requestclient.HTTPMiddleware(appHandler)
-	if envvar.SourcegraphDotComMode() {
+	appHandler = session.CookieMiddleware(logger, db, appHandler)          // app accepts cookies
+	appHandler = httpapi.AccessTokenAuthMiddleware(db, logger, appHandler) // app accepts access tokens
+	appHandler = requestclient.ExternalHTTPMiddleware(appHandler)
+	appHandler = requestinteraction.HTTPMiddleware(appHandler)
+	if dotcom.SourcegraphDotComMode() {
 		appHandler = deviceid.Middleware(appHandler)
 	}
 	// Mount handlers and assets.
 	sm := http.NewServeMux()
+
 	sm.Handle("/.api/", secureHeadersMiddleware(apiHandler, crossOriginPolicyAPI))
 	sm.Handle("/.executors/", secureHeadersMiddleware(executorProxyHandler, crossOriginPolicyNever))
 	sm.Handle("/", secureHeadersMiddleware(appHandler, crossOriginPolicyNever))
@@ -113,10 +118,18 @@ func newExternalHTTPHandler(
 	h = middleware.BlackHole(h)
 	h = middleware.SourcegraphComGoGetHandler(h)
 	h = internalauth.ForbidAllRequestsMiddleware(h)
-	h = tracepkg.HTTPMiddleware(logger, h, conf.DefaultClient())
+	h = tracepkg.HTTPMiddleware(logger, h)
 	h = instrumentation.HTTPMiddleware("external", h)
+	// 🚨 SECURITY: The tenant middleware must be the second to run to avoid handling
+	// requests in other middlewares without a tenant.
+	h = tenant.ExternalTenantFromHostnameMiddleware(tenant.TenantHostnameMapper(func(ctx context.Context, host string) (int, error) {
+		// TODO: For now, we hard-code all tenants to be tenant 1 to avoid any disruptions.
+		return 1, nil
+	}), h)
+	// 🚨 SECURITY: ip allowlist must be the first middleware to run to avoid doing unnecessary things
+	h = ipAllowlistMiddleware.Handle(h)
 
-	return h
+	return h, nil
 }
 
 func healthCheckMiddleware(next http.Handler) http.Handler {
@@ -135,32 +148,43 @@ func healthCheckMiddleware(next http.Handler) http.Handler {
 func newInternalHTTPHandler(
 	schema *graphql.Schema,
 	db database.DB,
+	grpcServer *grpc.Server,
 	newCodeIntelUploadHandler enterprise.NewCodeIntelUploadHandler,
 	rankingService enterprise.RankingService,
 	newComputeStreamHandler enterprise.NewComputeStreamHandler,
 	rateLimitWatcher graphqlbackend.LimitWatcher,
 ) http.Handler {
 	internalMux := http.NewServeMux()
-	logger := log.Scoped("internal", "internal http handlers")
+	logger := log.Scoped("internal")
+
+	internalRouter := mux.NewRouter().PathPrefix("/.internal/").Subrouter()
+	httpapi.RegisterInternalServices(
+		internalRouter,
+		grpcServer,
+		db,
+		schema,
+		newCodeIntelUploadHandler,
+		rankingService,
+		newComputeStreamHandler,
+		rateLimitWatcher,
+	)
+
 	internalMux.Handle("/.internal/", gziphandler.GzipHandler(
-		actor.HTTPMiddleware(
+		tenant.InternalHTTPMiddleware(
 			logger,
-			featureflag.Middleware(db.FeatureFlags(),
-				internalhttpapi.NewInternalHandler(
-					router.NewInternal(mux.NewRouter().PathPrefix("/.internal/").Subrouter()),
-					db,
-					schema,
-					newCodeIntelUploadHandler,
-					rankingService,
-					newComputeStreamHandler,
-					rateLimitWatcher,
+			actor.HTTPMiddleware(
+				logger,
+				featureflag.Middleware(
+					db.FeatureFlags(),
+					internalRouter,
 				),
 			),
 		),
 	))
+
 	h := http.Handler(internalMux)
 	h = gcontext.ClearHandler(h)
-	h = tracepkg.HTTPMiddleware(logger, h, conf.DefaultClient())
+	h = tracepkg.HTTPMiddleware(logger, h)
 	h = instrumentation.HTTPMiddleware("internal", h)
 	return h
 }
@@ -260,7 +284,7 @@ func handleCORSRequest(w http.ResponseWriter, r *http.Request, policy crossOrigi
 	// we do not write ANY Access-Control-Allow-* CORS headers, which triggers the browser's default
 	// (and strict) behavior of not allowing cross-origin requests.
 	//
-	// We allow cross-origin requests for assets in the `./ui/assets/extension` folder because they
+	// We allow cross-origin requests for assets in the `./client/web/dist/extension` folder because they
 	// are required for the native Phabricator extension.
 	if policy == crossOriginPolicyAssets && !strings.HasPrefix(r.URL.Path, "/extension/") {
 		return false

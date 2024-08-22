@@ -28,7 +28,7 @@ func newStoreShim[T workerutil.Record](store store.Store[T]) workerutil.Store[T]
 
 // QueuedCount calls into the inner store.
 func (s *storeShim[T]) QueuedCount(ctx context.Context) (int, error) {
-	return s.Store.QueuedCount(ctx, false)
+	return s.Store.CountByState(ctx, store.StateQueued|store.StateErrored)
 }
 
 // Dequeue calls into the inner store.
@@ -41,28 +41,20 @@ func (s *storeShim[T]) Dequeue(ctx context.Context, workerHostname string, extra
 	return s.Store.Dequeue(ctx, workerHostname, conditions)
 }
 
-func (s *storeShim[T]) Heartbeat(ctx context.Context, ids []int) (knownIDs, cancelIDs []int, err error) {
+func (s *storeShim[T]) Heartbeat(ctx context.Context, ids []string) (knownIDs, cancelIDs []string, err error) {
 	return s.Store.Heartbeat(ctx, ids, store.HeartbeatOptions{})
 }
 
-func (s *storeShim[T]) AddExecutionLogEntry(ctx context.Context, id int, entry workerutil.ExecutionLogEntry) (entryID int, err error) {
-	return s.Store.AddExecutionLogEntry(ctx, id, entry, store.ExecutionLogEntryOptions{})
+func (s *storeShim[T]) MarkComplete(ctx context.Context, rec T) (bool, error) {
+	return s.Store.MarkComplete(ctx, rec.RecordID(), store.MarkFinalOptions{})
 }
 
-func (s *storeShim[T]) UpdateExecutionLogEntry(ctx context.Context, recordID, entryID int, entry workerutil.ExecutionLogEntry) error {
-	return s.Store.UpdateExecutionLogEntry(ctx, recordID, entryID, entry, store.ExecutionLogEntryOptions{})
+func (s *storeShim[T]) MarkFailed(ctx context.Context, rec T, failureMessage string) (bool, error) {
+	return s.Store.MarkFailed(ctx, rec.RecordID(), failureMessage, store.MarkFinalOptions{})
 }
 
-func (s *storeShim[T]) MarkComplete(ctx context.Context, id int) (bool, error) {
-	return s.Store.MarkComplete(ctx, id, store.MarkFinalOptions{})
-}
-
-func (s *storeShim[T]) MarkFailed(ctx context.Context, id int, failureMessage string) (bool, error) {
-	return s.Store.MarkFailed(ctx, id, failureMessage, store.MarkFinalOptions{})
-}
-
-func (s *storeShim[T]) MarkErrored(ctx context.Context, id int, errorMessage string) (bool, error) {
-	return s.Store.MarkErrored(ctx, id, errorMessage, store.MarkFinalOptions{})
+func (s *storeShim[T]) MarkErrored(ctx context.Context, rec T, errorMessage string) (bool, error) {
+	return s.Store.MarkErrored(ctx, rec.RecordID(), errorMessage, store.MarkFinalOptions{})
 }
 
 // ErrNotConditions occurs when a PreDequeue handler returns non-sql query extra arguments.

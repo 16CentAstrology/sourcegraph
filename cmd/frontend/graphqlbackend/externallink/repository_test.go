@@ -5,14 +5,13 @@ import (
 	"reflect"
 	"testing"
 
-	mockrequire "github.com/derision-test/go-mockgen/testutil/require"
+	mockrequire "github.com/derision-test/go-mockgen/v2/testutil/require"
 
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab"
-	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
@@ -32,15 +31,13 @@ func TestRepository(t *testing.T) {
 			},
 		}
 
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultReturn(nil, errors.New("x"))
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := Repository(context.Background(), db, repo)
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, repo, "")
+		links := linker.Repository()
 		if want := []*Resolver{
 			{
 				url:         "http://github.com/foo/bar",
@@ -54,20 +51,18 @@ func TestRepository(t *testing.T) {
 	})
 
 	t.Run("phabricator", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultHook(func(_ context.Context, repo api.RepoName) (*types.PhabricatorRepo, error) {
 			if want := api.RepoName("myrepo"); repo != want {
 				t.Errorf("got %q, want %q", repo, want)
 			}
 			return &types.PhabricatorRepo{URL: "http://phabricator.example.com/", Callsign: "MYREPO"}, nil
 		})
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := Repository(context.Background(), db, &types.Repo{Name: "myrepo"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, &types.Repo{Name: "myrepo"}, "")
+		links := linker.Repository()
 		if want := []*Resolver{
 			{
 				url:         "http://phabricator.example.com/diffusion/MYREPO",
@@ -81,15 +76,13 @@ func TestRepository(t *testing.T) {
 	})
 
 	t.Run("errors", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultReturn(nil, errors.New("x"))
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := Repository(context.Background(), db, &types.Repo{Name: "myrepo"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, &types.Repo{Name: "myrepo"}, "")
+		links := linker.Repository()
 		if want := []*Resolver(nil); !reflect.DeepEqual(links, want) {
 			t.Errorf("got %+v, want %+v", links, want)
 		}
@@ -131,15 +124,13 @@ func TestFileOrDir(t *testing.T) {
 		}
 
 		t.Run(which, func(t *testing.T) {
-			phabricator := database.NewMockPhabricatorStore()
+			phabricator := dbmocks.NewMockPhabricatorStore()
 			phabricator.GetByNameFunc.SetDefaultReturn(nil, errors.New("x"))
-			db := database.NewMockDB()
+			db := dbmocks.NewMockDB()
 			db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-			links, err := FileOrDir(context.Background(), db, gitserver.NewClient(db), repo, rev, path, isDir)
-			if err != nil {
-				t.Fatal(err)
-			}
+			linker := NewRepositoryLinker(context.Background(), db, repo, "")
+			links := linker.FileOrDir(rev, path, isDir)
 			if want := []*Resolver{
 				{
 					url:         wantURL,
@@ -154,23 +145,18 @@ func TestFileOrDir(t *testing.T) {
 	}
 
 	t.Run("phabricator", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultHook(func(_ context.Context, repo api.RepoName) (*types.PhabricatorRepo, error) {
 			if want := api.RepoName("myrepo"); repo != want {
 				t.Errorf("got %q, want %q", repo, want)
 			}
 			return &types.PhabricatorRepo{URL: "http://phabricator.example.com/", Callsign: "MYREPO"}, nil
 		})
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		gsClient := gitserver.NewMockClient()
-		gsClient.GetDefaultBranchFunc.SetDefaultReturn("mybranch", "", nil)
-
-		links, err := FileOrDir(context.Background(), db, gsClient, &types.Repo{Name: "myrepo"}, rev, path, true)
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, &types.Repo{Name: "myrepo"}, "mybranch")
+		links := linker.FileOrDir(rev, path, true)
 		if want := []*Resolver{
 			{
 				url:         "http://phabricator.example.com/source/MYREPO/browse/mybranch/mydir/myfile;myrev",
@@ -184,15 +170,13 @@ func TestFileOrDir(t *testing.T) {
 	})
 
 	t.Run("errors", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultReturn(nil, errors.New("x"))
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := FileOrDir(context.Background(), db, gitserver.NewClient(db), &types.Repo{Name: "myrepo"}, rev, path, true)
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, &types.Repo{Name: "myrepo"}, "")
+		links := linker.FileOrDir(rev, path, true)
 		if want := []*Resolver(nil); !reflect.DeepEqual(links, want) {
 			t.Errorf("got %+v, want %+v", links, want)
 		}
@@ -215,15 +199,13 @@ func TestCommit(t *testing.T) {
 	}
 
 	t.Run("repo", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultReturn(nil, errors.New("x"))
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := Commit(context.Background(), db, repo, commit)
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, repo, "")
+		links := linker.Commit(commit)
 		if want := []*Resolver{
 			{
 				url:         "http://github.com/foo/bar/commit/mycommit",
@@ -237,20 +219,18 @@ func TestCommit(t *testing.T) {
 	})
 
 	t.Run("phabricator", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultHook(func(_ context.Context, repo api.RepoName) (*types.PhabricatorRepo, error) {
 			if want := api.RepoName("myrepo"); repo != want {
 				t.Errorf("got %q, want %q", repo, want)
 			}
 			return &types.PhabricatorRepo{URL: "http://phabricator.example.com/", Callsign: "MYREPO"}, nil
 		})
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := Commit(context.Background(), db, &types.Repo{Name: "myrepo"}, commit)
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, &types.Repo{Name: "myrepo"}, "")
+		links := linker.Commit(commit)
 		if want := []*Resolver{
 			{
 				url:         "http://phabricator.example.com/rMYREPOmycommit",
@@ -264,15 +244,13 @@ func TestCommit(t *testing.T) {
 	})
 
 	t.Run("errors", func(t *testing.T) {
-		phabricator := database.NewMockPhabricatorStore()
+		phabricator := dbmocks.NewMockPhabricatorStore()
 		phabricator.GetByNameFunc.SetDefaultReturn(nil, errors.New("x"))
-		db := database.NewMockDB()
+		db := dbmocks.NewMockDB()
 		db.PhabricatorFunc.SetDefaultReturn(phabricator)
 
-		links, err := Commit(context.Background(), db, &types.Repo{Name: "myrepo"}, commit)
-		if err != nil {
-			t.Fatal(err)
-		}
+		linker := NewRepositoryLinker(context.Background(), db, &types.Repo{Name: "myrepo"}, "")
+		links := linker.Commit(commit)
 		if want := []*Resolver(nil); !reflect.DeepEqual(links, want) {
 			t.Errorf("got %+v, want %+v", links, want)
 		}

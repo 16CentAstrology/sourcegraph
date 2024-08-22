@@ -10,6 +10,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 	"github.com/sourcegraph/sourcegraph/internal/oobmigration"
+	"github.com/sourcegraph/sourcegraph/internal/version/upgradestore"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
@@ -40,8 +41,8 @@ func (m *migrator) Routines(startupCtx context.Context, observationCtx *observat
 
 	outOfBandMigrationRunner := oobmigration.NewRunnerWithDB(observationCtx, db, oobmigration.RefreshInterval)
 
-	if outOfBandMigrationRunner.SynchronizeMetadata(startupCtx); err != nil {
-		return nil, errors.Wrap(err, "failed to synchronized out of band migration metadata")
+	if err := outOfBandMigrationRunner.SynchronizeMetadata(startupCtx); err != nil {
+		return nil, errors.Wrap(err, "failed to synchronize out of band migration metadata")
 	}
 
 	if err := m.registerMigrators(startupCtx, db, outOfBandMigrationRunner); err != nil {
@@ -56,7 +57,36 @@ func (m *migrator) Routines(startupCtx context.Context, observationCtx *observat
 		}
 	}
 
+	currentVersion, err := currentVersion(observationCtx.Logger)
+	if err != nil {
+		return nil, err
+	}
+
+	firstVersionString, _, err := upgradestore.New(db).GetFirstServiceVersion(startupCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	firstVersion, ok := oobmigration.NewVersionFromString(firstVersionString)
+	if !ok {
+		return nil, err
+	}
+
 	return []goroutine.BackgroundRoutine{
-		outOfBandMigrationRunner,
+		&outOfBandMigrationRunnerWrapper{
+			Runner:         outOfBandMigrationRunner,
+			currentVersion: currentVersion,
+			firstVersion:   firstVersion,
+		},
 	}, nil
+}
+
+type outOfBandMigrationRunnerWrapper struct {
+	*oobmigration.Runner
+	currentVersion oobmigration.Version
+	firstVersion   oobmigration.Version
+}
+
+func (w *outOfBandMigrationRunnerWrapper) Start() {
+	w.Runner.Start(w.currentVersion, w.firstVersion)
 }

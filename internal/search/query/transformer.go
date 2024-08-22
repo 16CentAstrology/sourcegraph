@@ -1,10 +1,10 @@
 package query
 
 import (
+	"strconv"
 	"strings"
 
-	"github.com/grafana/regexp"
-
+	"github.com/sourcegraph/sourcegraph/internal/search/result"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
@@ -14,12 +14,12 @@ func SubstituteAliases(searchType SearchType) func(nodes []Node) []Node {
 	mapper := func(nodes []Node) []Node {
 		return MapParameter(nodes, func(field, value string, negated bool, annotation Annotation) Node {
 			if field == "content" {
-				if searchType == SearchTypeRegex {
+				if searchType == SearchTypeRegex && !annotation.Labels.IsSet(Quoted) {
 					annotation.Labels.Set(Regexp)
 				} else {
 					annotation.Labels.Set(Literal)
 				}
-				annotation.Labels.Set(IsAlias)
+				annotation.Labels.Set(IsContent)
 				return Pattern{Value: value, Negated: negated, Annotation: annotation}
 			}
 			if canonical, ok := aliases[field]; ok {
@@ -39,11 +39,16 @@ func LowercaseFieldNames(nodes []Node) []Node {
 	})
 }
 
+const CountAllLimit = 99999999
+
+var countAllLimitStr = strconv.Itoa(CountAllLimit)
+
 // SubstituteCountAll replaces count:all with count:99999999.
 func SubstituteCountAll(nodes []Node) []Node {
 	return MapParameter(nodes, func(field, value string, negated bool, annotation Annotation) Node {
 		if field == FieldCount && strings.ToLower(value) == "all" {
-			return Parameter{Field: field, Value: "99999999", Negated: negated, Annotation: annotation}
+			c := countAllLimitStr
+			return Parameter{Field: field, Value: c, Negated: negated, Annotation: annotation}
 		}
 		return Parameter{Field: field, Value: value, Negated: negated, Annotation: annotation}
 	})
@@ -78,8 +83,8 @@ func naturallyOrdered(node Node, reverse bool) bool {
 	// (like post-order DFS).
 	rightmostParameterPos := 0
 	rightmostPatternPos := 0
-	leftmostParameterPos := (1 << 30)
-	leftmostPatternPos := (1 << 30)
+	leftmostParameterPos := 1 << 30
+	leftmostPatternPos := 1 << 30
 	v := &Visitor{
 		Parameter: func(_, _ string, _ bool, a Annotation) {
 			if a.Range.Start.Column > rightmostParameterPos {
@@ -152,6 +157,15 @@ func Hoist(nodes []Node) ([]Node, error) {
 	var scopeParameters []Parameter
 	for i, node := range expression.Operands {
 		if i == 0 {
+			// Handles the case "(and parameter expression)"
+			if parameter, ok := node.(Parameter); ok && expression.Kind == And {
+				hoisted, err := Hoist(NewOperator(expression.Operands[1:], expression.Kind))
+				if err != nil {
+					return nil, err
+				}
+				return append([]Node{parameter}, hoisted...), nil
+			}
+
 			scopePart, patternPart, err := PartitionSearchPattern([]Node{node})
 			if err != nil || patternPart == nil {
 				return nil, errors.New("could not partition first expression")
@@ -185,19 +199,6 @@ func Hoist(nodes []Node) ([]Node, error) {
 		return Pattern{Value: value, Negated: negated, Annotation: annotation}
 	})
 	return append(toNodes(scopeParameters), NewOperator(pattern, expression.Kind)...), nil
-}
-
-// partition partitions nodes into left and right groups. A node is put in the
-// left group if fn evaluates to true, or in the right group if fn evaluates to false.
-func partition(nodes []Node, fn func(node Node) bool) (left, right []Node) {
-	for _, node := range nodes {
-		if fn(node) {
-			left = append(left, node)
-		} else {
-			right = append(right, node)
-		}
-	}
-	return left, right
 }
 
 // distribute applies the distributed property to the parameters of basic
@@ -293,39 +294,6 @@ func BuildPlan(query []Node) Plan {
 	return distribute([]Basic{}, query)
 }
 
-func substituteOrForRegexp(nodes []Node) []Node {
-	isPattern := func(node Node) bool {
-		if pattern, ok := node.(Pattern); ok && !pattern.Negated {
-			return true
-		}
-		return false
-	}
-	newNode := []Node{}
-	for _, node := range nodes {
-		switch v := node.(type) {
-		case Operator:
-			if v.Kind == Or {
-				patterns, rest := partition(v.Operands, isPattern)
-				var values []string
-				for _, node := range patterns {
-					values = append(values, node.(Pattern).Value)
-				}
-				valueString := "(?:" + strings.Join(values, ")|(?:") + ")"
-				newNode = append(newNode, Pattern{Value: valueString})
-				if len(rest) > 0 {
-					rest = substituteOrForRegexp(rest)
-					newNode = NewOperator(append(newNode, rest...), Or)
-				}
-			} else {
-				newNode = append(newNode, NewOperator(substituteOrForRegexp(v.Operands), v.Kind)...)
-			}
-		case Parameter, Pattern:
-			newNode = append(newNode, node)
-		}
-	}
-	return newNode
-}
-
 // fuzzyRegexp interpolates patterns with .*? regular expressions and
 // concatenates them. Invariant: len(patterns) > 0.
 func fuzzyRegexp(patterns []Pattern) []Node {
@@ -334,11 +302,7 @@ func fuzzyRegexp(patterns []Pattern) []Node {
 	}
 	var values []string
 	for _, p := range patterns {
-		if p.Annotation.Labels.IsSet(Literal) {
-			values = append(values, regexp.QuoteMeta(p.Value))
-		} else {
-			values = append(values, p.Value)
-		}
+		values = append(values, p.RegExpPattern())
 	}
 	return []Node{
 		Pattern{
@@ -350,7 +314,7 @@ func fuzzyRegexp(patterns []Pattern) []Node {
 
 // standard reduces a sequence of Patterns such that:
 //
-// - adjacent literal patterns are concattenated with space. I.e., contiguous
+// - adjacent literal patterns are concatenated with space. I.e., contiguous
 // literal patterns are joined on space to create one literal pattern.
 //
 // - any patterns adjacent to regular expression patterns are AND-ed.
@@ -416,6 +380,11 @@ func space(patterns []Pattern) []Node {
 	}
 }
 
+// and concatenates patterns with AND.
+func and(patterns []Node) []Node {
+	return NewOperator(patterns, And)
+}
+
 // substituteConcat returns a function that concatenates all contiguous patterns
 // in the tree, rooted by a concat operator. Concat operators containing negated
 // patterns are lifted out: (concat "a" (not "b")) -> ("a" (not "b"))
@@ -472,6 +441,50 @@ func substituteConcat(callback func([]Pattern) []Node) func([]Node) []Node {
 	return substituteNodes
 }
 
+// substituteConcatForKeyword returns a function that replaces concat with the
+// result of callback. Unlike substituteConcat, this function allows "OR" and
+// "AND" operators to be nested inside "CONCAT".
+func substituteConcatForKeyword(callback func([]Node) []Node) func([]Node) []Node {
+	isPattern := func(node Node) bool {
+		if pattern, ok := node.(Pattern); ok && !pattern.Negated {
+			return true
+		}
+		return false
+	}
+
+	// define a recursive function to close over callback and isPattern.
+	var substituteNodes func(nodes []Node) []Node
+	substituteNodes = func(nodes []Node) []Node {
+		var newNode []Node
+		for _, node := range nodes {
+			switch v := node.(type) {
+			case Parameter, Pattern:
+				newNode = append(newNode, node)
+			case Operator:
+				if v.Kind == Concat {
+					// Merge consecutive patterns.
+					var ps []Node
+					for _, node := range v.Operands {
+						if isPattern(node) {
+							ps = append(ps, node)
+							continue
+						} else {
+							ps = append(ps, substituteNodes([]Node{node})...)
+						}
+					}
+					if len(ps) > 0 {
+						newNode = append(newNode, callback(ps)...)
+					}
+				} else {
+					newNode = append(newNode, NewOperator(substituteNodes(v.Operands), v.Kind)...)
+				}
+			}
+		}
+		return newNode
+	}
+	return substituteNodes
+}
+
 // escapeParens is a heuristic used in the context of regular expression search.
 // It escapes two kinds of patterns:
 //
@@ -489,7 +502,7 @@ func substituteConcat(callback func([]Pattern) []Node) func([]Node) []Node {
 // validate function.
 func escapeParens(s string) string {
 	var i int
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == '(' || s[i] == '\\' {
 			break
 		}
@@ -556,22 +569,34 @@ func Map(query []Node, fns ...func([]Node) []Node) []Node {
 	return query
 }
 
-// concatRevFilters removes rev: filters from parameters and attaches their value as @rev to the repo: filters.
-// Invariant: Guaranteed to succeed on a validat Basic query.
+// ConcatRevFilters removes rev: filters from parameters and attaches their value as @rev to the repo: filters.
+// Invariant: Guaranteed to succeed on a validated Basic query.
 func ConcatRevFilters(b Basic) Basic {
+	// Extract the revision string
 	var revision string
-	nodes := MapField(toNodes(b.Parameters), FieldRev, func(value string, _ bool, _ Annotation) Node {
-		revision = value
-		return nil // remove this node
+	VisitField(toNodes(b.Parameters), FieldRev, func(value string, _ bool, ann Annotation) {
+		if !ann.Labels.IsSet(IsPredicate) {
+			revision = value
+		}
+	})
+	VisitTypedPredicate(toNodes(b.Parameters), func(pred *RevAtTimePredicate) {
+		revision = pred.String()
 	})
 	if revision == "" {
 		return b
 	}
-	modified := MapField(nodes, FieldRepo, func(value string, negated bool, _ Annotation) Node {
-		if !negated {
-			return Parameter{Value: value + "@" + revision, Field: FieldRepo, Negated: negated}
+
+	// Remove any rev: fields
+	nodes := MapField(toNodes(b.Parameters), FieldRev, func(value string, negated bool, ann Annotation) Node {
+		return nil
+	})
+
+	// Add rev to any repo: fields
+	modified := MapField(nodes, FieldRepo, func(value string, negated bool, ann Annotation) Node {
+		if !negated && !ann.Labels.IsSet(IsPredicate) {
+			return Parameter{Value: value + "@" + revision, Field: FieldRepo, Negated: negated, Annotation: ann}
 		}
-		return Parameter{Value: value, Field: FieldRepo, Negated: negated}
+		return Parameter{Value: value, Field: FieldRepo, Negated: negated, Annotation: ann}
 	})
 	return Basic{Parameters: toParameters(modified), Pattern: b.Pattern}
 }
@@ -610,8 +635,8 @@ func OmitField(q Q, field string) string {
 	}))
 }
 
-// addRegexpField adds a new expr to the query with the given field and pattern
-// value. The nonnegated field is assumed to associate with a regexp value. The
+// AddRegexpField adds a new expr to the query with the given field and pattern
+// value. The non-negated field is assumed to correspond to a regexp value. The
 // pattern value is assumed to be unquoted.
 //
 // It tries to remove redundancy in the result. For example, given
@@ -640,11 +665,75 @@ func AddRegexpField(q Q, field, pattern string) string {
 	return StringHuman(q)
 }
 
-// Converts a parse tree to a basic query by attempting to obtain a valid partition.
+// ToBasicQuery converts a parse tree to a basic query by attempting to obtain a valid partition.
 func ToBasicQuery(nodes []Node) (Basic, error) {
 	parameters, pattern, err := PartitionSearchPattern(nodes)
 	if err != nil {
 		return Basic{}, err
 	}
 	return Basic{Parameters: parameters, Pattern: pattern}, nil
+}
+
+// ExperimentalPhraseBoost is transformation on basic queries that appends a
+// phrase query to the original query but only if the original query consists of
+// a single top-level AND expression. The purpose is to improve ranking of exact
+// matches by adding a phrase query for the entire query string.
+//
+// Example:
+//
+//	foo bar bas -> (or (and foo bar bas) ("foo bar bas"))
+func ExperimentalPhraseBoost(originalQuery string, basic Basic) Basic {
+	if basic.Pattern == nil {
+		return basic
+	}
+
+	// Only apply the ranking boost for text searches. The other search backends
+	// (for example repo or diff search) cannot handle it effectively.
+	for _, param := range basic.Parameters {
+		if param.Field == FieldType && !(param.Value == result.TypeFile.String() || param.Value == result.TypePath.String()) {
+			return basic
+		}
+	}
+
+	// Check if the pattern is a single top-level AND expression with no negated or regexp clauses.
+	switch p := basic.Pattern.(type) {
+	case Pattern:
+		if !p.Annotation.Labels.IsSet(Quoted) || p.Negated || p.Annotation.Labels.IsSet(Regexp) {
+			return basic
+		}
+	case Operator:
+		if p.Kind != And {
+			return basic
+		}
+		for _, child := range p.Operands {
+			if c, isPattern := child.(Pattern); !isPattern || c.Negated || c.Annotation.Labels.IsSet(Regexp) {
+				return basic
+			}
+		}
+	default:
+		return basic
+	}
+
+	// Remove predicates from the original query to keep just the pattern string.
+	terms := strings.Fields(originalQuery)
+	filteredTerms := make([]string, 0)
+	for _, term := range terms {
+		if !strings.Contains(term, ":") {
+			filteredTerms = append(filteredTerms, term)
+		}
+	}
+
+	query := strings.Join(filteredTerms, " ")
+	basic.Pattern = Operator{
+		Kind: Or,
+		Operands: []Node{
+			Pattern{
+				Value:      query,
+				Annotation: Annotation{Labels: Boost | Literal | Standard},
+			},
+			basic.Pattern,
+		},
+	}
+
+	return basic
 }

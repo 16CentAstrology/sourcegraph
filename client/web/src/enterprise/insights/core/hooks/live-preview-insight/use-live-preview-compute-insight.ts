@@ -1,10 +1,10 @@
 import { groupBy } from 'lodash'
 
-import { GroupByField } from '@sourcegraph/shared/src/graphql-operations'
-import { Series } from '@sourcegraph/wildcard'
+import type { GroupByField } from '@sourcegraph/shared/src/graphql-operations'
+import { type Series, useDeepMemo } from '@sourcegraph/wildcard'
 
-import { LivePreviewStatus, State } from './types'
-import { Datum, SeriesWithStroke, useLivePreviewSeriesInsight } from './use-live-preview-series-insight'
+import { LivePreviewStatus, type State } from './types'
+import { type Datum, type SeriesWithStroke, useLivePreviewSeriesInsight } from './use-live-preview-series-insight'
 
 interface ComputeSeries extends Omit<SeriesWithStroke, 'generatedFromCaptureGroups'> {}
 
@@ -17,7 +17,7 @@ export interface Props {
 
 interface Result<R> {
     state: State<ComputeDatum[]>
-    refetch: () => {}
+    refetch: () => unknown
 }
 
 /**
@@ -33,9 +33,9 @@ interface Result<R> {
 export function useLivePreviewComputeInsight(props: Props): Result<ComputeDatum[]> {
     const { skip, repositories, series, groupBy } = props
 
-    const { state, refetch } = useLivePreviewSeriesInsight({
+    const settings = useDeepMemo({
         skip,
-        repositories,
+        repoScope: { repositories },
         series: series.map(srs => ({
             ...srs,
             groupBy,
@@ -45,6 +45,8 @@ export function useLivePreviewComputeInsight(props: Props): Result<ComputeDatum[
         //  for `searchInsightPreview`
         step: { days: 1 },
     })
+
+    const { state, refetch } = useLivePreviewSeriesInsight(settings)
 
     // Post process data from series insight preview since compute is based
     // on series live preview handler

@@ -2,19 +2,18 @@ import React, { useState } from 'react'
 
 import { mdiMenu } from '@mdi/js'
 import classNames from 'classnames'
-import { RouteComponentProps } from 'react-router-dom'
 
 import { Button, Icon } from '@sourcegraph/wildcard'
 
 import { SidebarGroupHeader, SidebarGroup, SidebarNavItem } from '../../components/Sidebar'
-import { SettingsAreaRepositoryFields } from '../../graphql-operations'
-import { NavGroupDescriptor } from '../../util/contributions'
+import type { SettingsAreaRepositoryFields } from '../../graphql-operations'
+import type { NavGroupDescriptor } from '../../util/contributions'
 
 export interface RepoSettingsSideBarGroup extends Omit<NavGroupDescriptor, 'condition'> {}
 
 export type RepoSettingsSideBarGroups = readonly RepoSettingsSideBarGroup[]
 
-interface Props extends RouteComponentProps<{}> {
+interface Props {
     repoSettingsSidebarGroups: RepoSettingsSideBarGroups
     className?: string
     repo: SettingsAreaRepositoryFields
@@ -40,19 +39,16 @@ export const RepoSettingsSidebar: React.FunctionComponent<React.PropsWithChildre
                 {repoSettingsSidebarGroups.map(({ header, items }, index) => (
                     <SidebarGroup key={index}>
                         {header && <SidebarGroupHeader label={header.label} />}
-                        {items.map(
-                            ({ label, to, exact, condition = () => true }) =>
-                                condition({}) && (
-                                    <SidebarNavItem
-                                        to={`${repo.url}/-/settings${to}`}
-                                        exact={exact}
-                                        key={label}
-                                        onClick={() => setIsMobileExpanded(false)}
-                                    >
-                                        {label}
-                                    </SidebarNavItem>
-                                )
-                        )}
+                        {items.map(({ label, to, exact }) => (
+                            <SidebarNavItem
+                                to={`${repo.url}/-/settings${to}`}
+                                key={label}
+                                onClick={() => setIsMobileExpanded(false)}
+                                exact={exact}
+                            >
+                                {label}
+                            </SidebarNavItem>
+                        ))}
                     </SidebarGroup>
                 ))}
             </div>

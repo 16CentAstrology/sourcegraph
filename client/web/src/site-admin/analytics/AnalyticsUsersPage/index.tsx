@@ -1,28 +1,35 @@
-import { useState, useMemo, useEffect, FC } from 'react'
+import { useState, useMemo, useEffect, type FC } from 'react'
 
 import classNames from 'classnames'
 import { startCase } from 'lodash'
-import { RouteComponentProps } from 'react-router'
 
 import { useQuery } from '@sourcegraph/http-client'
-import { Card, LoadingSpinner, useMatchMedia, Text, LineChart, BarChart, Series } from '@sourcegraph/wildcard'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
+import { Card, LoadingSpinner, useMatchMedia, Text, LineChart, BarChart, type Series } from '@sourcegraph/wildcard'
 
-import { UsersStatisticsResult, UsersStatisticsVariables } from '../../../graphql-operations'
-import { eventLogger } from '../../../tracking/eventLogger'
+import type { UsersStatisticsResult, UsersStatisticsVariables } from '../../../graphql-operations'
+import { checkRequestAccessAllowed } from '../../../util/checkRequestAccessAllowed'
 import { AnalyticsPageTitle } from '../components/AnalyticsPageTitle'
 import { ChartContainer } from '../components/ChartContainer'
 import { HorizontalSelect } from '../components/HorizontalSelect'
 import { ToggleSelect } from '../components/ToggleSelect'
-import { ValueLegendList, ValueLegendListProps } from '../components/ValueLegendList'
+import { ValueLegendList, type ValueLegendListProps } from '../components/ValueLegendList'
 import { useChartFilters } from '../useChartFilters'
-import { StandardDatum, FrequencyDatum, buildFrequencyDatum } from '../utils'
+import { type StandardDatum, type FrequencyDatum, buildFrequencyDatum } from '../utils'
 
 import { USERS_STATISTICS } from './queries'
 
 import styles from './AnalyticsUsersPage.module.scss'
 
-export const AnalyticsUsersPage: FC<RouteComponentProps> = () => {
-    const { dateRange, aggregation, grouping } = useChartFilters({ name: 'Users', aggregation: 'uniqueUsers' })
+interface Props extends TelemetryV2Props {}
+
+export const AnalyticsUsersPage: FC<Props> = ({ telemetryRecorder }) => {
+    const { dateRange, aggregation, grouping } = useChartFilters({
+        name: 'Users',
+        aggregation: 'uniqueUsers',
+        telemetryRecorder,
+    })
     const { data, error, loading } = useQuery<UsersStatisticsResult, UsersStatisticsVariables>(USERS_STATISTICS, {
         variables: {
             dateRange: dateRange.value,
@@ -30,8 +37,9 @@ export const AnalyticsUsersPage: FC<RouteComponentProps> = () => {
         },
     })
     useEffect(() => {
-        eventLogger.logPageView('AdminAnalyticsUsers')
-    }, [])
+        EVENT_LOGGER.logPageView('AdminAnalyticsUsers')
+        telemetryRecorder.recordEvent('admin.analytics.users', 'view')
+    }, [telemetryRecorder])
     const [uniqueOrPercentage, setUniqueOrPercentage] = useState<'unique' | 'percentage'>('unique')
 
     const [frequencies, legends] = useMemo(() => {
@@ -39,7 +47,7 @@ export const AnalyticsUsersPage: FC<RouteComponentProps> = () => {
             return []
         }
         const { users } = data.site.analytics
-        const legends: ValueLegendListProps['items'] = [
+        let legends: ValueLegendListProps['items'] = [
             {
                 value: users.activity.summary.totalUniqueUsers,
                 description: 'Active users',
@@ -61,6 +69,21 @@ export const AnalyticsUsersPage: FC<RouteComponentProps> = () => {
                 tooltip: 'The number of user licenses your current account is provisioned for.',
             },
         ]
+
+        const isRequestAccessAllowed = checkRequestAccessAllowed(window.context)
+        if (isRequestAccessAllowed) {
+            legends = [
+                ...legends.slice(0, 1),
+                {
+                    value: data.pendingAccessRequests.totalCount,
+                    description: 'Pending requests',
+                    color: 'var(--cyan)',
+                    position: 'right',
+                    tooltip: 'The number of users who have requested access to your Sourcegraph instance.',
+                },
+                ...legends.slice(1),
+            ]
+        }
 
         const frequencies: FrequencyDatum[] = buildFrequencyDatum(users.frequencies, uniqueOrPercentage, 30)
 

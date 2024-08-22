@@ -1,12 +1,12 @@
-import { MutationTuple } from '@apollo/client'
+import type { MutationTuple } from '@apollo/client'
 
 import { dataOrThrowErrors, gql, useMutation } from '@sourcegraph/http-client'
 
 import {
     useShowMorePagination,
-    UseShowMorePaginationResult,
+    type UseShowMorePaginationResult,
 } from '../../../components/FilteredConnection/hooks/useShowMorePagination'
-import {
+import type {
     BatchChangesCodeHostFields,
     CreateBatchChangesCredentialResult,
     CreateBatchChangesCredentialVariables,
@@ -14,6 +14,8 @@ import {
     DeleteBatchChangesCredentialVariables,
     GlobalBatchChangesCodeHostsResult,
     GlobalBatchChangesCodeHostsVariables,
+    RefreshGitHubAppResult,
+    RefreshGitHubAppVariables,
     Scalars,
     UserBatchChangesCodeHostsResult,
     UserBatchChangesCodeHostsVariables,
@@ -24,6 +26,14 @@ export const CREDENTIAL_FIELDS_FRAGMENT = gql`
         id
         sshPublicKey
         isSiteCredential
+        gitHubApp {
+            id
+            appID
+            name
+            appURL
+            baseURL
+            logo
+        }
     }
 `
 
@@ -84,8 +94,19 @@ const CODE_HOST_FIELDS_FRAGMENT = gql`
         externalServiceURL
         requiresSSH
         requiresUsername
+        supportsCommitSigning
         credential {
             ...BatchChangesCredentialFields
+        }
+        commitSigningConfiguration {
+            ... on GitHubApp {
+                id
+                appID
+                name
+                appURL
+                baseURL
+                logo
+            }
         }
     }
 
@@ -109,7 +130,7 @@ export const USER_CODE_HOSTS = gql`
 
 export const useUserBatchChangesCodeHostConnection = (
     user: Scalars['ID']
-): UseShowMorePaginationResult<BatchChangesCodeHostFields> =>
+): UseShowMorePaginationResult<UserBatchChangesCodeHostsResult, BatchChangesCodeHostFields> =>
     useShowMorePagination<
         UserBatchChangesCodeHostsResult,
         UserBatchChangesCodeHostsVariables,
@@ -118,11 +139,9 @@ export const useUserBatchChangesCodeHostConnection = (
         query: USER_CODE_HOSTS,
         variables: {
             user,
-            after: null,
-            first: 15,
         },
         options: {
-            fetchPolicy: 'no-cache',
+            fetchPolicy: 'network-only',
         },
         getConnection: result => {
             const { node } = dataOrThrowErrors(result)
@@ -148,20 +167,19 @@ export const GLOBAL_CODE_HOSTS = gql`
     ${CODE_HOST_FIELDS_FRAGMENT}
 `
 
-export const useGlobalBatchChangesCodeHostConnection = (): UseShowMorePaginationResult<BatchChangesCodeHostFields> =>
+export const useGlobalBatchChangesCodeHostConnection = (): UseShowMorePaginationResult<
+    GlobalBatchChangesCodeHostsResult,
+    BatchChangesCodeHostFields
+> =>
     useShowMorePagination<
         GlobalBatchChangesCodeHostsResult,
         GlobalBatchChangesCodeHostsVariables,
         BatchChangesCodeHostFields
     >({
         query: GLOBAL_CODE_HOSTS,
-        variables: {
-            after: null,
-            first: 15,
-        },
+        variables: {},
         options: {
-            useURL: true,
-            fetchPolicy: 'no-cache',
+            fetchPolicy: 'network-only',
         },
         getConnection: result => {
             const { batchChangesCodeHosts } = dataOrThrowErrors(result)
@@ -177,3 +195,14 @@ export const CHECK_BATCH_CHANGES_CREDENTIAL = gql`
         }
     }
 `
+
+export const REFRESH_GITHUB_APP = gql`
+    mutation RefreshGitHubApp($gitHubApp: ID!) {
+        refreshGitHubApp(gitHubApp: $gitHubApp) {
+            alwaysNil
+        }
+    }
+`
+
+export const useRefreshGitHubApp = (): MutationTuple<RefreshGitHubAppResult, RefreshGitHubAppVariables> =>
+    useMutation(REFRESH_GITHUB_APP)

@@ -3,28 +3,29 @@ import * as React from 'react'
 import classNames from 'classnames'
 import * as H from 'history'
 import { isEqual } from 'lodash'
-import { Renderer } from 'react-dom'
+import type { Renderer } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import {
     asyncScheduler,
     combineLatest,
     EMPTY,
     from,
-    Observable,
+    type Observable,
     of,
     Subject,
     Subscription,
-    Unsubscribable,
+    type Unsubscribable,
     concat,
     BehaviorSubject,
     fromEvent,
+    lastValueFrom,
+    throwError,
 } from 'rxjs'
 import {
     catchError,
     concatAll,
     concatMap,
     filter,
-    finalize,
     map,
     mergeMap,
     observeOn,
@@ -33,19 +34,18 @@ import {
     tap,
     startWith,
     distinctUntilChanged,
-    retryWhen,
-    mapTo,
+    retry,
     take,
 } from 'rxjs/operators'
 
-import { HoverMerged } from '@sourcegraph/client-api'
+import type { HoverMerged } from '@sourcegraph/client-api'
 import {
-    ContextResolver,
+    type ContextResolver,
     createHoverifier,
     findPositionsFromEvents,
-    Hoverifier,
-    HoverState,
-    MaybeLoadingResult,
+    type Hoverifier,
+    type HoverState,
+    type MaybeLoadingResult,
 } from '@sourcegraph/codeintellify'
 import {
     asError,
@@ -55,81 +55,72 @@ import {
     property,
     registerHighlightContributions,
     isExternalLink,
-    LineOrPositionOrRange,
-    lprToSelectionsZeroIndexed,
+    type LineOrPositionOrRange,
 } from '@sourcegraph/common'
-import { WorkspaceRoot } from '@sourcegraph/extension-api-types'
+import type { WorkspaceRoot } from '@sourcegraph/extension-api-types'
 import { gql, isHTTPAuthError } from '@sourcegraph/http-client'
-import { ActionItemAction, urlForClientCommandOpen } from '@sourcegraph/shared/src/actions/ActionItem'
+import type { ActionItemAction } from '@sourcegraph/shared/src/actions/ActionItem'
 import { wrapRemoteObservable } from '@sourcegraph/shared/src/api/client/api/common'
-import { CodeEditorData, CodeEditorWithPartialModel } from '@sourcegraph/shared/src/api/viewerTypes'
+import type { CodeEditorData, CodeEditorWithPartialModel } from '@sourcegraph/shared/src/api/viewerTypes'
 import { isRepoNotFoundErrorLike } from '@sourcegraph/shared/src/backend/errors'
-import { HoverAlert } from '@sourcegraph/shared/src/codeintel/legacy-extensions/api'
-import {
-    CommandListClassProps,
-    CommandListPopoverButtonClassProps,
-} from '@sourcegraph/shared/src/commandPalette/CommandList'
-import { Controller } from '@sourcegraph/shared/src/extensions/controller'
+import type { Controller } from '@sourcegraph/shared/src/extensions/controller'
 import { getHoverActions, registerHoverContributions } from '@sourcegraph/shared/src/hover/actions'
-import { HoverContext, HoverOverlay, HoverOverlayClassProps } from '@sourcegraph/shared/src/hover/HoverOverlay'
+import {
+    type HoverContext,
+    HoverOverlay,
+    type HoverOverlayClassProps,
+} from '@sourcegraph/shared/src/hover/HoverOverlay'
 import { getModeFromPath } from '@sourcegraph/shared/src/languages'
-import { UnbrandedNotificationItemStyleProps } from '@sourcegraph/shared/src/notifications/NotificationItem'
-import { PlatformContext, URLToFileContext } from '@sourcegraph/shared/src/platform/context'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { PlatformContext, URLToFileContext } from '@sourcegraph/shared/src/platform/context'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { createURLWithUTM } from '@sourcegraph/shared/src/tracking/utm'
 import {
-    FileSpec,
-    UIPositionSpec,
-    RawRepoSpec,
-    RepoSpec,
-    ResolvedRevisionSpec,
-    RevisionSpec,
-    toRootURI,
-    toURIWithPath,
-    ViewStateSpec,
+    type FileSpec,
+    type UIPositionSpec,
+    type RawRepoSpec,
+    type RepoSpec,
+    type ResolvedRevisionSpec,
+    type RevisionSpec,
+    type ViewStateSpec,
+    makeRepoGitURI,
 } from '@sourcegraph/shared/src/util/url'
 
 import { background } from '../../../browser-extension/web-extension-api/runtime'
 import { observeStorageKey } from '../../../browser-extension/web-extension-api/storage'
-import { BackgroundPageApi } from '../../../browser-extension/web-extension-api/types'
-import { UserSettingsURLResult } from '../../../graphql-operations'
+import type { BackgroundPageApi } from '../../../browser-extension/web-extension-api/types'
+import type { UserSettingsURLResult } from '../../../graphql-operations'
 import { toTextDocumentPositionParameters } from '../../backend/extension-api-conversion'
-import { CodeViewToolbar, CodeViewToolbarClassProps } from '../../components/CodeViewToolbar'
+import { CodeViewToolbar, type CodeViewToolbarClassProps } from '../../components/CodeViewToolbar'
 import { TrackAnchorClick } from '../../components/TrackAnchorClick'
 import { WildcardThemeProvider } from '../../components/WildcardThemeProvider'
 import { isExtension, isInPage } from '../../context'
-import { SourcegraphIntegrationURLs, BrowserPlatformContext } from '../../platform/context'
+import type { SourcegraphIntegrationURLs, BrowserPlatformContext } from '../../platform/context'
 import { resolveRevision, retryWhenCloneInProgressError, resolvePrivateRepo } from '../../repo/backend'
+import { ConditionalTelemetryRecorderProvider } from '../../telemetry'
 import { ConditionalTelemetryService, EventLogger } from '../../tracking/eventLogger'
 import { DEFAULT_SOURCEGRAPH_URL, getPlatformName, isDefaultSourcegraphUrl } from '../../util/context'
-import { MutationRecordLike, querySelectorOrSelf } from '../../util/dom'
-import { observeOptionFlag, observeSendTelemetry } from '../../util/optionFlags'
+import { type MutationRecordLike, querySelectorOrSelf } from '../../util/dom'
+import { observeSendTelemetry } from '../../util/optionFlags'
 import { bitbucketCloudCodeHost } from '../bitbucket-cloud/codeHost'
 import { bitbucketServerCodeHost } from '../bitbucket/codeHost'
 import { gerritCodeHost } from '../gerrit/codeHost'
-import { GithubCodeHost, githubCodeHost, isGithubCodeHost } from '../github/codeHost'
+import { type GithubCodeHost, githubCodeHost, isGithubCodeHost } from '../github/codeHost'
 import { gitlabCodeHost } from '../gitlab/codeHost'
 import { phabricatorCodeHost } from '../phabricator/codeHost'
 
-import { CodeView, trackCodeViews, fetchFileContentForDiffOrFileInfo } from './codeViews'
+import { type CodeView, trackCodeViews, fetchFileContentForDiffOrFileInfo } from './codeViews'
 import { NotAuthenticatedError, RepoURLParseError } from './errors'
-import { initializeExtensions, renderCommandPalette } from './extensions'
-import { createRepoNotFoundHoverAlert, getActiveHoverAlerts, onHoverAlertDismissed } from './hoverAlerts'
-import {
-    handleNativeTooltips,
-    NativeTooltip,
-    nativeTooltipsEnabledFromSettings,
-    registerNativeTooltipContributions,
-} from './nativeTooltips'
+import { initializeExtensions } from './extensions'
 import { SignInButton } from './SignInButton'
 import { resolveRepoNamesForDiffOrFileInfo, defaultRevisionToCommitID } from './util/fileInfo'
+import { lprToSelectionsZeroIndexed } from './util/selections'
 import {
-    ViewOnSourcegraphButtonClassProps,
+    type ViewOnSourcegraphButtonClassProps,
     ViewOnSourcegraphButton,
     ConfigureSourcegraphButton,
 } from './ViewOnSourcegraphButton'
-import { delayUntilIntersecting, trackViews, ViewResolver } from './views'
+import { delayUntilIntersecting, trackViews, type ViewResolver } from './views'
 
 import styles from './codeHost.module.scss'
 
@@ -221,23 +212,11 @@ export interface CodeHost {
     codeViewResolvers: ViewResolver<CodeView>[]
 
     /**
-     * Resolves {@link NativeTooltip}s from the DOM.
-     */
-    nativeTooltipResolvers?: ViewResolver<NativeTooltip>[]
-
-    /**
      * Override of `observeMutations`, used where a MutationObserve is not viable, such as in the shadow DOMs in Gerrit.
      */
     observeMutations?: ObserveMutations
 
     // Extensions related input
-
-    /**
-     * Mount getter for the command palette button for extensions.
-     *
-     * If undefined, the command palette button won't be rendered on the code host.
-     */
-    getCommandPaletteMount?: MountGetter
 
     /**
      * Returns a selector used to determine the mount location of the hover overlay in the DOM.
@@ -260,13 +239,6 @@ export interface CodeHost {
     ) => string
 
     observeLineSelection?: Observable<LineOrPositionOrRange>
-
-    notificationClassNames: UnbrandedNotificationItemStyleProps['notificationItemClassNames']
-
-    /**
-     * CSS classes for the command palette to customize styling
-     */
-    commandPaletteClassProps?: CommandListPopoverButtonClassProps & CommandListClassProps
 
     /**
      * CSS classes for the code view toolbar to customize styling
@@ -319,10 +291,10 @@ export interface FileInfoWithContent extends FileInfoWithRepoName {
     content?: string
 }
 
-export interface CodeIntelligenceProps extends TelemetryProps {
+export interface CodeIntelligenceProps extends TelemetryProps, TelemetryV2Props {
     platformContext: Pick<
         BrowserPlatformContext,
-        'urlToFile' | 'requestGraphQL' | 'settings' | 'refreshSettings' | 'sourcegraphURL'
+        'urlToFile' | 'requestGraphQL' | 'settings' | 'refreshSettings' | 'sourcegraphURL' | 'clientApplication'
     >
     codeHost: CodeHost
     extensionsController: Controller
@@ -351,11 +323,13 @@ function initCodeIntelligence({
     extensionsController,
     render,
     telemetryService,
-    hoverAlerts,
+    telemetryRecorder,
     repoSyncErrors,
-}: Pick<CodeIntelligenceProps, 'codeHost' | 'platformContext' | 'extensionsController' | 'telemetryService'> & {
+}: Pick<
+    CodeIntelligenceProps,
+    'codeHost' | 'platformContext' | 'extensionsController' | 'telemetryService' | 'telemetryRecorder'
+> & {
     render: Renderer
-    hoverAlerts: Observable<HoverAlert>[]
     mutations: Observable<MutationRecordLike[]>
     repoSyncErrors: Observable<boolean>
 }): {
@@ -369,11 +343,14 @@ function initCodeIntelligence({
 
     const containerComponentUpdates = new Subject<void>()
 
+    const history = H.createBrowserHistory()
+
     subscription.add(
         registerHoverContributions({
             extensionsController,
             platformContext,
-            history: H.createBrowserHistory(),
+            historyOrNavigate: history,
+            getLocation: () => history.location,
             locationAssign: location.assign.bind(location),
         })
     )
@@ -393,8 +370,8 @@ function initCodeIntelligence({
         getHover: ({ line, character, part, ...rest }) =>
             concat(
                 [{ isLoading: true, result: null }],
-                combineLatest([
-                    from(extensionsController.extHostAPI).pipe(
+                from(extensionsController.extHostAPI)
+                    .pipe(
                         withLatestFrom(repoSyncErrors),
                         switchMap(([extensionHost, hasRepoSyncError]) =>
                             // Prevent GraphQL requests that we know will result in error/null when the repo is private (and not added to Cloud)
@@ -406,23 +383,15 @@ function initCodeIntelligence({
                                       )
                                   )
                         )
-                    ),
-                    getActiveHoverAlerts([
-                        ...hoverAlerts,
-                        repoSyncErrors.pipe(
-                            distinctUntilChanged(),
-                            map(showAlert => (showAlert ? createRepoNotFoundHoverAlert(codeHost) : undefined)),
-                            filter(isDefined)
-                        ),
-                    ]),
-                ]).pipe(
-                    map(
-                        ([{ isLoading, result: hoverMerged }, alerts]): MaybeLoadingResult<HoverMerged | null> => ({
-                            isLoading,
-                            result: hoverMerged || alerts?.length ? { contents: [], ...hoverMerged, alerts } : null,
-                        })
                     )
-                )
+                    .pipe(
+                        map(
+                            ({ isLoading, result: hoverMerged }): MaybeLoadingResult<HoverMerged | null> => ({
+                                isLoading,
+                                result: hoverMerged || null,
+                            })
+                        )
+                    )
             ),
         getDocumentHighlights: ({ line, character, part, ...rest }) =>
             from(extensionsController.extHostAPI).pipe(
@@ -449,10 +418,7 @@ function initCodeIntelligence({
         tokenize: codeHost.codeViewsRequireTokenization,
     })
 
-    class HoverOverlayContainer extends React.Component<
-        {},
-        HoverState<HoverContext, HoverMerged, ActionItemAction> & ThemeProps
-    > {
+    class HoverOverlayContainer extends React.Component<{}, HoverState<HoverContext, HoverMerged, ActionItemAction>> {
         private subscription = new Subscription()
         private nextOverlayElement = hoverOverlayElements.next.bind(hoverOverlayElements)
 
@@ -460,7 +426,6 @@ function initCodeIntelligence({
             super(props)
             this.state = {
                 ...hoverifier.hoverState,
-                isLightTheme: true,
             }
         }
         public componentDidMount(): void {
@@ -469,66 +434,6 @@ function initCodeIntelligence({
                     this.setState(update)
                 })
             )
-            this.subscription.add(
-                hoverifier.hoverStateUpdates
-                    .pipe(
-                        withLatestFrom(observeOptionFlag('clickToGoToDefinition')),
-                        filter(([, clickToGoToDefinition]) => clickToGoToDefinition),
-                        map(([hoverState]) => hoverState),
-                        switchMap(({ hoveredTokenElement: token, hoverOverlayProps }) => {
-                            if (token === undefined) {
-                                return EMPTY
-                            }
-                            if (hoverOverlayProps === undefined) {
-                                return EMPTY
-                            }
-
-                            const { actionsOrError } = hoverOverlayProps
-                            const definitionAction =
-                                Array.isArray(actionsOrError) &&
-                                actionsOrError.find(a => a.action.id === 'goToDefinition.preloaded' && !a.disabledWhen)
-
-                            const referenceAction =
-                                Array.isArray(actionsOrError) &&
-                                actionsOrError.find(a => a.action.id === 'findReferences' && !a.disabledWhen)
-
-                            const action = definitionAction || referenceAction
-                            if (!action) {
-                                return EMPTY
-                            }
-
-                            const defer = urlForClientCommandOpen(action.action, window.location.hash)
-                            if (!defer) {
-                                return EMPTY
-                            }
-
-                            const oldCursor = token.style.cursor
-                            token.style.cursor = 'pointer'
-
-                            return fromEvent(token, 'click').pipe(
-                                tap(() => {
-                                    const selection = window.getSelection()
-                                    if (selection !== null && selection.toString() !== '') {
-                                        return
-                                    }
-
-                                    const actionType = action === definitionAction ? 'definition' : 'reference'
-                                    telemetryService.log(`${actionType}CodeHost.click`)
-                                    window.location.href = defer
-                                }),
-                                finalize(() => (token.style.cursor = oldCursor))
-                            )
-                        })
-                    )
-                    .subscribe()
-            )
-            if (codeHost.isLightTheme) {
-                this.subscription.add(
-                    codeHost.isLightTheme.subscribe(isLightTheme => {
-                        this.setState({ isLightTheme })
-                    })
-                )
-            }
             containerComponentUpdates.next()
         }
         public componentWillUnmount(): void {
@@ -571,12 +476,10 @@ function initCodeIntelligence({
                         {...codeHost.hoverOverlayClassProps}
                         className={classNames(styles.hoverOverlay, codeHost.hoverOverlayClassProps?.className)}
                         telemetryService={telemetryService}
-                        isLightTheme={this.state.isLightTheme}
+                        telemetryRecorder={telemetryRecorder}
                         hoverRef={this.nextOverlayElement}
                         extensionsController={extensionsController}
-                        platformContext={platformContext}
                         location={H.createLocation(window.location)}
-                        onAlertDismissed={onHoverAlertDismissed}
                         useBrandedLogo={true}
                     />
                 </TrackAnchorClick>
@@ -746,10 +649,12 @@ const isSafeToContinueCodeIntel = async ({
 
         rawRepoName = context.rawRepoName
 
-        const isRepoCloned = await resolvePrivateRepo({
-            rawRepoName,
-            requestGraphQL,
-        }).toPromise()
+        const isRepoCloned = await lastValueFrom(
+            resolvePrivateRepo({
+                rawRepoName,
+                requestGraphQL,
+            })
+        )
 
         return isRepoCloned
     } catch (error) {
@@ -781,7 +686,7 @@ const isSafeToContinueCodeIntel = async ({
             // Show "Configure Sourcegraph" button
             console.warn('Repository is not cloned.', error)
 
-            const settingsURL = await observeUserSettingsURL(requestGraphQL).toPromise()
+            const settingsURL = await lastValueFrom(observeUserSettingsURL(requestGraphQL), { defaultValue: undefined })
 
             if (rawRepoName && settingsURL) {
                 render(
@@ -813,12 +718,12 @@ export async function handleCodeHost({
     extensionsController,
     platformContext,
     telemetryService,
+    telemetryRecorder,
     render,
     minimalUI,
     hideActions,
     background,
 }: HandleCodeHostOptions): Promise<Subscription> {
-    const history = H.createBrowserHistory()
     const subscriptions = new Subscription()
     const { requestGraphQL, sourcegraphURL } = platformContext
 
@@ -831,15 +736,10 @@ export async function handleCodeHost({
     // Handle theming
     subscriptions.add(
         (codeHost.isLightTheme ?? of(true)).subscribe(isLightTheme => {
-            document.body.classList.toggle('theme-light', isLightTheme)
-            document.body.classList.toggle('theme-dark', !isLightTheme)
+            document.documentElement.classList.toggle('theme-light', isLightTheme)
+            document.documentElement.classList.toggle('theme-dark', !isLightTheme)
         })
     )
-    const nativeTooltipsEnabled = codeHost.nativeTooltipResolvers
-        ? nativeTooltipsEnabledFromSettings(platformContext.settings)
-        : of(false)
-
-    const hoverAlerts: Observable<HoverAlert>[] = []
 
     /**
      * A stream that emits a boolean that signifies whether any request for
@@ -881,48 +781,18 @@ export async function handleCodeHost({
         return subscriptions
     }
 
-    if (codeHost.nativeTooltipResolvers) {
-        const { subscription, nativeTooltipsAlert } = handleNativeTooltips(
-            mutations,
-            nativeTooltipsEnabled,
-            codeHost,
-            repoSyncErrors
-        )
-        subscriptions.add(subscription)
-        hoverAlerts.push(nativeTooltipsAlert)
-        subscriptions.add(registerNativeTooltipContributions(extensionsController))
-    }
-
     const { hoverifier, subscription } = initCodeIntelligence({
         codeHost,
         extensionsController,
         platformContext,
         telemetryService,
+        telemetryRecorder,
         render,
-        hoverAlerts,
         mutations,
         repoSyncErrors,
     })
     subscriptions.add(hoverifier)
     subscriptions.add(subscription)
-
-    // Inject UI components
-    // Render command palette
-    if (codeHost.getCommandPaletteMount && !minimalUI && extensionsController !== null) {
-        subscriptions.add(
-            addedElements.pipe(map(codeHost.getCommandPaletteMount), filter(isDefined)).subscribe(
-                renderCommandPalette({
-                    extensionsController,
-                    history,
-                    platformContext,
-                    telemetryService,
-                    render,
-                    ...codeHost.commandPaletteClassProps,
-                    notificationClassNames: codeHost.notificationClassNames,
-                })
-            )
-        )
-    }
 
     const signInCloses = new Subject<void>()
     const nextSignInClose = signInCloses.next.bind(signInCloses)
@@ -955,7 +825,7 @@ export async function handleCodeHost({
             switchMap(([, { rawRepoName, revision }]) =>
                 resolveRevision({ repoName: rawRepoName, revision, requestGraphQL }).pipe(
                     retryWhenCloneInProgressError(),
-                    mapTo(true),
+                    map(() => true),
                     startWith(undefined)
                 )
             ),
@@ -1069,6 +939,7 @@ export async function handleCodeHost({
                                     fileInfoOrError={error}
                                     sourcegraphURL={sourcegraphURL}
                                     telemetryService={telemetryService}
+                                    telemetryRecorder={telemetryRecorder}
                                     platformContext={platformContext}
                                     extensionsController={extensionsController}
                                     buttonProps={codeViewEvent.toolbarButtonProps}
@@ -1082,17 +953,9 @@ export async function handleCodeHost({
                     },
                 }),
                 // Retry auth errors after the user closed a sign-in tab
-                retryWhen(errors =>
-                    errors.pipe(
-                        // Don't swallow non-auth errors
-                        tap(error => {
-                            if (!isHTTPAuthError(error)) {
-                                throw error
-                            }
-                        }),
-                        switchMap(() => signInCloses)
-                    )
-                ),
+                retry({
+                    delay: error => (isHTTPAuthError(error) ? signInCloses : throwError(() => error)),
+                }),
                 catchError(error => {
                     // Log errors but don't break the handling of other code views
                     console.error('Could not resolve file info for code view', error)
@@ -1170,9 +1033,14 @@ export async function handleCodeHost({
                 } = codeViewEvent
 
                 const initializeModelAndViewerForFileInfo = async (
-                    fileInfo: FileInfoWithContent & FileInfoWithRepoName
+                    fileInfo: FileInfoWithContent
                 ): Promise<CodeEditorWithPartialModel> => {
-                    const uri = toURIWithPath(fileInfo)
+                    const uri = makeRepoGitURI({
+                        repoName: fileInfo.repoName,
+                        commitID: fileInfo.commitID,
+                        revision: fileInfo.revision,
+                        filePath: fileInfo.filePath,
+                    })
 
                     // Model
                     const languageId = getModeFromPath(fileInfo.filePath)
@@ -1190,7 +1058,11 @@ export async function handleCodeHost({
 
                     const extensionHostAPI = await extensionsController.extHostAPI
 
-                    const rootURI = toRootURI(fileInfo)
+                    const rootURI = makeRepoGitURI({
+                        repoName: fileInfo.repoName,
+                        commitID: fileInfo.commitID,
+                        revision: fileInfo.revision,
+                    })
                     const [, viewerId] = await Promise.all([
                         // Only add the model if it doesn't exist
                         // (there may be several code views on the page pointing to the same model)
@@ -1217,7 +1089,6 @@ export async function handleCodeHost({
                                     })
                                 )
 
-                                // eslint-disable-next-line rxjs/no-nested-subscribe
                                 .subscribe()
                         )
                     }
@@ -1333,33 +1204,25 @@ export async function handleCodeHost({
                 }
 
                 const adjustPosition = getPositionAdjuster?.(platformContext.requestGraphQL)
-                let hoverSubscription = new Subscription()
                 codeViewEvent.subscriptions.add(
-                    // eslint-disable-next-line rxjs/no-nested-subscribe
-                    nativeTooltipsEnabled.subscribe(useNativeTooltips => {
-                        hoverSubscription.unsubscribe()
-                        if (!useNativeTooltips) {
-                            hoverSubscription = hoverifier.hoverify({
-                                dom: domFunctions,
-                                positionEvents: of(element).pipe(
-                                    findPositionsFromEvents({
-                                        domFunctions,
-                                        tokenize: !!(typeof overrideTokenize === 'boolean'
-                                            ? overrideTokenize
-                                            : codeHost.codeViewsRequireTokenization),
-                                    })
-                                ),
-                                resolveContext,
-                                adjustPosition,
-                                scrollBoundaries: codeViewEvent.getScrollBoundaries
-                                    ? codeViewEvent.getScrollBoundaries(codeViewEvent.element)
-                                    : [],
-                                overrideTokenize,
+                    hoverifier.hoverify({
+                        dom: domFunctions,
+                        positionEvents: of(element).pipe(
+                            findPositionsFromEvents({
+                                domFunctions,
+                                tokenize: !!(typeof overrideTokenize === 'boolean'
+                                    ? overrideTokenize
+                                    : codeHost.codeViewsRequireTokenization),
                             })
-                        }
+                        ),
+                        resolveContext,
+                        adjustPosition,
+                        scrollBoundaries: codeViewEvent.getScrollBoundaries
+                            ? codeViewEvent.getScrollBoundaries(codeViewEvent.element)
+                            : [],
+                        overrideTokenize,
                     })
                 )
-                codeViewEvent.subscriptions.add(hoverSubscription)
 
                 element.classList.add('sg-mounted')
                 // Render toolbar
@@ -1376,6 +1239,7 @@ export async function handleCodeHost({
                             fileInfoOrError={diffOrBlobInfo}
                             sourcegraphURL={sourcegraphURL}
                             telemetryService={telemetryService}
+                            telemetryRecorder={telemetryRecorder}
                             platformContext={platformContext}
                             extensionsController={extensionsController}
                             buttonProps={toolbarButtonProps}
@@ -1501,6 +1365,11 @@ export function injectCodeIntelligenceToCodeHost(
     const telemetryService = new ConditionalTelemetryService(innerTelemetryService, isTelemetryEnabled)
     subscriptions.add(telemetryService)
 
+    const telemetryRecorderProvider = new ConditionalTelemetryRecorderProvider(isTelemetryEnabled, requestGraphQL)
+    const telemetryRecorder = telemetryRecorderProvider.getRecorder()
+    subscriptions.add(telemetryRecorder)
+    platformContext.telemetryRecorder = telemetryRecorder
+
     let codeHostSubscription: Subscription
     // In the browser extension, observe whether the `disableExtension` storage flag is set.
     // In the native integration, this flag does not exist.
@@ -1524,7 +1393,7 @@ export function injectCodeIntelligenceToCodeHost(
     }
 
     subscriptions.add(
-        // eslint-disable-next-line rxjs/no-async-subscribe, @typescript-eslint/no-misused-promises
+        // eslint-disable-next-line rxjs/no-async-subscribe
         combineLatest([codeHostReady, extensionDisabled]).subscribe(async ([isCodeHostReady, disableExtension]) => {
             if (disableExtension) {
                 // We don't need to unsubscribe if the extension starts with disabled state.
@@ -1539,6 +1408,7 @@ export function injectCodeIntelligenceToCodeHost(
                     extensionsController,
                     platformContext,
                     telemetryService,
+                    telemetryRecorder,
                     render: renderWithThemeProvider as Renderer,
                     minimalUI,
                     hideActions,

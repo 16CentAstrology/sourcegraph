@@ -6,6 +6,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	"github.com/sourcegraph/sourcegraph/dev/sg/internal/category"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/repo"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
 	"github.com/sourcegraph/sourcegraph/dev/sg/linters"
@@ -59,7 +60,7 @@ sg lint client
 # List all available check groups
 sg lint --help
 `,
-	Category: CategoryDev,
+	Category: category.Dev,
 	Flags: []cli.Flag{
 		generateAnnotations,
 		lintFix,
@@ -79,7 +80,7 @@ sg lint --help
 		targets := cmd.Args().Slice()
 
 		if len(targets) == 0 {
-			// If no args provided, run all
+			// If no args provided, run all of them.
 			for _, t := range linters.Targets {
 				if lintSkipFormatCheck.Get(cmd) {
 					continue
@@ -88,9 +89,8 @@ sg lint --help
 				lintTargets = append(lintTargets, t)
 				targets = append(targets, t.Name)
 			}
-
 		} else {
-			// Otherwise run requested set
+			// Otherwise run requested set.
 			allLintTargetsMap := make(map[string]linters.Target, len(linters.Targets))
 			for _, c := range linters.Targets {
 				allLintTargetsMap[c.Name] = c
@@ -110,7 +110,7 @@ sg lint --help
 				lintTargets = append(lintTargets, target)
 			}
 
-			// If we haven't added the format target already, add it! Unless we must skip it
+			// If we haven't added the format target already, add it! Unless we must skip it.
 			if !lintSkipFormatCheck.Get(cmd) && !hasFormatTarget {
 				lintTargets = append(lintTargets, linters.Formatting)
 				targets = append(targets, linters.Formatting.Name)
@@ -131,7 +131,7 @@ sg lint --help
 		std.Out.WriteNoticef("Running checks from targets: %s", strings.Join(targets, ", "))
 		return runner.Check(cmd.Context, repoState)
 	},
-	Subcommands: lintTargets(append(linters.Targets, linters.Formatting)).Commands(),
+	Subcommands: lintTargets(linters.Targets).Commands(),
 }
 
 type lintTargets []linters.Target
@@ -173,7 +173,7 @@ func (lt lintTargets) Commands() (cmds []*cli.Command) {
 				return runner.Check(cmd.Context, repoState)
 			},
 			// Completions to chain multiple commands
-			BashComplete: completions.CompleteOptions(func() (options []string) {
+			BashComplete: completions.CompleteArgs(func() (options []string) {
 				for _, c := range lt {
 					options = append(options, c.Name)
 				}

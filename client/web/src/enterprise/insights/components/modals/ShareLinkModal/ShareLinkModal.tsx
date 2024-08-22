@@ -1,4 +1,4 @@
-import { FC, MouseEventHandler, useRef } from 'react'
+import { type FC, type MouseEventHandler, useRef } from 'react'
 
 import classNames from 'classnames'
 import { noop } from 'lodash'
@@ -9,7 +9,7 @@ import {
     Input,
     LoadingSpinner,
     Modal,
-    ModalProps,
+    type ModalProps,
     H3,
     Text,
     Tooltip,
@@ -17,8 +17,8 @@ import {
 } from '@sourcegraph/wildcard'
 
 import {
-    CustomInsightDashboard,
-    Insight,
+    type CustomInsightDashboard,
+    type Insight,
     isGlobalDashboard,
     isOrganizationDashboard,
     isOrganizationOwner,
@@ -37,7 +37,7 @@ type ShareLinkModalProps = ModalProps & {
 export const ShareLinkModal: FC<ShareLinkModalProps> = props => {
     const { insight, isOpen, onDismiss, ...attributes } = props
 
-    const shareableUrl = `${window.location.origin}/insights/insight/${insight.id}`
+    const shareableUrl = `${window.location.origin}/insights/${insight.id}`
     const copyButtonReference = useRef<HTMLButtonElement>(null)
     const [copyURL, isCopied] = useCopyURLHandler()
 

@@ -1,23 +1,23 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 import sinon from 'sinon'
 
-import { AuthenticatedUser } from '../../auth'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
+
+import type { AuthenticatedUser } from '../../auth'
 import { WebStory } from '../../components/WebStory'
 
 import { CreateCodeMonitorPage } from './CreateCodeMonitorPage'
 
 const config: Meta = {
     title: 'web/enterprise/code-monitoring/CreateCodeMonitorPage',
-    parameters: {
-        chromatic: { disableSnapshot: false },
-    },
+    parameters: {},
 }
 
 export default config
 
 window.context.emailEnabled = true
 
-export const CreateCodeMonitorPageStory: Story = () => (
+export const CreateCodeMonitorPageStory: StoryFn = () => (
     <WebStory>
         {props => (
             <CreateCodeMonitorPage
@@ -31,6 +31,7 @@ export const CreateCodeMonitorPageStory: Story = () => (
                 }
                 createCodeMonitor={sinon.fake()}
                 isSourcegraphDotCom={false}
+                telemetryRecorder={noOpTelemetryRecorder}
             />
         )}
     </WebStory>

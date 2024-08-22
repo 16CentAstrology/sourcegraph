@@ -2,37 +2,29 @@ import * as React from 'react'
 
 import classNames from 'classnames'
 import AlertCircleIcon from 'mdi-react/AlertCircleIcon'
-import MapSearchIcon from 'mdi-react/MapSearchIcon'
-import { Route, RouteComponentProps, Switch } from 'react-router'
-import { combineLatest, Observable, of, Subject, Subscription } from 'rxjs'
+import { combineLatest, type Observable, Subject, Subscription } from 'rxjs'
 import { catchError, distinctUntilChanged, map, startWith, switchMap } from 'rxjs/operators'
 
-import { asError, createAggregateError, ErrorLike, isErrorLike, logger } from '@sourcegraph/common'
+import { asError, createAggregateError, type ErrorLike, isErrorLike, logger } from '@sourcegraph/common'
 import { gql } from '@sourcegraph/http-client'
-import { extensionIDsFromSettings } from '@sourcegraph/shared/src/extensions/extension'
-import { queryConfiguredRegistryExtensions } from '@sourcegraph/shared/src/extensions/helpers'
-import { Scalars } from '@sourcegraph/shared/src/graphql-operations'
-import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
-import { gqlToCascade, SettingsCascadeProps, SettingsSubject } from '@sourcegraph/shared/src/settings/settings'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { ThemeProps } from '@sourcegraph/shared/src/theme'
+import type { Scalars } from '@sourcegraph/shared/src/graphql-operations'
+import type { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
+import type { SettingsCascadeProps, SettingsSubject } from '@sourcegraph/shared/src/settings/settings'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
 import { LoadingSpinner, PageHeader, ErrorMessage } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../auth'
+import settingsSchemaJSON from '../../../../schema/settings.schema.json'
+import type { AuthenticatedUser } from '../auth'
 import { queryGraphQL } from '../backend/graphql'
 import { HeroPage } from '../components/HeroPage'
-import { SettingsCascadeResult } from '../graphql-operations'
-import { eventLogger } from '../tracking/eventLogger'
+import type { SettingsCascadeResult } from '../graphql-operations'
 
-import { mergeSettingsSchemas } from './configuration'
 import { SettingsPage } from './SettingsPage'
 
-const NotFoundPage: React.FunctionComponent<React.PropsWithChildren<unknown>> = () => (
-    <HeroPage icon={MapSearchIcon} title="404: Not Found" />
-)
-
 /** Props shared by SettingsArea and its sub-pages. */
-interface SettingsAreaPageCommonProps extends PlatformContextProps, SettingsCascadeProps, ThemeProps, TelemetryProps {
+interface SettingsAreaPageCommonProps extends PlatformContextProps, SettingsCascadeProps, TelemetryProps {
     /** The subject whose settings to edit. */
     subject: Pick<SettingsSubject, '__typename' | 'id'>
 
@@ -40,6 +32,8 @@ interface SettingsAreaPageCommonProps extends PlatformContextProps, SettingsCasc
      * The currently authenticated user, NOT (necessarily) the user who is the subject of the page.
      */
     authenticatedUser: AuthenticatedUser | null
+
+    isLightTheme: boolean
 }
 
 interface SettingsData {
@@ -47,7 +41,7 @@ interface SettingsData {
 }
 
 /** Properties passed to all pages in the settings area. */
-export interface SettingsAreaPageProps extends SettingsAreaPageCommonProps {
+export interface SettingsAreaPageProps extends SettingsAreaPageCommonProps, TelemetryV2Props {
     /** The settings data, or null if the subject has no settings yet. */
     data: SettingsData
 
@@ -55,7 +49,7 @@ export interface SettingsAreaPageProps extends SettingsAreaPageCommonProps {
     onUpdate: () => void
 }
 
-interface Props extends SettingsAreaPageCommonProps, RouteComponentProps<{}> {
+interface Props extends SettingsAreaPageCommonProps {
     className?: string
     extraHeader?: JSX.Element
 }
@@ -84,7 +78,33 @@ export class SettingsArea extends React.Component<Props, State> {
     private subscriptions = new Subscription()
 
     public componentDidMount(): void {
-        eventLogger.logViewEvent(`Settings${this.props.subject.__typename}`)
+        EVENT_LOGGER.logViewEvent(`Settings${this.props.subject.__typename}`)
+        switch (this.props.subject.__typename) {
+            case 'User': {
+                this.props.platformContext.telemetryRecorder.recordEvent('user.settings', 'view')
+                break
+            }
+            case 'Org': {
+                this.props.platformContext.telemetryRecorder.recordEvent('org.settings', 'view')
+                break
+            }
+            case 'Site': {
+                this.props.platformContext.telemetryRecorder.recordEvent('admin.settings', 'view')
+                break
+            }
+            case 'DefaultSettings': {
+                this.props.platformContext.telemetryRecorder.recordEvent('defaultSettings', 'view')
+                break
+            }
+            case 'Client': {
+                this.props.platformContext.telemetryRecorder.recordEvent('client.settings', 'view')
+            }
+            default: {
+                this.props.platformContext.telemetryRecorder.recordEvent('otherSettings', 'view')
+                break
+            }
+        }
+
         // Load settings.
         this.subscriptions.add(
             combineLatest([
@@ -97,11 +117,7 @@ export class SettingsArea extends React.Component<Props, State> {
                 .pipe(
                     switchMap(([{ id }]) =>
                         fetchSettingsCascade(id).pipe(
-                            switchMap(cascade =>
-                                this.getMergedSettingsJSONSchema(cascade).pipe(
-                                    map(settingsJSONSchema => ({ subjects: cascade.subjects, settingsJSONSchema }))
-                                )
-                            ),
+                            map(cascade => ({ subjects: cascade.subjects, settingsJSONSchema: settingsSchemaJSON })),
                             catchError(error => [asError(error)]),
                             map(dataOrError => ({ dataOrError }))
                         )
@@ -140,21 +156,26 @@ export class SettingsArea extends React.Component<Props, State> {
 
         let term: string
         switch (this.props.subject.__typename) {
-            case 'User':
+            case 'User': {
                 term = 'User'
                 break
-            case 'Org':
+            }
+            case 'Org': {
                 term = 'Organization'
                 break
-            case 'Site':
+            }
+            case 'Site': {
                 term = 'Global'
                 break
-            case 'DefaultSettings':
+            }
+            case 'DefaultSettings': {
                 term = 'Default settings'
                 break
-            default:
+            }
+            default: {
                 term = 'Unknown'
                 break
+            }
         }
 
         const transferProps: SettingsAreaPageProps = {
@@ -166,6 +187,7 @@ export class SettingsArea extends React.Component<Props, State> {
             platformContext: this.props.platformContext,
             settingsCascade: this.props.settingsCascade,
             telemetryService: this.props.telemetryService,
+            telemetryRecorder: this.props.platformContext.telemetryRecorder,
         }
 
         return (
@@ -176,39 +198,12 @@ export class SettingsArea extends React.Component<Props, State> {
                     </PageHeader.Heading>
                 </PageHeader>
                 {this.props.extraHeader}
-                <Switch>
-                    <Route
-                        path={this.props.match.url}
-                        key="hardcoded-key" // see https://github.com/ReactTraining/react-router/issues/4578#issuecomment-334489490
-                        exact={true}
-                        render={routeComponentProps => <SettingsPage {...routeComponentProps} {...transferProps} />}
-                    />
-                    <Route key="hardcoded-key" component={NotFoundPage} />
-                </Switch>
+                <SettingsPage {...transferProps} />
             </div>
         )
     }
 
     private onUpdate = (): void => this.refreshRequests.next()
-
-    private getMergedSettingsJSONSchema(cascade: SettingsSubjects): Observable<{ $id: string }> {
-        return queryConfiguredRegistryExtensions(
-            this.props.platformContext,
-            extensionIDsFromSettings(gqlToCascade(cascade))
-        )
-            .pipe(
-                catchError(error => {
-                    logger.warn('Unable to get extension settings JSON Schemas for settings editor.', { error })
-                    return of([])
-                })
-            )
-            .pipe(
-                map(extensions => ({
-                    $id: 'mergedSettings.schema.json#',
-                    ...mergeSettingsSchemas(extensions),
-                }))
-            )
-    }
 }
 
 function fetchSettingsCascade(subject: Scalars['ID']): Observable<SettingsSubjects> {
@@ -230,7 +225,7 @@ function fetchSettingsCascade(subject: Scalars['ID']): Observable<SettingsSubjec
         { subject }
     ).pipe(
         map(({ data, errors }) => {
-            if (!data || !data.settingsSubject) {
+            if (!data?.settingsSubject) {
                 throw createAggregateError(errors)
             }
             return data.settingsSubject.settingsCascade as SettingsSubjects

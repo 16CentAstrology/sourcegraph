@@ -1,26 +1,29 @@
 import * as React from 'react'
 
 import classNames from 'classnames'
-import * as H from 'history'
 
 import { asError } from '@sourcegraph/common'
-import { Button, ButtonProps, H4, Tooltip, ErrorAlert } from '@sourcegraph/wildcard'
+import { Button, type ButtonProps, Heading, Tooltip, ErrorAlert, type HeadingElement } from '@sourcegraph/wildcard'
 
 import styles from './ActionContainer.module.scss'
 
 export const BaseActionContainer: React.FunctionComponent<
     React.PropsWithChildren<{
         title: React.ReactNode
+        titleAs?: HeadingElement
+        titleStyleAs?: HeadingElement
         description: React.ReactNode
         action?: React.ReactNode
         details?: React.ReactNode
         className?: string
     }>
-> = ({ title, description, action, details, className }) => (
+> = ({ title, description, action, details, className, titleAs = 'h4', titleStyleAs = titleAs }) => (
     <div className={classNames(styles.actionContainer, className)}>
         <div className={styles.row}>
-            <div>
-                <H4 className={styles.title}>{title}</H4>
+            <div className={styles.content}>
+                <Heading as={titleAs} styleAs={titleStyleAs} className={styles.title}>
+                    {title}
+                </Heading>
                 {description}
             </div>
             {action && <div className={styles.btnContainer}>{action}</div>}
@@ -31,6 +34,8 @@ export const BaseActionContainer: React.FunctionComponent<
 
 interface Props {
     title: React.ReactNode
+    titleAs?: HeadingElement
+    titleStyleAs?: HeadingElement
     description: React.ReactNode
     buttonVariant?: ButtonProps['variant']
     buttonLabel: React.ReactNode
@@ -43,7 +48,6 @@ interface Props {
     flashText?: string
 
     run: () => Promise<void>
-    history: H.History
 }
 
 interface State {
@@ -73,6 +77,8 @@ export class ActionContainer extends React.PureComponent<Props, State> {
         return (
             <BaseActionContainer
                 title={this.props.title}
+                titleAs={this.props.titleAs}
+                titleStyleAs={this.props.titleStyleAs}
                 description={this.props.description}
                 className={this.props.className}
                 action={

@@ -1,32 +1,34 @@
 import React, { useContext, useMemo } from 'react'
 
 import classNames from 'classnames'
-import { useHistory } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
+import { lastValueFrom } from 'rxjs'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { PageHeader, Container, Button, LoadingSpinner, useObservable, Link, Tooltip } from '@sourcegraph/wildcard'
 
 import { LoaderButton } from '../../../../../components/LoaderButton'
 import { PageTitle } from '../../../../../components/PageTitle'
 import { CodeInsightsIcon, CodeInsightsPage } from '../../../components'
-import {} from '../../../components/code-insights-page/CodeInsightsPage'
 import { CodeInsightsBackendContext } from '../../../core'
 import { useUiFeatures } from '../../../hooks'
 
 import {
-    DashboardCreationFields,
+    type DashboardCreationFields,
     InsightsDashboardCreationContent,
 } from './components/InsightsDashboardCreationContent'
 
 import styles from './InsightsDashboardCreationPage.module.scss'
 
-interface InsightsDashboardCreationPageProps extends TelemetryProps {}
+interface InsightsDashboardCreationPageProps extends TelemetryProps, TelemetryV2Props {}
 
 export const InsightsDashboardCreationPage: React.FunctionComponent<
     React.PropsWithChildren<InsightsDashboardCreationPageProps>
 > = props => {
-    const { telemetryService } = props
-    const history = useHistory()
+    const { telemetryService, telemetryRecorder } = props
+
+    const navigate = useNavigate()
     const { dashboard } = useUiFeatures()
 
     const { createDashboard, getDashboardOwners } = useContext(CodeInsightsBackendContext)
@@ -40,15 +42,16 @@ export const InsightsDashboardCreationPage: React.FunctionComponent<
             throw new Error('You have to specify a dashboard visibility')
         }
 
-        const createdDashboard = await createDashboard({ name, owners: [owner] }).toPromise()
+        const createdDashboard = await lastValueFrom(createDashboard({ name, owners: [owner] }))
 
         telemetryService.log('CodeInsightsDashboardCreationPageSubmitClick')
+        telemetryRecorder.recordEvent('insights.dashboard', 'create')
 
         // Navigate user to the dashboard page with new created dashboard
-        history.push(`/insights/dashboards/${createdDashboard.id}`)
+        navigate(`/insights/dashboards/${createdDashboard.id}`)
     }
 
-    const handleCancel = (): void => history.goBack()
+    const handleCancel = (): void => navigate(-1)
 
     // Loading state
     if (owners === undefined) {

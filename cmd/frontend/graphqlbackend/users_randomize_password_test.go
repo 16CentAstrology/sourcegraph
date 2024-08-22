@@ -7,9 +7,9 @@ import (
 	"github.com/graph-gophers/graphql-go/errors"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
-	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
+	"github.com/sourcegraph/sourcegraph/internal/dotcom"
 	"github.com/sourcegraph/sourcegraph/internal/txemail"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/schema"
@@ -31,7 +31,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 			}}
 	)
 
-	db := database.NewMockDB()
+	db := dbmocks.NewMockDB()
 	t.Run("Errors when resetting passwords is not enabled", func(t *testing.T) {
 		RunTests(t, []*Test{
 			{
@@ -57,9 +57,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 
 	t.Run("DotCom mode", func(t *testing.T) {
 		// Test dotcom mode
-		orig := envvar.SourcegraphDotComMode()
-		envvar.MockSourcegraphDotComMode(true)
-		defer envvar.MockSourcegraphDotComMode(orig)
+		dotcom.MockSourcegraphDotComMode(t, true)
 
 		t.Run("Errors on DotCom when sending emails is not enabled", func(t *testing.T) {
 			conf.Mock(smtpDisabledConf)
@@ -92,13 +90,13 @@ func TestRandomizeUserPassword(t *testing.T) {
 			conf.Mock(smtpEnabledConf)
 			defer conf.Mock(nil)
 
-			users := database.NewMockUserStore()
+			users := dbmocks.NewMockUserStore()
 			users.GetByCurrentAuthUserFunc.SetDefaultReturn(&types.User{SiteAdmin: true}, nil)
 			users.RandomizePasswordAndClearPasswordResetRateLimitFunc.SetDefaultReturn(nil)
 			users.RenewPasswordResetCodeFunc.SetDefaultReturn("code", nil)
 			users.GetByIDFunc.SetDefaultReturn(&types.User{Username: "alice"}, nil)
 
-			userEmails := database.NewMockUserEmailsStore()
+			userEmails := dbmocks.NewMockUserEmailsStore()
 			userEmails.GetPrimaryEmailFunc.SetDefaultReturn("alice@foo.bar", false, nil)
 
 			db.UsersFunc.SetDefaultReturn(users)
@@ -136,7 +134,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 		conf.Mock(smtpDisabledConf)
 		defer conf.Mock(nil)
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByCurrentAuthUserFunc.SetDefaultReturn(&types.User{SiteAdmin: false}, nil)
 		db.UsersFunc.SetDefaultReturn(users)
 
@@ -154,7 +152,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 				ExpectedErrors: []*errors.QueryError{
 					{
 						Message: "must be site admin",
-						Path:    []any{string("randomizeUserPassword")},
+						Path:    []any{"randomizeUserPassword"},
 					},
 				},
 				Variables: map[string]any{"user": userIDBase64},
@@ -166,7 +164,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 		conf.Mock(smtpDisabledConf)
 		defer conf.Mock(nil)
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByCurrentAuthUserFunc.SetDefaultReturn(&types.User{SiteAdmin: true}, nil)
 		db.UsersFunc.SetDefaultReturn(users)
 
@@ -184,7 +182,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 				ExpectedErrors: []*errors.QueryError{
 					{
 						Message: "cannot parse user ID: illegal base64 data at input byte 4",
-						Path:    []any{string("randomizeUserPassword")},
+						Path:    []any{"randomizeUserPassword"},
 					},
 				},
 				Variables: map[string]any{"user": "alice"},
@@ -196,7 +194,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 		conf.Mock(smtpDisabledConf)
 		defer conf.Mock(nil)
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByCurrentAuthUserFunc.SetDefaultReturn(&types.User{SiteAdmin: true}, nil)
 		users.RandomizePasswordAndClearPasswordResetRateLimitFunc.SetDefaultReturn(nil)
 		users.RenewPasswordResetCodeFunc.SetDefaultReturn("code", nil)
@@ -214,7 +212,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 				`,
 				ExpectedResult: `{
 					"randomizeUserPassword": {
-						"resetPasswordURL": "http://example.com/password-reset?code=code&userID=42"
+						"resetPasswordURL": "http://example.com/password-reset?code=code&email=&userID=42"
 					}
 				}`,
 				Variables: map[string]any{"user": userIDBase64},
@@ -226,13 +224,13 @@ func TestRandomizeUserPassword(t *testing.T) {
 		conf.Mock(smtpEnabledConf)
 		defer conf.Mock(nil)
 
-		users := database.NewMockUserStore()
+		users := dbmocks.NewMockUserStore()
 		users.GetByCurrentAuthUserFunc.SetDefaultReturn(&types.User{SiteAdmin: true}, nil)
 		users.RandomizePasswordAndClearPasswordResetRateLimitFunc.SetDefaultReturn(nil)
 		users.RenewPasswordResetCodeFunc.SetDefaultReturn("code", nil)
 		users.GetByIDFunc.SetDefaultReturn(&types.User{Username: "alice"}, nil)
 
-		userEmails := database.NewMockUserEmailsStore()
+		userEmails := dbmocks.NewMockUserEmailsStore()
 		userEmails.GetPrimaryEmailFunc.SetDefaultReturn("alice@foo.bar", false, nil)
 
 		db.UsersFunc.SetDefaultReturn(users)
@@ -259,7 +257,7 @@ func TestRandomizeUserPassword(t *testing.T) {
 				`,
 				ExpectedResult: `{
 					"randomizeUserPassword": {
-						"resetPasswordURL": "http://example.com/password-reset?code=code&userID=42"
+						"resetPasswordURL": "http://example.com/password-reset?code=code&email=&userID=42"
 					}
 				}`,
 				Variables: map[string]any{"user": userIDBase64},

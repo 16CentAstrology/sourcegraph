@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/grafana/regexp"
+	"github.com/sourcegraph/conc/pool"
 	"github.com/sourcegraph/run"
 
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/generate"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
 	"github.com/sourcegraph/sourcegraph/dev/sg/root"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
-	"github.com/sourcegraph/sourcegraph/lib/group"
 	"github.com/sourcegraph/sourcegraph/lib/output"
 )
 
@@ -82,7 +82,8 @@ func findFilepathsWithGenerate(dir string) (map[string]struct{}, error) {
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
 
-		if entry.IsDir() {
+		// recurse in the directory, but skip the directory if it's a vendor dir
+		if entry.IsDir() && entry.Name() != "vendor" {
 			paths, err := findFilepathsWithGenerate(path)
 			if err != nil {
 				return nil, err
@@ -107,7 +108,7 @@ func findFilepathsWithGenerate(dir string) (map[string]struct{}, error) {
 			file.Close()
 
 			if err := scanner.Err(); err != nil {
-				return nil, err
+				return nil, errors.Wrapf(err, "bufio.Scanner failed on file %q", path)
 			}
 		}
 	}
@@ -148,7 +149,7 @@ func runGoGenerate(ctx context.Context, args []string, progressBar bool, verbosi
 
 	// If no packages are given, go for everything except doc/cli/references.
 	// We cut down on the number of files we have to generate by looking for a
-	// go:generate directive by hand first.
+	// "go:generate" directive by hand first.
 	paths, err := FindFilesWithGenerate(wd)
 	if err != nil {
 		return err
@@ -215,14 +216,11 @@ func runGoGenerateOnPaths(ctx context.Context, pkgPaths []string, progressBar bo
 
 	var (
 		m sync.Mutex
-		g = group.New().WithContext(ctx).WithMaxConcurrency(runtime.GOMAXPROCS(0))
+		p = pool.New().WithContext(ctx).WithMaxGoroutines(runtime.GOMAXPROCS(0))
 	)
 
 	for _, pkgPath := range pkgPaths {
-		// Do not capture loop variable in goroutine below
-		pkgPath := pkgPath
-
-		g.Go(func(ctx context.Context) error {
+		p.Go(func(ctx context.Context) error {
 			file := filepath.Base(pkgPath) // *.go
 			directory := filepath.Dir(pkgPath)
 			if verbosity == VerboseOutput {
@@ -231,7 +229,7 @@ func runGoGenerateOnPaths(ctx context.Context, pkgPaths []string, progressBar bo
 
 			start := time.Now()
 			if err := root.Run(run.Cmd(ctx, "go", "generate", file), directory).Wait(); err != nil {
-				return err
+				return errors.Wrapf(err, "%s in %s", file, directory)
 			}
 			duration := time.Since(start)
 
@@ -249,7 +247,7 @@ func runGoGenerateOnPaths(ctx context.Context, pkgPaths []string, progressBar bo
 		})
 	}
 
-	return g.Wait()
+	return p.Wait()
 }
 
 func runGoImports(ctx context.Context, verbosity OutputVerbosityType, reportOut *std.Output, w io.Writer) error {

@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/grafana-tools/sdk"
-	"github.com/grafana/regexp"
 	"github.com/prometheus/prometheus/model/labels"
 
 	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/lib/pointers"
 	"github.com/sourcegraph/sourcegraph/monitoring/monitoring/internal/grafana"
 	"github.com/sourcegraph/sourcegraph/monitoring/monitoring/internal/promql"
 )
@@ -140,7 +140,7 @@ func (c *Dashboard) renderDashboard(injectLabelMatchers []*labels.Matcher, folde
 
 		board.Annotations.List = []sdk.Annotation{{
 			Name:        "Alert events",
-			Datasource:  StringPtr("Prometheus"),
+			Datasource:  pointers.Ptr("Prometheus"),
 			Expr:        expr,
 			Step:        "60s",
 			TitleFormat: "{{ description }} ({{ name }})",
@@ -167,7 +167,7 @@ func (c *Dashboard) renderDashboard(injectLabelMatchers []*labels.Matcher, folde
 
 		board.Annotations.List = append(board.Annotations.List, sdk.Annotation{
 			Name:        "Version changes",
-			Datasource:  StringPtr("Prometheus"),
+			Datasource:  pointers.Ptr("Prometheus"),
 			Expr:        expr,
 			Step:        "60s",
 			TitleFormat: "v{{ version }}",
@@ -185,7 +185,7 @@ func (c *Dashboard) renderDashboard(injectLabelMatchers []*labels.Matcher, folde
 	description.TextPanel.Content = fmt.Sprintf(`
 	<div style="text-align: left;">
 	  <img src="https://sourcegraphstatic.com/sourcegraph-logo-light.png" style="height:30px; margin:0.5rem"></img>
-	  <div style="margin-left: 1rem; margin-top: 0.5rem; font-size: 20px;"><b>%s:</b> %s <a style="font-size: 15px" target="_blank" href="https://docs.sourcegraph.com/dev/background-information/architecture">(⧉ architecture diagram)</a></span>
+	  <div style="margin-left: 1rem; margin-top: 0.5rem; font-size: 20px;"><b>%s:</b> %s <a style="font-size: 15px" target="_blank" href="https://docs-legacy.sourcegraph.com/dev/background-information/architecture">(⧉ architecture diagram)</a></span>
 	</div>
 	`, c.Name, c.Description)
 	board.Panels = append(board.Panels, description)
@@ -255,7 +255,7 @@ func (c *Dashboard) renderDashboard(injectLabelMatchers []*labels.Matcher, folde
 		alertsFiring.GraphPanel.FieldConfig = &sdk.FieldConfig{}
 		alertsFiring.GraphPanel.FieldConfig.Defaults.Links = []sdk.Link{{
 			Title: "Graph panel",
-			URL:   StringPtr("/-/debug/grafana/d/${__field.labels.service_name}/${__field.labels.service_name}?viewPanel=${__field.labels.grafana_panel_id}"),
+			URL:   pointers.Ptr("/-/debug/grafana/d/${__field.labels.service_name}/${__field.labels.service_name}?viewPanel=${__field.labels.grafana_panel_id}"),
 		}}
 		board.Panels = append(board.Panels, alertsFiring)
 	}
@@ -337,7 +337,7 @@ func (c *Dashboard) alertDescription(o Observable, alert *ObservableAlertDefinit
 // high-level alerting metrics for the container. For more information about
 // how these work, see:
 //
-// https://docs.sourcegraph.com/admin/observability/metrics#high-level-alerting-metrics
+// https://sourcegraph.com/docs/admin/observability/metrics#high-level-alerting-metrics
 func (c *Dashboard) RenderPrometheusRules(injectLabelMatchers []*labels.Matcher) (*PrometheusRules, error) {
 	group := newPrometheusRuleGroup(c.Name)
 	for groupIndex, g := range c.Groups {
@@ -366,12 +366,12 @@ func (c *Dashboard) RenderPrometheusRules(injectLabelMatchers []*labels.Matcher)
 							c.Name, o.Name, level, err)
 					}
 
-					labels := map[string]string{
+					labelMap := map[string]string{
 						"name":         o.Name,
 						"level":        level,
 						"service_name": c.Name,
 						"description":  description,
-						"owner":        o.Owner.identifier,
+						"owner":        o.Owner.opsgenieTeam,
 
 						// in the corresponding dashboard, this label should indicate
 						// the panel associated with this rule
@@ -379,9 +379,9 @@ func (c *Dashboard) RenderPrometheusRules(injectLabelMatchers []*labels.Matcher)
 					}
 					// Inject labels as fixed values for alert rules
 					for _, l := range injectLabelMatchers {
-						labels[l.Name] = l.Value
+						labelMap[l.Name] = l.Value
 					}
-					group.appendRow(alertQuery, labels, a.duration)
+					group.appendRow(alertQuery, labelMap, a.duration)
 				}
 			}
 		}
@@ -446,90 +446,6 @@ func (r Row) validate(variables []ContainerVariable) error {
 	return errs
 }
 
-// ObservableOwner denotes a team that owns an Observable. The current teams are described in
-// the handbook: https://handbook.sourcegraph.com/departments/engineering/
-type ObservableOwner struct {
-	// identifier is the team's name on OpsGenie and is used for routing alerts.
-	identifier       string
-	handbookSlug     string
-	handbookTeamName string
-}
-
-// identifer must be all lowercase, and optionally  hyphenated.
-//
-// Some examples of valid identifiers:
-// foo
-// foo-bar
-// foo-bar-baz
-//
-// Some examples of invalid identifiers:
-// Foo
-// FOO
-// Foo-Bar
-// foo_bar
-var identifierPattern = regexp.MustCompile("^([a-z]+)(-[a-z]+)*?$")
-
-var (
-	ObservableOwnerSearch = ObservableOwner{
-		identifier:       "search",
-		handbookSlug:     "search/product",
-		handbookTeamName: "Search",
-	}
-	ObservableOwnerSearchCore = ObservableOwner{
-		identifier:       "search-core",
-		handbookSlug:     "search/core",
-		handbookTeamName: "Search Core",
-	}
-	ObservableOwnerBatches = ObservableOwner{
-		identifier:       "batch-changes",
-		handbookSlug:     "batch-changes",
-		handbookTeamName: "Batch Changes",
-	}
-	ObservableOwnerCodeIntel = ObservableOwner{
-		identifier:       "code-intel",
-		handbookSlug:     "code-intelligence",
-		handbookTeamName: "Code intelligence",
-	}
-	ObservableOwnerSecurity = ObservableOwner{
-		identifier:       "security",
-		handbookSlug:     "security",
-		handbookTeamName: "Security",
-	}
-	ObservableOwnerRepoManagement = ObservableOwner{
-		identifier:       "repo-management",
-		handbookSlug:     "repo-management",
-		handbookTeamName: "Repo Management",
-	}
-	ObservableOwnerCodeInsights = ObservableOwner{
-		identifier:       "code-insights",
-		handbookSlug:     "code-insights",
-		handbookTeamName: "Code Insights",
-	}
-	ObservableOwnerDevOps = ObservableOwner{
-		identifier:       "devops",
-		handbookSlug:     "devops",
-		handbookTeamName: "Cloud DevOps",
-	}
-	ObservableOwnerIAM = ObservableOwner{
-		identifier:       "iam",
-		handbookSlug:     "iam",
-		handbookTeamName: "Identity and Access Management",
-	}
-	ObservableOwnerDataAnalytics = ObservableOwner{
-		identifier:       "data-analytics",
-		handbookSlug:     "data-analytics",
-		handbookTeamName: "Data & Analytics",
-	}
-)
-
-// toMarkdown returns a Markdown string that also links to the owner's team page in the handbook.
-func (o ObservableOwner) toMarkdown() string {
-	return fmt.Sprintf(
-		"[Sourcegraph %s team](https://handbook.sourcegraph.com/departments/engineering/teams/%s)",
-		o.handbookTeamName, o.handbookSlug,
-	)
-}
-
 // Observable describes a metric about a container that can be observed. For example, memory usage.
 //
 // These correspond to Grafana graphs.
@@ -587,14 +503,14 @@ type Observable struct {
 	// suggest checking in on these periodically, or using a notification channel that
 	// will not bother anyone if it is spammed.
 	//
-	// Learn more about how alerting is used: https://docs.sourcegraph.com/admin/observability/alerting
+	// Learn more about how alerting is used: https://sourcegraph.com/docs/admin/observability/alerting
 	Warning *ObservableAlertDefinition
 
 	// Critical alerts indicate that something is definitively wrong with Sourcegraph,
 	// in a way that is very likely to be noticeable to users. We suggest using a
 	// high-visibility notification channel, such as paging, for these alerts.
 	//
-	// Learn more about how alerting is used: https://docs.sourcegraph.com/admin/observability/alerting
+	// Learn more about how alerting is used: https://sourcegraph.com/docs/admin/observability/alerting
 	Critical *ObservableAlertDefinition
 
 	// NoAlerts must be set by Observables that do not have any alerts. This ensures the
@@ -680,16 +596,21 @@ func (o Observable) validate(variables []ContainerVariable) error {
 	if len(o.Description) == 0 {
 		return errors.New("Description must be set")
 	}
+	// Avoid paragraphs in the brief description
+	const maxDescriptionLength = 120
+	if len(o.Description) > maxDescriptionLength {
+		return errors.Newf("Description must be under %d characters (current length: %d) - to provide more context, use Interpretation and NextSteps fields instead",
+			maxDescriptionLength, len(o.Description))
+	}
 	if first, second := string([]rune(o.Description)[0]), string([]rune(o.Description)[1]); first != strings.ToLower(first) && second == strings.ToLower(second) {
 		return errors.Errorf("Description must be lowercase except for acronyms; found \"%s\"", o.Description)
 	}
-	if o.Owner.identifier == "" && !o.NoAlert {
-		return errors.New("Owner.identifier must be defined for observables with alerts")
-	}
 
-	// In some cases, the identifier is an empty string. We don't want to run it through the regex.
-	if o.Owner.identifier != "" && !identifierPattern.Match([]byte(o.Owner.identifier)) {
-		return errors.Errorf(`Owner.identifier has invalid format: "%v"`, []byte(o.Owner.identifier))
+	// If there is an alert, the given owner must be valid
+	if !o.NoAlert {
+		if err := o.Owner.validate(); err != nil {
+			return err
+		}
 	}
 
 	if !o.Panel.panelType.validate() {
@@ -806,14 +727,14 @@ func (o Observable) renderPanel(c *Dashboard, manipulations panelManipulationOpt
 	// Add reference links
 	panel.Links = []sdk.Link{{
 		Title:       "Panel reference",
-		URL:         StringPtr(fmt.Sprintf("%s#%s", canonicalDashboardsDocsURL, observableDocAnchor(c, o))),
-		TargetBlank: boolPtr(true),
+		URL:         pointers.Ptr(fmt.Sprintf("%s#%s", canonicalDashboardsDocsURL, observableDocAnchor(c, o))),
+		TargetBlank: pointers.Ptr(true),
 	}}
 	if !o.NoAlert {
 		panel.Links = append(panel.Links, sdk.Link{
 			Title:       "Alerts reference",
-			URL:         StringPtr(fmt.Sprintf("%s#%s", canonicalAlertDocsURL, observableDocAnchor(c, o))),
-			TargetBlank: boolPtr(true),
+			URL:         pointers.Ptr(fmt.Sprintf("%s#%s", canonicalAlertDocsURL, observableDocAnchor(c, o))),
+			TargetBlank: pointers.Ptr(true),
 		})
 	}
 

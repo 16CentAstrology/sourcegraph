@@ -1,22 +1,22 @@
 import * as React from 'react'
 
 import classNames from 'classnames'
-import { Observable } from 'rxjs'
+import type { Observable } from 'rxjs'
 import { map } from 'rxjs/operators'
 
 import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
-import { createAggregateError, numberWithCommas, memoizeObservable } from '@sourcegraph/common'
+import { createAggregateError, memoizeObservable, numberWithCommas } from '@sourcegraph/common'
 import { gql } from '@sourcegraph/http-client'
 import { Badge, Icon, LinkOrSpan } from '@sourcegraph/wildcard'
 
 import { requestGraphQL } from '../backend/graphql'
 import {
-    GitRefConnectionFields,
-    GitRefFields,
     GitRefType,
-    RepositoryGitRefsResult,
-    RepositoryGitRefsVariables,
-    Scalars,
+    type GitRefConnectionFields,
+    type GitRefFields,
+    type RepositoryGitRefsResult,
+    type RepositoryGitRefsVariables,
+    type Scalars,
 } from '../graphql-operations'
 
 import styles from './GitReference.module.scss'
@@ -40,6 +40,8 @@ export interface GitReferenceNodeProps {
     nodeLinkClassName?: string
 
     ariaLabel?: string
+
+    isPackageVersion?: boolean
 }
 
 export const GitReferenceNode: React.FunctionComponent<React.PropsWithChildren<GitReferenceNodeProps>> = ({
@@ -52,8 +54,10 @@ export const GitReferenceNode: React.FunctionComponent<React.PropsWithChildren<G
     icon: ReferenceIcon,
     nodeLinkClassName,
     ariaLabel,
+    isPackageVersion,
 }) => {
     const mostRecentSig =
+        !isPackageVersion &&
         node.target.commit &&
         (node.target.commit.committer && node.target.commit.committer.date > node.target.commit.author.date
             ? node.target.commit.committer
@@ -138,7 +142,7 @@ export const REPOSITORY_GIT_REFS = gql`
         node(id: $repo) {
             __typename
             ... on Repository {
-                gitRefs(first: $first, query: $query, type: $type, orderBy: AUTHORED_OR_COMMITTED_AT) {
+                gitRefs(first: $first, query: $query, type: $type) {
                     __typename
                     ...GitRefConnectionFields
                 }
@@ -163,7 +167,7 @@ export const REPOSITORY_GIT_REFS = gql`
 export const queryGitReferences = memoizeObservable(
     (args: {
         repo: Scalars['ID']
-        first?: number
+        first?: number | null
         query?: string
         type: GitRefType
         withBehindAhead?: boolean
@@ -177,7 +181,7 @@ export const queryGitReferences = memoizeObservable(
                 args.withBehindAhead !== undefined ? args.withBehindAhead : args.type === GitRefType.GIT_BRANCH,
         }).pipe(
             map(({ data, errors }) => {
-                if (!data || !data.node || data.node.__typename !== 'Repository' || !data.node.gitRefs) {
+                if (data?.node?.__typename !== 'Repository' || !data?.node?.gitRefs) {
                     throw createAggregateError(errors)
                 }
                 return data.node.gitRefs

@@ -7,18 +7,19 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
+	"log" //nolint:logging // TODO move all logging to sourcegraph/log
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/opentracing/opentracing-go/ext"
-	otelog "github.com/opentracing/opentracing-go/log"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/sourcegraph/sourcegraph/internal/observation"
+	"github.com/sourcegraph/sourcegraph/internal/tenant"
+	internaltrace "github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
@@ -81,15 +82,15 @@ func NewStore(dir, component string, opts ...StoreOpt) Store {
 
 type StoreOpt func(*store)
 
-func WithBackgroundTimeout(t time.Duration) func(*store) {
+func WithBackgroundTimeout(t time.Duration) StoreOpt {
 	return func(s *store) { s.backgroundTimeout = t }
 }
 
-func WithBeforeEvict(f func(string, observation.TraceLogger)) func(*store) {
+func WithBeforeEvict(f func(string, observation.TraceLogger)) StoreOpt {
 	return func(s *store) { s.beforeEvict = f }
 }
 
-func WithobservationCtx(ctx *observation.Context) func(*store) {
+func WithobservationCtx(ctx *observation.Context) StoreOpt {
 	return func(s *store) { s.observe = newOperations(ctx, s.component) }
 }
 
@@ -129,8 +130,8 @@ func (s *store) Open(ctx context.Context, key []string, fetcher Fetcher) (file *
 }
 
 func (s *store) OpenWithPath(ctx context.Context, key []string, fetcher FetcherWithPath) (file *File, err error) {
-	ctx, trace, endObservation := s.observe.cachedFetch.With(ctx, &err, observation.Args{LogFields: []otelog.Field{
-		otelog.String(string(ext.Component), s.component),
+	ctx, trace, endObservation := s.observe.cachedFetch.With(ctx, &err, observation.Args{Attrs: []attribute.KeyValue{
+		attribute.String("component", s.component),
 	}})
 	defer endObservation(1, observation.Args{})
 
@@ -146,7 +147,10 @@ func (s *store) OpenWithPath(ctx context.Context, key []string, fetcher FetcherW
 		return nil, errors.New("diskcache.store.Dir must be set")
 	}
 
-	path := s.path(key)
+	path, err := s.path(ctx, key)
+	if err != nil {
+		return nil, err
+	}
 	trace.AddEvent("TODO Domain Owner", attribute.String("key", fmt.Sprint(key)), attribute.String("path", path))
 
 	err = os.MkdirAll(filepath.Dir(path), os.ModePerm)
@@ -170,11 +174,11 @@ func (s *store) OpenWithPath(ctx context.Context, key []string, fetcher FetcherW
 		err error
 	}
 	ch := make(chan result, 1)
-	go func(ctx context.Context) {
+	go func() {
 		var err error
 		var f *File
-		ctx, trace, endObservation := s.observe.backgroundFetch.With(ctx, &err, observation.Args{LogFields: []otelog.Field{
-			otelog.Bool("withBackgroundTimeout", s.backgroundTimeout != 0),
+		ctx, trace, endObservation := s.observe.backgroundFetch.With(ctx, &err, observation.Args{Attrs: []attribute.KeyValue{
+			attribute.Bool("withBackgroundTimeout", s.backgroundTimeout != 0),
 		}})
 		defer endObservation(1, observation.Args{})
 
@@ -185,7 +189,7 @@ func (s *store) OpenWithPath(ctx context.Context, key []string, fetcher FetcherW
 		}
 		f, err = doFetch(ctx, path, fetcher, trace)
 		ch <- result{f, err}
-	}(ctx)
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -199,7 +203,21 @@ func (s *store) OpenWithPath(ctx context.Context, key []string, fetcher FetcherW
 }
 
 // path returns the path for key.
-func (s *store) path(key []string) string {
+func (s *store) path(ctx context.Context, key []string) (string, error) {
+	if !tenant.EnforceTenant() {
+		return s.pathNoTenant(key), nil
+	}
+
+	// 🚨SECURITY: We use the tenant ID as part of the path for tenant isolation.
+	tnt, err := tenant.FromContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	encoded := append([]string{s.dir, "tenants", strconv.Itoa(tnt.ID())}, EncodeKeyComponents(key)...)
+	return filepath.Join(encoded...) + ".zip", nil
+}
+
+func (s *store) pathNoTenant(key []string) string {
 	encoded := append([]string{s.dir}, EncodeKeyComponents(key)...)
 	return filepath.Join(encoded...) + ".zip"
 }
@@ -294,8 +312,8 @@ type EvictStats struct {
 }
 
 func (s *store) Evict(maxCacheSizeBytes int64) (stats EvictStats, err error) {
-	_, trace, endObservation := s.observe.evict.With(context.Background(), &err, observation.Args{LogFields: []otelog.Field{
-		otelog.Int64("maxCacheSizeBytes", maxCacheSizeBytes),
+	_, trace, endObservation := s.observe.evict.With(context.Background(), &err, observation.Args{Attrs: []attribute.KeyValue{
+		attribute.Int64("maxCacheSizeBytes", maxCacheSizeBytes),
 	}})
 	endObservation(1, observation.Args{})
 
@@ -362,7 +380,7 @@ func (s *store) Evict(maxCacheSizeBytes int64) (stats EvictStats, err error) {
 		}
 		err = os.Remove(path)
 		if err != nil {
-			trace.AddEvent("failed to remove disk cache entry", attribute.String("path", path), attribute.String("error", err.Error()))
+			trace.AddEvent("failed to remove disk cache entry", attribute.String("path", path), internaltrace.Error(err))
 			log.Printf("failed to remove %s: %s", path, err)
 			continue
 		}

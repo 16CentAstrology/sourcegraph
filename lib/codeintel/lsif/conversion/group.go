@@ -2,7 +2,6 @@ package conversion
 
 import (
 	"context"
-	"math"
 	"sort"
 	"strings"
 
@@ -22,7 +21,7 @@ const resultsPerResultChunk = 512
 // groupBundleData converts a raw (but canonicalized) correlation State into a GroupedBundleData.
 func groupBundleData(ctx context.Context, state *State) *precise.GroupedBundleDataChans {
 	numResults := len(state.DefinitionData) + len(state.ReferenceData) + len(state.ImplementationData)
-	numResultChunks := int(math.Max(1, math.Floor(float64(numResults)/resultsPerResultChunk)))
+	numResultChunks := max(1, numResults/resultsPerResultChunk)
 
 	meta := precise.MetaData{NumResultChunks: numResultChunks}
 	documents := serializeBundleDocuments(ctx, state)
@@ -314,7 +313,7 @@ func gatherMonikersLocations(ctx context.Context, state *State, data map[int]*da
 								r := state.RangeData[id]
 
 								locations = append(locations, precise.LocationData{
-									URI:            uri,
+									DocumentPath:   uri,
 									StartLine:      r.Start.Line,
 									StartCharacter: r.Start.Character,
 									EndLine:        r.End.Line,
@@ -360,8 +359,8 @@ type sortableLocations []precise.LocationData
 func (s sortableLocations) Len() int      { return len(s) }
 func (s sortableLocations) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 func (s sortableLocations) Less(i, j int) bool {
-	if s[i].URI != s[j].URI {
-		return s[i].URI <= s[j].URI
+	if s[i].DocumentPath != s[j].DocumentPath {
+		return s[i].DocumentPath <= s[j].DocumentPath
 	}
 
 	if cmp := s[i].StartLine - s[j].StartLine; cmp != 0 {

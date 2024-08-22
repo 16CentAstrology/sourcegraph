@@ -19,13 +19,13 @@ func InitPrometheusMetric[T workerutil.Record](observationCtx *observation.Conte
 		teamAndResource = team + "_" + teamAndResource
 	}
 
-	logger := observationCtx.Logger.Scoped("InitPrometheusMetric", "")
+	logger := observationCtx.Logger.Scoped("InitPrometheusMetric")
 	observationCtx.Registerer.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name:        fmt.Sprintf("src_%s_total", teamAndResource),
 		Help:        fmt.Sprintf("Total number of %s records in the queued state.", resource),
 		ConstLabels: constLabels,
 	}, func() float64 {
-		count, err := workerStore.QueuedCount(context.Background(), false)
+		count, err := workerStore.CountByState(context.Background(), store.StateQueued|store.StateErrored)
 		if err != nil {
 			logger.Error("Failed to determine queue size", log.Error(err))
 			return 0

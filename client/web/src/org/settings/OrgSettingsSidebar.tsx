@@ -2,26 +2,23 @@ import React, { useCallback, useState } from 'react'
 
 import { mdiMenu } from '@mdi/js'
 import classNames from 'classnames'
-import { RouteComponentProps } from 'react-router-dom'
 
-import { Button, Icon, ProductStatusBadge, ProductStatusType } from '@sourcegraph/wildcard'
+import { Button, Icon, ProductStatusBadge, type ProductStatusType } from '@sourcegraph/wildcard'
 
-import { AuthenticatedUser } from '../../auth'
-import { BatchChangesProps } from '../../batches'
+import type { AuthenticatedUser } from '../../auth'
+import type { BatchChangesProps } from '../../batches'
 import { SidebarGroup, SidebarGroupHeader, SidebarNavItem } from '../../components/Sidebar'
-import { OrgAreaOrganizationFields } from '../../graphql-operations'
+import type { OrgAreaOrganizationFields } from '../../graphql-operations'
 import { SiteAdminAlert } from '../../site-admin/SiteAdminAlert'
-import { NavItemDescriptor } from '../../util/contributions'
+import type { NavItemDescriptor } from '../../util/contributions'
 
-import { OrgSettingsAreaRouteContext } from './OrgSettingsArea'
+import type { OrgSettingsAreaRouteContext } from './OrgSettingsArea'
 
 import styles from './OrgSettingsSidebar.module.scss'
 
 export interface OrgSettingsSidebarItemConditionContext extends BatchChangesProps {
     org: OrgAreaOrganizationFields
-    authenticatedUser: Pick<AuthenticatedUser, 'id' | 'siteAdmin' | 'tags'>
-    isSourcegraphDotCom: boolean
-    newMembersInviteEnabled: boolean
+    authenticatedUser: AuthenticatedUser
 }
 
 type OrgSettingsSidebarItem = NavItemDescriptor<OrgSettingsSidebarItemConditionContext> & {
@@ -30,12 +27,8 @@ type OrgSettingsSidebarItem = NavItemDescriptor<OrgSettingsSidebarItemConditionC
 
 export type OrgSettingsSidebarItems = readonly OrgSettingsSidebarItem[]
 
-export interface OrgSettingsSidebarProps
-    extends OrgSettingsAreaRouteContext,
-        BatchChangesProps,
-        RouteComponentProps<{}> {
+export interface OrgSettingsSidebarProps extends OrgSettingsAreaRouteContext, BatchChangesProps {
     items: OrgSettingsSidebarItems
-    isSourcegraphDotCom: boolean
     className?: string
 }
 
@@ -46,8 +39,6 @@ export const OrgSettingsSidebar: React.FunctionComponent<React.PropsWithChildren
     org,
     authenticatedUser,
     className,
-    match,
-    newMembersInviteEnabled,
     ...props
 }) => {
     const [isMobileExpanded, setIsMobileExpanded] = useState(false)
@@ -60,8 +51,6 @@ export const OrgSettingsSidebar: React.FunctionComponent<React.PropsWithChildren
         batchChangesWebhookLogsEnabled: props.batchChangesWebhookLogsEnabled,
         org,
         authenticatedUser,
-        isSourcegraphDotCom: props.isSourcegraphDotCom,
-        newMembersInviteEnabled,
     }
 
     return (
@@ -92,9 +81,9 @@ export const OrgSettingsSidebar: React.FunctionComponent<React.PropsWithChildren
                             condition(context) && (
                                 <SidebarNavItem
                                     key={label}
-                                    to={match.path + to}
-                                    exact={exact}
+                                    to={`/organizations/${org.name}/settings` + to}
                                     onClick={collapseMobileSidebar}
+                                    exact={exact}
                                 >
                                     {label} {status && <ProductStatusBadge className="ml-1" status={status} />}
                                 </SidebarNavItem>

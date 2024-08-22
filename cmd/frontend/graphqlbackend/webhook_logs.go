@@ -12,7 +12,6 @@ import (
 
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/internal/auth"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/encryption/keyring"
@@ -21,11 +20,11 @@ import (
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
-// webhookLogArgs are the arguments common to the two queries that provide
+// WebhookLogsArgs are the arguments common to the two queries that provide
 // access to webhook logs: the webhookLogs method on the top level query, and on
 // the ExternalService type.
 type WebhookLogsArgs struct {
-	graphqlutil.ConnectionArgs
+	gqlutil.ConnectionArgs
 	After      *string
 	OnlyErrors *bool
 	Since      *time.Time
@@ -143,7 +142,7 @@ func NewWebhookLogConnectionResolver(
 	}
 
 	return &WebhookLogConnectionResolver{
-		logger:            log.Scoped("webhookLogConnectionResolver", ""),
+		logger:            log.Scoped("webhookLogConnectionResolver"),
 		args:              args,
 		externalServiceID: externalServiceID,
 		store:             db.WebhookLogs(keyring.Default().WebhookLogKey),
@@ -158,10 +157,10 @@ func (r *WebhookLogConnectionResolver) Nodes(ctx context.Context) ([]*webhookLog
 
 	nodes := make([]*webhookLogResolver, len(logs))
 	db := database.NewDBWith(r.logger, r.store)
-	for i, log := range logs {
+	for i, l := range logs {
 		nodes[i] = &webhookLogResolver{
 			db:  db,
-			log: log,
+			log: l,
 		}
 	}
 
@@ -178,16 +177,16 @@ func (r *WebhookLogConnectionResolver) TotalCount(ctx context.Context) (int32, e
 	return int32(count), err
 }
 
-func (r *WebhookLogConnectionResolver) PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error) {
+func (r *WebhookLogConnectionResolver) PageInfo(ctx context.Context) (*gqlutil.PageInfo, error) {
 	_, next, err := r.compute(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	if next == 0 {
-		return graphqlutil.HasNextPage(false), nil
+		return gqlutil.HasNextPage(false), nil
 	}
-	return graphqlutil.NextPageCursor(fmt.Sprint(next)), nil
+	return gqlutil.NextPageCursor(fmt.Sprint(next)), nil
 }
 
 func (r *WebhookLogConnectionResolver) compute(ctx context.Context) ([]*types.WebhookLog, int64, error) {
@@ -230,12 +229,12 @@ func webhookLogByID(ctx context.Context, db database.DB, gqlID graphql.ID) (*web
 		return nil, err
 	}
 
-	log, err := db.WebhookLogs(keyring.Default().WebhookLogKey).GetByID(ctx, id)
+	l, err := db.WebhookLogs(keyring.Default().WebhookLogKey).GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	return &webhookLogResolver{db: db, log: log}, nil
+	return &webhookLogResolver{db: db, log: l}, nil
 }
 
 func (r *webhookLogResolver) ID() graphql.ID {

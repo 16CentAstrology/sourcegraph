@@ -6,18 +6,19 @@ import classNames from 'classnames'
 import { animated, useSpring } from 'react-spring'
 
 import { CodeSnippet } from '@sourcegraph/branded/src/components/CodeSnippet'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
 import { Alert, Button, H4, Icon, Tooltip, useAccordion, useStopwatch, ErrorAlert } from '@sourcegraph/wildcard'
 
-import { Connection } from '../../../../../components/FilteredConnection'
+import type { Connection } from '../../../../../components/FilteredConnection'
 import {
     BatchSpecWorkspaceResolutionState,
-    PreviewHiddenBatchSpecWorkspaceFields,
-    PreviewVisibleBatchSpecWorkspaceFields,
+    type PreviewHiddenBatchSpecWorkspaceFields,
+    type PreviewVisibleBatchSpecWorkspaceFields,
 } from '../../../../../graphql-operations'
-import { eventLogger } from '../../../../../tracking/eventLogger'
 import { useBatchChangesLicense } from '../../../useBatchChangesLicense'
 import { Header as WorkspacesListHeader } from '../../../workspaces-list'
-import { BatchSpecContextState, useBatchSpecContext } from '../../BatchSpecContext'
+import { type BatchSpecContextState, useBatchSpecContext } from '../../BatchSpecContext'
 
 import { ImportingChangesetsPreviewList } from './ImportingChangesetsPreviewList'
 import { PreviewLoadingSpinner } from './PreviewLoadingSpinner'
@@ -53,12 +54,13 @@ const WAITING_MESSAGE_INTERVAL = 10
  * about Batch Changes performance. */
 const WORKSPACE_WARNING_MIN_TOTAL_COUNT = 2000
 
-interface WorkspacesPreviewProps {
+interface WorkspacesPreviewProps extends TelemetryV2Props {
     isReadOnly?: boolean
 }
 
 export const WorkspacesPreview: React.FunctionComponent<React.PropsWithChildren<WorkspacesPreviewProps>> = ({
     isReadOnly = false,
+    telemetryRecorder,
 }) => {
     const { batchSpec, editor, workspacesPreview } = useBatchSpecContext()
 
@@ -68,6 +70,7 @@ export const WorkspacesPreview: React.FunctionComponent<React.PropsWithChildren<
             editor={editor}
             workspacesPreview={workspacesPreview}
             isReadOnly={isReadOnly}
+            telemetryRecorder={telemetryRecorder}
         />
     )
 }
@@ -76,7 +79,13 @@ type MemoizedWorkspacesPreviewProps = WorkspacesPreviewProps &
     Pick<BatchSpecContextState, 'batchSpec' | 'editor' | 'workspacesPreview'>
 
 const MemoizedWorkspacesPreview: React.FunctionComponent<React.PropsWithChildren<MemoizedWorkspacesPreviewProps>> =
-    React.memo(function MemoizedWorkspacesPreview({ isReadOnly, batchSpec, editor, workspacesPreview }) {
+    React.memo(function MemoizedWorkspacesPreview({
+        isReadOnly,
+        batchSpec,
+        editor,
+        workspacesPreview,
+        telemetryRecorder,
+    }) {
         const { debouncedCode, excludeRepo, isServerStale } = editor
         const {
             resolutionState,
@@ -157,7 +166,8 @@ const MemoizedWorkspacesPreview: React.FunctionComponent<React.PropsWithChildren
                             isWorkspacesPreviewInProgress
                                 ? cancel
                                 : () => {
-                                      eventLogger.log('batch_change_editor:preview_workspaces:clicked')
+                                      EVENT_LOGGER.log('batch_change_editor:preview_workspaces:clicked')
+                                      telemetryRecorder.recordEvent('batchChange.editor.previewWorkspaces', 'click')
                                       return preview(debouncedCode)
                                   }
                         }
@@ -171,7 +181,7 @@ const MemoizedWorkspacesPreview: React.FunctionComponent<React.PropsWithChildren
                     </Button>
                 </Tooltip>
             ),
-            [isWorkspacesPreviewInProgress, isPreviewDisabled, cancel, preview, debouncedCode, error]
+            [isWorkspacesPreviewInProgress, isPreviewDisabled, cancel, preview, debouncedCode, error, telemetryRecorder]
         )
 
         const [exampleReference, exampleOpen, setExampleOpen, exampleStyle] = useAccordion()
@@ -266,20 +276,6 @@ const MemoizedWorkspacesPreview: React.FunctionComponent<React.PropsWithChildren
                     {totalCountDisplay}
                 </WorkspacesListHeader>
                 {/* We wrap this section in its own div to prevent margin collapsing within the flex column */}
-                {exceedsLicense((totalCount ?? 0) + (importingChangesetsConnection?.connection?.totalCount ?? 0)) && (
-                    <div className="d-flex flex-column align-items-center w-100 mb-3">
-                        <Alert variant="info">
-                            <div className="mb-2">
-                                <strong>
-                                    Your license only allows for {maxUnlicensedChangesets} changesets per batch change
-                                </strong>
-                            </div>
-                            If more than {maxUnlicensedChangesets} changesets are generated, you won't be able to apply
-                            the batch change and actually publish the changesets to the code host.
-                        </Alert>
-                    </div>
-                )}
-                {/* We wrap this section in its own div to prevent margin collapsing within the flex column */}
                 {!isReadOnly && (
                     <div className="d-flex flex-column align-items-center w-100 mb-3">
                         {error && <ErrorAlert error={error} className="w-100 mb-0" />}
@@ -299,10 +295,16 @@ const MemoizedWorkspacesPreview: React.FunctionComponent<React.PropsWithChildren
                     </div>
                 )}
                 {totalCount !== null && totalCount >= WORKSPACE_WARNING_MIN_TOTAL_COUNT && (
-                    <div className="d-flex flex-column align-items-center w-100 mb-3">
-                        <CTASizeWarning totalCount={totalCount} />
+                    <div className="d-flex flex-column align-items-center w-100">
+                        <CTASizeWarning />
                     </div>
                 )}
+                {totalCount !== null &&
+                    exceedsLicense(totalCount + (importingChangesetsConnection?.connection?.totalCount ?? 0)) && (
+                        <div className="d-flex flex-column align-items-center w-100">
+                            <CTALicenseWarning maxCount={maxUnlicensedChangesets} />
+                        </div>
+                    )}
                 {(hasPreviewed || isReadOnly) && (
                     <WorkspacePreviewFilterRow onFiltersChange={setFilters} disabled={isWorkspacesPreviewInProgress} />
                 )}
@@ -351,16 +353,16 @@ const CTAInstruction: React.FunctionComponent<React.PropsWithChildren<{ active: 
     )
 }
 
-const CTASizeWarning: React.FunctionComponent<React.PropsWithChildren<{ totalCount: number }>> = ({ totalCount }) => (
-    <Alert variant="warning">
-        <div className="mb-2">
-            <strong>
-                It's over <s>9000</s> {WORKSPACE_WARNING_MIN_TOTAL_COUNT}!
-            </strong>
-        </div>
-        Batch changes with more than {WORKSPACE_WARNING_MIN_TOTAL_COUNT} workspaces may be unwieldy to manage. We're
-        working on providing more filtering options, and you can continue with this batch change if you want, but you
-        may want to break it into {Math.ceil(totalCount / WORKSPACE_WARNING_MIN_TOTAL_COUNT)} or more batch changes if
-        you can.
+const CTASizeWarning: React.FunctionComponent = () => (
+    <Alert variant="note" className="mb-2">
+        The experience is currently optimized for batch changes targeting up to {WORKSPACE_WARNING_MIN_TOTAL_COUNT}{' '}
+        workspaces. Break your batch change down into several smaller batch changes for a better experience.
+    </Alert>
+)
+
+const CTALicenseWarning: React.FunctionComponent<React.PropsWithChildren<{ maxCount: number }>> = ({ maxCount }) => (
+    <Alert variant="note" className="mb-2">
+        Your license only allows for {maxCount} changesets per batch change. If more than {maxCount} changesets are
+        generated, you won't be able to apply the batch change and actually publish the changesets to the code host.
     </Alert>
 )

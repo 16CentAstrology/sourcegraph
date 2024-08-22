@@ -1,22 +1,22 @@
-import { Observable, zip } from 'rxjs'
+import { type Observable, zip } from 'rxjs'
 import { map, switchMap } from 'rxjs/operators'
 
-import { PlatformContext } from '@sourcegraph/shared/src/platform/context'
+import type { PlatformContext } from '@sourcegraph/shared/src/platform/context'
 
-import { FileInfo, DiffInfo, BlobInfo } from '../shared/codeHost'
+import type { FileInfo, DiffInfo, BlobInfo } from '../shared/codeHost'
 
+import { PhabricatorMode } from '.'
 import { queryConduitHelper, resolveDiffRevision } from './backend'
 import { getFilepathFromFileForDiff, getFilePathFromFileForRevision } from './scrape'
 import { getPhabricatorState } from './util'
 
-import { PhabricatorMode } from '.'
-
 export const resolveRevisionFileInfo = (
     codeView: HTMLElement,
     requestGraphQL: PlatformContext['requestGraphQL'],
-    queryConduit = queryConduitHelper
+    queryConduit = queryConduitHelper,
+    windowLocation__testingOnly: Location | URL = window.location
 ): Observable<DiffInfo> =>
-    getPhabricatorState(window.location, requestGraphQL, queryConduit).pipe(
+    getPhabricatorState(windowLocation__testingOnly, requestGraphQL, queryConduit).pipe(
         map((state): DiffInfo => {
             if (state.mode !== PhabricatorMode.Revision) {
                 throw new Error(
@@ -43,9 +43,10 @@ export const resolveRevisionFileInfo = (
 export const resolveDiffFileInfo = (
     codeView: HTMLElement,
     requestGraphQL: PlatformContext['requestGraphQL'],
-    queryConduit = queryConduitHelper
+    queryConduit = queryConduitHelper,
+    windowLocation__testingOnly: Location | URL = window.location
 ): Observable<DiffInfo> =>
-    getPhabricatorState(window.location, requestGraphQL, queryConduit).pipe(
+    getPhabricatorState(windowLocation__testingOnly, requestGraphQL, queryConduit).pipe(
         switchMap(state => {
             if (state.mode !== PhabricatorMode.Differential) {
                 throw new Error(`Unexpected PhabricatorState for resolveDiffFileInfo, PhabricatorMode: ${state.mode}`)
@@ -117,9 +118,10 @@ export const resolveDiffFileInfo = (
 export const resolveDiffusionFileInfo = (
     codeView: HTMLElement,
     requestGraphQL: PlatformContext['requestGraphQL'],
-    queryConduit = queryConduitHelper
+    queryConduit = queryConduitHelper,
+    windowLocation__testingOnly: Location | URL = window.location
 ): Observable<BlobInfo> =>
-    getPhabricatorState(window.location, requestGraphQL, queryConduit).pipe(
+    getPhabricatorState(windowLocation__testingOnly, requestGraphQL, queryConduit).pipe(
         map((state): BlobInfo => {
             if (state.mode !== PhabricatorMode.Diffusion) {
                 throw new Error(

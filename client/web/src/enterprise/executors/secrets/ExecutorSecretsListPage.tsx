@@ -1,8 +1,14 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useEffect, useState, type FC } from 'react'
 
+import { dataOrThrowErrors } from '@sourcegraph/http-client'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
 import { Button, Container, Link, PageHeader } from '@sourcegraph/wildcard'
 
-import { UseShowMorePaginationResult } from '../../../components/FilteredConnection/hooks/useShowMorePagination'
+import { useUrlSearchParamsForConnectionState } from '../../../components/FilteredConnection/hooks/connectionState'
+import {
+    useShowMorePagination,
+    type UseShowMorePaginationResult,
+} from '../../../components/FilteredConnection/hooks/useShowMorePagination'
 import {
     ConnectionContainer,
     ConnectionError,
@@ -12,28 +18,57 @@ import {
     ShowMoreButton,
     SummaryContainer,
 } from '../../../components/FilteredConnection/ui'
-import { ExecutorSecretFields, ExecutorSecretScope, Scalars } from '../../../graphql-operations'
+import {
+    ExecutorSecretScope,
+    type ExecutorSecretFields,
+    type GlobalExecutorSecretsResult,
+    type GlobalExecutorSecretsVariables,
+    type OrgExecutorSecretsResult,
+    type Scalars,
+    type UserExecutorSecretsResult,
+} from '../../../graphql-operations'
 
 import { AddSecretModal } from './AddSecretModal'
 import {
-    globalExecutorSecretsConnectionFactory,
-    userExecutorSecretsConnectionFactory,
+    GLOBAL_EXECUTOR_SECRETS,
     orgExecutorSecretsConnectionFactory,
+    userExecutorSecretsConnectionFactory,
 } from './backend'
 import { ExecutorSecretNode } from './ExecutorSecretNode'
 import { ExecutorSecretScopeSelector } from './ExecutorSecretScopeSelector'
 
-export interface GlobalExecutorSecretsListPageProps {}
+export interface GlobalExecutorSecretsListPageProps extends TelemetryV2Props {}
 
-export const GlobalExecutorSecretsListPage: React.FunctionComponent<
-    React.PropsWithChildren<GlobalExecutorSecretsListPageProps>
-> = props => {
+export const GlobalExecutorSecretsListPage: FC<GlobalExecutorSecretsListPageProps> = props => {
+    useEffect(
+        () => props.telemetryRecorder.recordEvent('admin.executors.secretsList', 'view'),
+        [props.telemetryRecorder]
+    )
+
+    const connectionState = useUrlSearchParamsForConnectionState()
     const connectionLoader = useCallback(
-        (scope: ExecutorSecretScope) => globalExecutorSecretsConnectionFactory(scope),
-        []
+        (scope: ExecutorSecretScope) =>
+            // Scope has to be injected dynamically.
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            useShowMorePagination<GlobalExecutorSecretsResult, GlobalExecutorSecretsVariables, ExecutorSecretFields>({
+                query: GLOBAL_EXECUTOR_SECRETS,
+                variables: {
+                    scope,
+                },
+                options: {
+                    fetchPolicy: 'network-only',
+                },
+                getConnection: result => {
+                    const { executorSecrets } = dataOrThrowErrors(result)
+                    return executorSecrets
+                },
+                state: connectionState,
+            }),
+        [connectionState]
     )
     return (
         <ExecutorSecretsListPage
+            areaType="admin"
             namespaceID={null}
             headerLine={<>Configure executor secrets that will be available to everyone on the Sourcegraph instance.</>}
             connectionLoader={connectionLoader}
@@ -46,15 +81,18 @@ export interface UserExecutorSecretsListPageProps extends GlobalExecutorSecretsL
     userID: Scalars['ID']
 }
 
-export const UserExecutorSecretsListPage: React.FunctionComponent<
-    React.PropsWithChildren<UserExecutorSecretsListPageProps>
-> = props => {
+export const UserExecutorSecretsListPage: FC<UserExecutorSecretsListPageProps> = props => {
+    useEffect(
+        () => props.telemetryRecorder.recordEvent('settings.executors.secretsList', 'view'),
+        [props.telemetryRecorder]
+    )
     const connectionLoader = useCallback(
         (scope: ExecutorSecretScope) => userExecutorSecretsConnectionFactory(props.userID, scope),
         [props.userID]
     )
     return (
         <ExecutorSecretsListPage
+            areaType="settings"
             namespaceID={props.userID}
             headerLine={
                 <>
@@ -75,15 +113,15 @@ export interface OrgExecutorSecretsListPageProps extends GlobalExecutorSecretsLi
     orgID: Scalars['ID']
 }
 
-export const OrgExecutorSecretsListPage: React.FunctionComponent<
-    React.PropsWithChildren<OrgExecutorSecretsListPageProps>
-> = props => {
+export const OrgExecutorSecretsListPage: FC<OrgExecutorSecretsListPageProps> = props => {
+    useEffect(() => props.telemetryRecorder.recordEvent('org.executors.secretsList', 'view'), [props.telemetryRecorder])
     const connectionLoader = useCallback(
         (scope: ExecutorSecretScope) => orgExecutorSecretsConnectionFactory(props.orgID, scope),
         [props.orgID]
     )
     return (
         <ExecutorSecretsListPage
+            areaType="org"
             namespaceID={props.orgID}
             headerLine={
                 <>
@@ -100,33 +138,50 @@ export const OrgExecutorSecretsListPage: React.FunctionComponent<
     )
 }
 
-interface ExecutorSecretsListPageProps extends GlobalExecutorSecretsListPageProps {
+type executorSecretsAreaType = 'admin' | 'org' | 'settings'
+
+export interface ExecutorSecretsListPageProps extends GlobalExecutorSecretsListPageProps {
+    // Used as a prefix for telemetry event naming
+    areaType: executorSecretsAreaType
     namespaceID: Scalars['ID'] | null
     headerLine: JSX.Element
-    connectionLoader: (scope: ExecutorSecretScope) => UseShowMorePaginationResult<ExecutorSecretFields>
+    connectionLoader: (
+        scope: ExecutorSecretScope
+    ) => UseShowMorePaginationResult<
+        OrgExecutorSecretsResult | UserExecutorSecretsResult | GlobalExecutorSecretsResult,
+        ExecutorSecretFields
+    >
 }
 
-const ExecutorSecretsListPage: React.FunctionComponent<React.PropsWithChildren<ExecutorSecretsListPageProps>> = ({
+const ExecutorSecretsListPage: FC<ExecutorSecretsListPageProps> = ({
+    areaType,
     namespaceID,
     headerLine,
     connectionLoader,
+    telemetryRecorder,
 }) => {
     const [selectedScope, setSelectedScope] = useState<ExecutorSecretScope>(ExecutorSecretScope.BATCHES)
     const { loading, hasNextPage, fetchMore, connection, error, refetchAll } = connectionLoader(selectedScope)
 
     const [showAddModal, setShowAddModal] = useState<boolean>(false)
-    const onClickAdd = useCallback<React.MouseEventHandler>(event => {
-        event.preventDefault()
-        setShowAddModal(true)
-    }, [])
+    const onClickAdd = useCallback<React.MouseEventHandler>(
+        event => {
+            event.preventDefault()
+            telemetryRecorder.recordEvent(`${areaType}.executors.addSecret`, 'click')
+            setShowAddModal(true)
+        },
+        [areaType, telemetryRecorder]
+    )
 
     const closeModal = useCallback(() => {
+        telemetryRecorder.recordEvent(`${areaType}.executors.addSecret`, 'cancel')
         setShowAddModal(false)
-    }, [])
+    }, [areaType, telemetryRecorder])
     const afterAction = useCallback(() => {
+        telemetryRecorder.recordEvent(`${areaType}.executors.addSecret`, 'submit')
         setShowAddModal(false)
         refetchAll()
-    }, [refetchAll])
+    }, [areaType, refetchAll, telemetryRecorder])
 
     return (
         <>
@@ -186,7 +241,6 @@ const ExecutorSecretsListPage: React.FunctionComponent<React.PropsWithChildren<E
                         <SummaryContainer className="mt-2">
                             <ConnectionSummary
                                 noSummaryIfAllNodesVisible={true}
-                                first={15}
                                 centered={true}
                                 connection={connection}
                                 noun="executor secret"
@@ -207,9 +261,11 @@ const ExecutorSecretsListPage: React.FunctionComponent<React.PropsWithChildren<E
 // scope added here and TS will be happy.
 function executorSecretScopeContext(scope: ExecutorSecretScope): { label: string; description: string } {
     switch (scope) {
-        case ExecutorSecretScope.BATCHES:
+        case ExecutorSecretScope.BATCHES: {
             return { label: 'Batch changes', description: 'Batch change execution secrets' }
-        case ExecutorSecretScope.CODEINTEL:
+        }
+        case ExecutorSecretScope.CODEINTEL: {
             return { label: 'Code graph', description: 'Code graph execution secrets' }
+        }
     }
 }

@@ -1,7 +1,13 @@
-import { RawRepoSpec, RepoSpec } from '@sourcegraph/shared/src/util/url'
+import type { RawRepoSpec, RepoSpec } from '@sourcegraph/shared/src/util/url'
 
-import { DiffResolvedRevisionSpec } from '../../repo'
+import type { DiffResolvedRevisionSpec } from '../../repo'
 import { RepoURLParseError } from '../shared/errors'
+
+/**
+ * For testing only, used to set the window.location value.
+ * @internal
+ */
+export const windowLocation__testingOnly: { value: URL | null } = { value: null }
 
 /**
  * Returns the elements on the page which should be marked
@@ -101,7 +107,7 @@ export function getDiffResolvedRevision(codeView: HTMLElement): DiffResolvedRevi
             const baseShaElement = shaContainers[0].querySelector('a')
             if (baseShaElement) {
                 // e.g "https://github.com/gorilla/mux/commit/0b13a922203ebdbfd236c818efcd5ed46097d690"
-                baseCommitID = baseShaElement.href.split('/').slice(-1)[0]
+                baseCommitID = baseShaElement.href.split('/').at(-1)!
             }
             const headShaElement = shaContainers[1].querySelector('span.sha') as HTMLElement
             if (headShaElement) {
@@ -193,7 +199,16 @@ function getDiffResolvedRevisionFromPageSource(
 /**
  * Returns the file path for the current page. Must be on a blob or tree page.
  *
+ * Note: works only with 'old' GitHub UI blob page. When used with the new new UI this function will throw because
+ * there is no element with a permalink on the page. Use {@link getFilePathFromURL} instead.
+ *
  * Implementation details:
+ *
+ * This scrapes the file path from the permalink on GitHub blob pages:
+ * ```html
+ * <a class="d-none js-permalink-shortcut" data-hotkey="y" href="/gorilla/mux/blob/ed099d42384823742bba0bf9a72b53b55c9e2e38/mux.go">Permalink</a>
+ * ```
+ *
  * This scrapes the file path from the permalink on GitHub blob pages.
  * We can't get the file path from the URL because the branch name can contain
  * slashes which make the boundary between the branch name and file path
@@ -202,9 +217,9 @@ function getDiffResolvedRevisionFromPageSource(
  * TODO ideally, this should only scrape the code view itself.
  */
 export function getFilePath(): string {
-    const permalink = document.querySelector<HTMLAnchorElement>(getSelectorFor('permalink'))
+    const permalink = document.querySelector<HTMLAnchorElement>('a.js-permalink-shortcut')
     if (!permalink) {
-        throw new Error('Unable to determine the file path because no element containing file link was found.')
+        throw new Error('Unable to determine the file path because no a.js-permalink-shortcut element was found.')
     }
     const url = new URL(permalink.href)
     // <empty>/<user>/<repo>/(blob|tree)/<commitID|rev>/<path/to/file>
@@ -213,10 +228,31 @@ export function getFilePath(): string {
     // Check for page type because a tree page can be the repo root, so it shouldn't throw an error despite an empty path
     if (pageType !== 'tree' && path.length === 0) {
         throw new Error(
-            `Unable to determine the file path because the link href attribute was ${url.pathname} (it is expected to be of the form /<user>/<repo>/blob/<commitID|rev>/<path/to/file>).`
+            `Unable to determine the file path because the a.js-permalink-shortcut element's href's path was ${url.pathname} (it is expected to be of the form /<user>/<repo>/blob/<commitID|rev>/<path/to/file>).`
         )
     }
     return decodeURIComponent(path.join('/'))
+}
+
+/**
+ * Returns the file path for the current page. Must be on a blob or tree page.
+ *
+ * Implementation details:
+ * This scrapes the file path from the URL.
+ * We need the revision name as a parameter because the branch name in the URL can contain slashes
+ * making the boundary between the branch name and file path ambiguous.
+ * E.g., in URL "https://github.com/sourcegraph/sourcegraph/blob/bext/release/package.json" branch name is "bext/release".
+ */
+export function getFilePathFromURL(rev: string, windowLocation__testingOnly: URL | Location = window.location): string {
+    // <empty>/<user>/<repo>/(blob|tree)/<commitID|rev>/<path/to/file>
+    // eslint-disable-next-line unicorn/no-unreadable-array-destructuring
+    const [, , , pageType, ...revAndPathParts] = windowLocation__testingOnly.pathname.split('/')
+    const revAndPath = revAndPathParts.join('/')
+    if (!revAndPath.startsWith(rev) || (pageType !== 'tree' && revAndPath.length === rev.length)) {
+        throw new Error('Failed to extract the file path from the URL.')
+    }
+
+    return revAndPathParts.slice(rev.split('/').length).join('/')
 }
 
 type GitHubURL = RawRepoSpec &
@@ -234,60 +270,92 @@ export function isDiffPageType(pageType: GitHubURL['pageType']): boolean {
     switch (pageType) {
         case 'commit':
         case 'pull':
-        case 'compare':
+        case 'compare': {
             return true
-        default:
+        }
+        default: {
             return false
+        }
     }
 }
 
-export function parseURL(location: Pick<Location, 'host' | 'pathname' | 'href'> = window.location): GitHubURL {
-    const { host, pathname } = location
+export function parseURL(location?: Pick<Location, 'host' | 'pathname' | 'href'>): GitHubURL {
+    const { pathname, href, host } = location ?? windowLocation__testingOnly.value ?? window.location
     const [user, ghRepoName, pageType, ...rest] = pathname.slice(1).split('/')
     if (!user || !ghRepoName) {
-        throw new RepoURLParseError(`Could not parse repoName from GitHub url: ${location.href}`)
+        throw new RepoURLParseError(`Could not parse repoName from GitHub url: ${href}`)
     }
     const repoName = `${user}/${ghRepoName}`
     const rawRepoName = `${host}/${repoName}`
     switch (pageType) {
         case 'blob':
-        case 'tree':
+        case 'tree': {
             return {
                 pageType,
                 rawRepoName,
                 revisionAndFilePath: decodeURIComponent(rest.join('/')),
                 repoName,
             }
+        }
         case 'pull':
         case 'commit':
-        case 'compare':
+        case 'compare': {
             return { pageType, rawRepoName, repoName }
-        default:
+        }
+        default: {
             return { pageType: 'other', rawRepoName, repoName }
+        }
     }
 }
 
 interface UISelectors {
     codeCell: string
     blobContainer: string
-    permalink: string
 }
 
 const oldUISelectors: UISelectors = {
     codeCell: 'td.blob-code',
     blobContainer: '.js-file-line-container',
-    permalink: 'a.js-permalink-shortcut',
 }
 
+// new GitHub code view: https://docs.github.com/en/repositories/working-with-files/managing-files/navigating-files-with-the-new-code-view
 const newUISelectors: UISelectors = {
-    codeCell: 'td.react-code-cell',
-    blobContainer: 'react-app table',
-
-    // the former selector is for the tree view and the latter is for the blob view
-    permalink: 'a.ActionList-item--navActive, .ActionList-item--navActive a',
+    codeCell: '.react-code-line-contents',
+    blobContainer: '.react-code-lines',
 }
 
 /**
  * Returns the common selector for old and new GitHub UIs.
  */
 export const getSelectorFor = (key: keyof UISelectors): string => `${oldUISelectors[key]}, ${newUISelectors[key]}`
+
+interface GitHubEmbeddedData {
+    repo: {
+        private: boolean
+    }
+    refInfo: {
+        name: string
+        currentOid: string
+    }
+}
+
+const NEW_GITHUB_UI_EMBEDDED_DATA_SELECTOR = 'script[data-target="react-app.embeddedData"]'
+function getEmbeddedDataContainer(): HTMLScriptElement | null {
+    return document.querySelector<HTMLScriptElement>(NEW_GITHUB_UI_EMBEDDED_DATA_SELECTOR)
+}
+
+export function isNewGitHubUI(): boolean {
+    return !!getEmbeddedDataContainer()
+}
+
+export function getEmbeddedData(): GitHubEmbeddedData {
+    const script = getEmbeddedDataContainer()
+    if (!script) {
+        throw new Error('Unable to find script with embedded data.')
+    }
+    try {
+        return JSON.parse(script.textContent || '').payload
+    } catch {
+        throw new Error('Failed to parse embedded data.')
+    }
+}

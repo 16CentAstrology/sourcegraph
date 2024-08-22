@@ -1,8 +1,8 @@
 import React, {
-    KeyboardEvent,
-    KeyboardEventHandler,
-    MouseEvent,
-    MouseEventHandler,
+    type KeyboardEvent,
+    type KeyboardEventHandler,
+    type MouseEvent,
+    type MouseEventHandler,
     useCallback,
     useRef,
     useState,
@@ -12,15 +12,16 @@ import { mdiClockOutline } from '@mdi/js'
 import classNames from 'classnames'
 
 import { pluralize } from '@sourcegraph/common'
-import { RecentSearch } from '@sourcegraph/shared/src/settings/temporary/recentSearches'
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import type { RecentSearch } from '@sourcegraph/shared/src/settings/temporary/recentSearches'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import {
     createRectangle,
     Flipping,
     Icon,
     Popover,
     PopoverContent,
-    PopoverOpenEvent,
+    type PopoverOpenEvent,
     PopoverTrigger,
     Tooltip,
     usePopoverContext,
@@ -33,7 +34,7 @@ import styles from './SearchHistoryDropdown.module.scss'
 
 const buttonContent: React.ReactElement = <Icon svgPath={mdiClockOutline} aria-hidden="true" />
 
-interface SearchHistoryDropdownProps extends TelemetryProps {
+interface SearchHistoryDropdownProps extends TelemetryProps, TelemetryV2Props {
     className?: string
     recentSearches: RecentSearch[]
     onSelect: (search: RecentSearch) => void
@@ -44,24 +45,30 @@ interface SearchHistoryDropdownProps extends TelemetryProps {
 const popoverPadding = createRectangle(0, 0, 0, 2)
 
 export const SearchHistoryDropdown: React.FunctionComponent<SearchHistoryDropdownProps> = React.memo(
-    function SearchHistoryDropdown({ recentSearches = [], onSelect, className, telemetryService }) {
+    function SearchHistoryDropdown({ recentSearches = [], onSelect, className, telemetryService, telemetryRecorder }) {
         const [isOpen, setIsOpen] = useState(false)
 
         const handlePopoverToggle = useCallback(
             (event: PopoverOpenEvent): void => {
                 setIsOpen(event.isOpen)
                 telemetryService.log(event.isOpen ? 'RecentSearchesListOpened' : 'RecentSearchesListDismissed')
+                if (event.isOpen) {
+                    telemetryRecorder.recordEvent('search.historyDropdown.recentSearchesList', 'open')
+                } else {
+                    telemetryRecorder.recordEvent('search.historyDropdown.recentSearchesList', 'dismiss')
+                }
             },
-            [telemetryService, setIsOpen]
+            [telemetryService, telemetryRecorder, setIsOpen]
         )
 
         const onSelectInternal = useCallback(
             (search: RecentSearch) => {
                 telemetryService.log('RecentSearchSelected')
+                telemetryRecorder.recordEvent('search.historyDropdown.search', 'select')
                 onSelect(search)
                 setIsOpen(false)
             },
-            [telemetryService, onSelect, setIsOpen]
+            [telemetryService, telemetryRecorder, onSelect, setIsOpen]
         )
 
         return (
@@ -99,20 +106,23 @@ const SearchHistoryEntries: React.FunctionComponent<SearchHistoryEntriesProps> =
     const keydownHandler: KeyboardEventHandler<HTMLElement> = useCallback(
         (event: KeyboardEvent) => {
             switch (event.key) {
-                case 'ArrowDown':
+                case 'ArrowDown': {
                     event.preventDefault()
                     setSelectedIndex(index => index + (index + 1 < recentSearches.length ? 1 : 0))
                     break
-                case 'ArrowUp':
+                }
+                case 'ArrowUp': {
                     event.preventDefault()
                     setSelectedIndex(index => index - (index - 1 > -1 ? 1 : 0))
                     break
-                case 'Enter':
+                }
+                case 'Enter': {
                     event.preventDefault()
                     if (recentSearches.length > 0) {
                         onSelect(recentSearches[selectedIndexRef.current])
                     }
                     break
+                }
             }
         },
         [setSelectedIndex, recentSearches, onSelect]

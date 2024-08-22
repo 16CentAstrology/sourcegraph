@@ -1,7 +1,9 @@
-import React, { useContext, useMemo } from 'react'
+import { type FC, useContext, useMemo } from 'react'
 
 import MapSearchIcon from 'mdi-react/MapSearchIcon'
+import { useParams } from 'react-router-dom'
 
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
 import { LoadingSpinner, useObservable, Link, PageHeader, Text } from '@sourcegraph/wildcard'
 
 import { HeroPage } from '../../../../../components/HeroPage'
@@ -23,19 +25,17 @@ import { EditLangStatsInsight } from './components/EditLangStatsInsight'
 import { EditSearchBasedInsight } from './components/EditSearchInsight'
 import { useEditPageHandlers } from './hooks/use-edit-page-handlers'
 
-export interface EditInsightPageProps {
-    /** Normalized insight id <type insight>.insight.<name of insight> */
-    insightID: string
-}
+interface EditInsightPageProps extends TelemetryV2Props {}
 
-export const EditInsightPage: React.FunctionComponent<React.PropsWithChildren<EditInsightPageProps>> = props => {
-    const { insightID } = props
+export const EditInsightPage: FC<EditInsightPageProps> = ({ telemetryRecorder }) => {
+    /** Normalized insight id <type insight>.insight.<name of insight> */
+    const { insightId } = useParams()
 
     const { getInsightById } = useContext(CodeInsightsBackendContext)
     const { licensed, insight: insightFeatures } = useUiFeatures()
 
-    const insight = useObservable(useMemo(() => getInsightById(insightID), [getInsightById, insightID]))
-    const { handleSubmit, handleCancel } = useEditPageHandlers({ id: insight?.id })
+    const insight = useObservable(useMemo(() => getInsightById(insightId!), [getInsightById, insightId]))
+    const { handleSubmit, handleCancel } = useEditPageHandlers({ id: insight?.id, telemetryRecorder })
 
     const editPermission = useObservable(
         useMemo(() => insightFeatures.getEditPermissions(insight), [insightFeatures, insight])

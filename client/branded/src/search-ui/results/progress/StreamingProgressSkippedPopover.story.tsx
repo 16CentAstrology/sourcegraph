@@ -1,6 +1,8 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 
-import { Progress } from '@sourcegraph/shared/src/search/stream'
+import type { Progress } from '@sourcegraph/shared/src/search/stream'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
+import { NOOP_TELEMETRY_SERVICE } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { BrandedStory } from '@sourcegraph/wildcard/src/stories'
 
 import { StreamingProgressSkippedPopover } from './StreamingProgressSkippedPopover'
@@ -12,20 +14,19 @@ const config: Meta = {
             type: 'figma',
             url: 'https://www.figma.com/file/IyiXZIbPHK447NCXov0AvK/13928-Streaming-search?node-id=280%3A17768',
         },
-        chromatic: { viewports: [350], disableSnapshot: false },
     },
 }
 
 export default config
 
-export const Popover: Story = () => {
+export const Popover: StoryFn = () => {
     const progress: Progress = {
         durationMs: 1500,
         matchCount: 2,
         repositoriesCount: 2,
         skipped: [
             {
-                reason: 'excluded-fork',
+                reason: 'repository-fork',
                 message: '',
                 severity: 'info',
                 title: '10k forked repositories excluded',
@@ -67,19 +68,27 @@ export const Popover: Story = () => {
 
     return (
         <BrandedStory>
-            {() => <StreamingProgressSkippedPopover progress={progress} onSearchAgain={() => {}} />}
+            {() => (
+                <StreamingProgressSkippedPopover
+                    query=""
+                    progress={progress}
+                    telemetryService={NOOP_TELEMETRY_SERVICE}
+                    telemetryRecorder={noOpTelemetryRecorder}
+                    onSearchAgain={() => {}}
+                />
+            )}
         </BrandedStory>
     )
 }
 
-export const ShouldCloseAllInfo: Story = () => {
+export const ShouldCloseAllInfo: StoryFn = () => {
     const progress: Progress = {
         durationMs: 1500,
         matchCount: 2,
         repositoriesCount: 2,
         skipped: [
             {
-                reason: 'excluded-fork',
+                reason: 'repository-fork',
                 message: 'By default we exclude forked repositories. Include them with `fork:yes` in your query.',
                 severity: 'info',
                 title: '10k forked repositories excluded',
@@ -103,21 +112,29 @@ export const ShouldCloseAllInfo: Story = () => {
 
     return (
         <BrandedStory>
-            {() => <StreamingProgressSkippedPopover progress={progress} onSearchAgain={() => {}} />}
+            {() => (
+                <StreamingProgressSkippedPopover
+                    query=""
+                    progress={progress}
+                    telemetryService={NOOP_TELEMETRY_SERVICE}
+                    telemetryRecorder={noOpTelemetryRecorder}
+                    onSearchAgain={() => {}}
+                />
+            )}
         </BrandedStory>
     )
 }
 
 ShouldCloseAllInfo.storyName = 'only info, all should be closed'
 
-export const ShouldOpenOneInfo: Story = () => {
+export const ShouldOpenOneInfo: StoryFn = () => {
     const progress: Progress = {
         durationMs: 1500,
         matchCount: 2,
         repositoriesCount: 2,
         skipped: [
             {
-                reason: 'excluded-fork',
+                reason: 'repository-fork',
                 message: 'By default we exclude forked repositories. Include them with `fork:yes` in your query.',
                 severity: 'info',
                 title: '10k forked repositories excluded',
@@ -131,7 +148,15 @@ export const ShouldOpenOneInfo: Story = () => {
 
     return (
         <BrandedStory>
-            {() => <StreamingProgressSkippedPopover progress={progress} onSearchAgain={() => {}} />}
+            {() => (
+                <StreamingProgressSkippedPopover
+                    query=""
+                    progress={progress}
+                    telemetryService={NOOP_TELEMETRY_SERVICE}
+                    telemetryRecorder={noOpTelemetryRecorder}
+                    onSearchAgain={() => {}}
+                />
+            )}
         </BrandedStory>
     )
 }

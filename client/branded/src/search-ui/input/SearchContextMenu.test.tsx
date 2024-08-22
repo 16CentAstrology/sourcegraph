@@ -3,14 +3,16 @@ import userEvent from '@testing-library/user-event'
 import { act } from 'react-dom/test-utils'
 import { of } from 'rxjs'
 import sinon from 'sinon'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { ListSearchContextsResult, SearchContextMinimalFields } from '@sourcegraph/shared/src/graphql-operations'
+import type { ListSearchContextsResult, SearchContextMinimalFields } from '@sourcegraph/shared/src/graphql-operations'
+import { noOpTelemetryRecorder } from '@sourcegraph/shared/src/telemetry'
 import { NOOP_TELEMETRY_SERVICE } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { MockIntersectionObserver } from '@sourcegraph/shared/src/testing/MockIntersectionObserver'
 import { mockGetUserSearchContextNamespaces } from '@sourcegraph/shared/src/testing/searchContexts/testHelpers'
 import { NOOP_PLATFORM_CONTEXT } from '@sourcegraph/shared/src/testing/searchTestHelpers'
 
-import { SearchContextMenu, SearchContextMenuProps } from './SearchContextMenu'
+import { SearchContextMenu, type SearchContextMenuProps } from './SearchContextMenu'
 
 const mockFetchSearchContexts = ({ query }: { first: number; query?: string; after?: string }) => {
     const nodes = [
@@ -97,6 +99,7 @@ describe('SearchContextMenu', () => {
         searchContextsEnabled: true,
         platformContext: NOOP_PLATFORM_CONTEXT,
         telemetryService: NOOP_TELEMETRY_SERVICE,
+        telemetryRecorder: noOpTelemetryRecorder,
     }
 
     const RealIntersectionObserver = window.IntersectionObserver
@@ -188,6 +191,6 @@ describe('SearchContextMenu', () => {
         })
 
         const items = screen.getAllByTestId('search-context-menu-item')
-        expect(items[items.length - 1]).toHaveTextContent('Error occurred while loading search contexts')
+        expect(items.at(-1)).toHaveTextContent('Error occurred while loading search contexts')
     })
 })

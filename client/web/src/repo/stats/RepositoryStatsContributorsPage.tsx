@@ -3,12 +3,15 @@ import { useEffect, useState } from 'react'
 
 import classNames from 'classnames'
 import { escapeRegExp } from 'lodash'
-import { RouteComponentProps } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
 import { numberWithCommas, pluralize } from '@sourcegraph/common'
 import { gql, dataOrThrowErrors } from '@sourcegraph/http-client'
+import { UserAvatar } from '@sourcegraph/shared/src/components/UserAvatar'
 import { SearchPatternType } from '@sourcegraph/shared/src/graphql-operations'
+import type { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import { EVENT_LOGGER } from '@sourcegraph/shared/src/telemetry/web/eventLogger'
 import { buildSearchURLQuery } from '@sourcegraph/shared/src/util/url'
 import {
     Button,
@@ -33,30 +36,27 @@ import {
     SummaryContainer,
 } from '../../components/FilteredConnection/ui'
 import { PageTitle } from '../../components/PageTitle'
-import {
+import type {
     RepositoryContributorNodeFields,
     RepositoryContributorsResult,
     RepositoryContributorsVariables,
 } from '../../graphql-operations'
 import { PersonLink } from '../../person/PersonLink'
 import { quoteIfNeeded, searchQueryForRepoRevision } from '../../search'
-import { eventLogger } from '../../tracking/eventLogger'
-import { UserAvatar } from '../../user/UserAvatar'
 
-import { RepositoryStatsAreaPageProps } from './RepositoryStatsArea'
+import type { RepositoryStatsAreaPageProps } from './RepositoryStatsArea'
 
 import styles from './RepositoryStatsContributorsPage.module.scss'
 
 interface QuerySpec {
     revisionRange: string
-    after: string
+    after: string | null
     path: string
 }
 
 interface RepositoryContributorNodeProps extends QuerySpec {
     node: RepositoryContributorNodeFields
     repoName: string
-    globbing: boolean
 }
 
 const RepositoryContributorNode: React.FunctionComponent<React.PropsWithChildren<RepositoryContributorNodeProps>> = ({
@@ -65,12 +65,11 @@ const RepositoryContributorNode: React.FunctionComponent<React.PropsWithChildren
     revisionRange,
     after,
     path,
-    globbing,
 }) => {
     const commit = node.commits.nodes[0] as RepositoryContributorNodeFields['commits']['nodes'][number] | undefined
 
     const query: string = [
-        searchQueryForRepoRevision(repoName, globbing),
+        searchQueryForRepoRevision(repoName),
         'type:diff',
         `author:${quoteIfNeeded(node.person.email)}`,
         after ? `after:${quoteIfNeeded(after)}` : '',
@@ -191,11 +190,9 @@ const CONTRIBUTORS_QUERY = gql`
 
 const BATCH_COUNT = 20
 
-const equalOrEmpty = (a: string | undefined, b: string | undefined): boolean => a === b || (!a && !b)
+const equalOrEmpty = (a: string | null | undefined, b: string | null | undefined): boolean => a === b || (!a && !b)
 
-interface Props extends RepositoryStatsAreaPageProps, RouteComponentProps<{}> {
-    globbing: boolean
-}
+interface Props extends RepositoryStatsAreaPageProps, TelemetryV2Props {}
 
 const contributorsPageInputIds: Record<string, string> = {
     REVISION_RANGE: 'repository-stats-contributors-page__revision-range',
@@ -215,16 +212,13 @@ const getUrlQuery = (spec: Partial<QuerySpec>): string => {
 }
 
 /** A page that shows a repository's contributors. */
-export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = ({
-    location,
-    history,
-    repo,
-    globbing,
-}) => {
+export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = ({ repo, telemetryRecorder }) => {
+    const location = useLocation()
+    const navigate = useNavigate()
     const queryParameters = new URLSearchParams(location.search)
     const spec: QuerySpec = {
         revisionRange: queryParameters.get('revisionRange') ?? '',
-        after: queryParameters.get('after') ?? '',
+        after: queryParameters.get('after'),
         path: queryParameters.get('path') ?? '',
     }
 
@@ -262,8 +256,9 @@ export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = (
 
     // Log page view when initially rendered
     useEffect(() => {
-        eventLogger.logPageView('RepositoryStatsContributors')
-    }, [])
+        EVENT_LOGGER.logPageView('RepositoryStatsContributors')
+        telemetryRecorder.recordEvent('repo.stats.contributors', 'view')
+    }, [telemetryRecorder])
 
     // Update spec when search params change
     useEffect(() => {
@@ -278,22 +273,25 @@ export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = (
     const onChange: React.ChangeEventHandler<HTMLInputElement> = event => {
         const { value } = event.target
         switch (event.currentTarget.id) {
-            case contributorsPageInputIds.REVISION_RANGE:
+            case contributorsPageInputIds.REVISION_RANGE: {
                 setRevisionRange(value)
                 break
-            case contributorsPageInputIds.AFTER:
+            }
+            case contributorsPageInputIds.AFTER: {
                 setAfter(value)
                 break
-            case contributorsPageInputIds.PATH:
+            }
+            case contributorsPageInputIds.PATH: {
                 setPath(value)
                 break
+            }
         }
     }
 
     // Update the URL to reflect buffer state
     const onSubmit: React.FormEventHandler<HTMLFormElement> = event => {
         event.preventDefault()
-        history.push({
+        navigate({
             search: getUrlQuery({ revisionRange, after, path }),
         })
     }
@@ -308,7 +306,7 @@ export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = (
 
     // Push new query param to history, state change will follow via `useEffect` on `location.search`
     const updateAfter = (after: string | undefined): void => {
-        history.push({ search: getUrlQuery({ ...spec, after }) })
+        navigate({ search: getUrlQuery({ ...spec, after }) })
     }
 
     // Whether the user has entered new option values that differ from what's in the URL query and has not yet
@@ -328,7 +326,6 @@ export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = (
                             key={`${node.person.displayName}:${node.count}`}
                             node={node}
                             repoName={repo.name}
-                            globbing={globbing}
                             {...spec}
                         />
                     ))}
@@ -338,7 +335,7 @@ export const RepositoryStatsContributorsPage: React.FunctionComponent<Props> = (
             <SummaryContainer className="justify-content-center pt-3">
                 <PageSwitcher
                     totalCount={connection?.totalCount ?? null}
-                    totalLabel={connection?.totalCount === 1 ? 'contributor' : 'contributors'}
+                    totalLabel={pluralize('contributor', connection?.totalCount ?? 0)}
                     {...paginationArgs}
                 />
             </SummaryContainer>

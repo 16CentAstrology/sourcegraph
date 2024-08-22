@@ -1,12 +1,12 @@
-import { FC } from 'react'
+import type { FC } from 'react'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
-import { Series, useDebounce, useDeepMemo, ErrorAlert } from '@sourcegraph/wildcard'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { type Series, useDeepMemo, ErrorAlert } from '@sourcegraph/wildcard'
 
 import {
     SeriesBasedChartTypes,
     SeriesChart,
-    getSanitizedRepositories,
     LivePreviewCard,
     LivePreviewHeader,
     LivePreviewLoading,
@@ -18,7 +18,7 @@ import {
 } from '../../../../../components'
 import { DATA_SERIES_COLORS } from '../../../../../constants'
 import {
-    SeriesWithStroke,
+    type SeriesWithStroke,
     useLivePreviewSeriesInsight,
     LivePreviewStatus,
 } from '../../../../../core/hooks/live-preview-insight'
@@ -29,31 +29,28 @@ const createExampleDataSeries = (query: string): SeriesWithStroke[] => [
         query,
         label: 'TODOs',
         generatedFromCaptureGroups: false,
-        stroke: DATA_SERIES_COLORS.ORANGE,
+        stroke: DATA_SERIES_COLORS.INDIGO,
     },
 ]
 
-interface DynamicInsightPreviewProps extends TelemetryProps {
+interface DynamicInsightPreviewProps extends TelemetryProps, TelemetryV2Props {
     disabled: boolean
-    repositories: string
+    repositories: string[]
     query: string
     className?: string
 }
 
 export const DynamicInsightPreview: FC<DynamicInsightPreviewProps> = props => {
-    const { disabled, repositories, query, className, telemetryService } = props
+    const { disabled, repositories, query, className, telemetryService, telemetryRecorder } = props
 
     // Compare live insight settings with deep check to avoid unnecessary
     // search insight content fetching
-    const settings = useDebounce(
-        useDeepMemo({
-            series: createExampleDataSeries(query),
-            repositories: getSanitizedRepositories(repositories),
-            step: { months: 2 },
-            disabled,
-        }),
-        500
-    )
+    const settings = useDeepMemo({
+        disabled,
+        repoScope: { repositories },
+        series: createExampleDataSeries(query),
+        step: { months: 2 },
+    })
 
     const { state } = useLivePreviewSeriesInsight({
         skip: disabled,
@@ -63,6 +60,7 @@ export const DynamicInsightPreview: FC<DynamicInsightPreviewProps> = props => {
     const { trackMouseEnter, trackMouseLeave, trackDatumClicks } = useCodeInsightViewPings({
         telemetryService,
         insightType: CodeInsightTrackType.InProductLandingPageInsight,
+        telemetryRecorder,
     })
 
     return (

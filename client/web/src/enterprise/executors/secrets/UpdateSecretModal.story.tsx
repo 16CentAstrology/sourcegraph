@@ -1,4 +1,4 @@
-import { DecoratorFn, Meta, Story } from '@storybook/react'
+import type { Decorator, Meta, StoryFn } from '@storybook/react'
 import { subDays, subHours } from 'date-fns'
 import { noop } from 'lodash'
 
@@ -7,22 +7,17 @@ import { ExecutorSecretScope } from '../../../graphql-operations'
 
 import { UpdateSecretModal } from './UpdateSecretModal'
 
-const decorator: DecoratorFn = story => <div className="p-3 container">{story()}</div>
+const decorator: Decorator = story => <div className="p-3 container">{story()}</div>
 
 const config: Meta = {
     title: 'web/executors/secrets/UpdateSecretModal',
     decorators: [decorator],
-    parameters: {
-        chromatic: {
-            // Delay screenshot taking, so the modal has opened by the time the screenshot is taken.
-            delay: 2000,
-        },
-    },
+    parameters: {},
 }
 
 export default config
 
-export const Update: Story = () => (
+export const Update: StoryFn = () => (
     <WebStory>
         {props => (
             <UpdateSecretModal
@@ -52,7 +47,7 @@ export const Update: Story = () => (
     </WebStory>
 )
 
-export const DockerAuthConfig: Story = () => (
+export const DockerAuthConfig: StoryFn = () => (
     <WebStory>
         {props => (
             <UpdateSecretModal

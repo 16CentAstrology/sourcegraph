@@ -1,4 +1,4 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 
 import { BrandedStory } from '../../../stories/BrandedStory'
 import { PRODUCT_STATUSES } from '../../Badge'
@@ -12,10 +12,7 @@ const config: Meta = {
     decorators: [story => <BrandedStory>{() => <div className="container mt-3">{story()}</div>}</BrandedStory>],
     parameters: {
         component: FeedbackBadge,
-        chromatic: {
-            enableDarkMode: true,
-            disableSnapshot: false,
-        },
+
         design: [
             {
                 type: 'figma',
@@ -34,7 +31,7 @@ const config: Meta = {
 
 export default config
 
-export const FeedbackBadgeExample: Story = () => (
+export const FeedbackBadgeExample: StoryFn = () => (
     <>
         <H1>FeedbackBadges</H1>
         <Text>Our badges come in different status.</Text>

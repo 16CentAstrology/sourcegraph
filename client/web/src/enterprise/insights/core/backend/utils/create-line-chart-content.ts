@@ -1,9 +1,9 @@
 import { buildSearchURLQuery } from '@sourcegraph/shared/src/util/url'
 
-import { InsightDataSeries, SearchPatternType } from '../../../../../graphql-operations'
+import { type InsightDataSeries, SearchPatternType } from '../../../../../graphql-operations'
 import { PageRoutes } from '../../../../../routes.constants'
-import { BackendInsight, SearchBasedInsightSeries } from '../../types'
-import { BackendInsightDatum, BackendInsightSeries } from '../code-insights-backend-types'
+import type { BackendInsight, SearchBasedInsightSeries } from '../../types'
+import type { BackendInsightDatum, BackendInsightSeries } from '../code-insights-backend-types'
 
 import { getParsedSeriesMetadata } from './parse-series-metadata'
 
@@ -13,6 +13,7 @@ interface LineChartContentInput {
     insight: BackendInsight
     seriesData: InsightDataSeries[]
     showError: boolean
+    defaultPatternType: SearchPatternType
 }
 
 /**
@@ -32,9 +33,7 @@ export function createLineChartContent(input: LineChartContentInput): BackendIns
         data: line.points.map(point => ({
             dateTime: new Date(point.dateTime),
             value: point.value,
-            link: generateLinkURL({
-                diffQuery: point.diffQuery,
-            }),
+            link: generateLinkURL(point.pointInTimeQuery, input.defaultPatternType),
         })),
         name: seriesDefinitionMap[line.seriesId]?.name ?? line.label,
         color: seriesDefinitionMap[line.seriesId]?.stroke,
@@ -49,14 +48,9 @@ export function createLineChartContent(input: LineChartContentInput): BackendIns
  */
 export type InsightDataSeriesData = Pick<InsightDataSeries, 'seriesId' | 'label' | 'points'>
 
-interface GenerateLinkInput {
-    diffQuery: string | null
-}
-
-export function generateLinkURL(input: GenerateLinkInput): string | undefined {
-    const { diffQuery } = input
-    if (diffQuery) {
-        const searchQueryParameter = buildSearchURLQuery(diffQuery, SearchPatternType.literal, false)
+export function generateLinkURL(query: string | null, defaultPatternType: SearchPatternType): string | undefined {
+    if (query) {
+        const searchQueryParameter = buildSearchURLQuery(query, defaultPatternType, false)
         return `${window.location.origin}${PageRoutes.Search}?${searchQueryParameter}`
     }
 

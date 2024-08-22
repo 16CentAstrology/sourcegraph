@@ -1,57 +1,144 @@
-import React, { FC, useCallback, useRef, useState } from 'react'
+import React, { type FC, useRef, useState, useEffect, useMemo } from 'react'
 
-import { mdiFileDocumentOutline, mdiFolderOutline, mdiMenuDown, mdiMenuUp } from '@mdi/js'
+import { mdiFileDocumentOutline, mdiFolderOutline } from '@mdi/js'
 import classNames from 'classnames'
-import * as H from 'history'
 
-import { TreeFields } from '@sourcegraph/shared/src/graphql-operations'
+import { Timestamp } from '@sourcegraph/branded/src/components/Timestamp'
+import { NoopEditor } from '@sourcegraph/cody-shared'
+import { basename } from '@sourcegraph/common'
+import { gql } from '@sourcegraph/http-client'
+import type { TreeFields } from '@sourcegraph/shared/src/graphql-operations'
+import { useSettings } from '@sourcegraph/shared/src/settings/settings'
 import {
     Card,
     CardHeader,
+    H2,
     Icon,
+    LanguageIcon,
     Link,
     LinkOrSpan,
-    ParentSize,
-    StackedMeter,
-    Tooltip,
+    LoadingSpinner,
     useElementObscuredArea,
 } from '@sourcegraph/wildcard'
 
+import { FileContentEditor } from '../../cody/components/FileContentEditor'
+import { useCodySidebar } from '../../cody/sidebar/Provider'
+import type { BlobFileFields, TreeHistoryFields } from '../../graphql-operations'
+import { fetchBlob } from '../blob/backend'
 import { RenderedFile } from '../blob/RenderedFile'
+import { CommitMessageWithLinks } from '../commit/CommitMessageWithLinks'
 
 import styles from './TreePagePanels.module.scss'
 
+export const treeHistoryFragment = gql`
+    fragment TreeHistoryFields on TreeEntry {
+        path
+        history(first: 1) {
+            nodes {
+                commit {
+                    id
+                    canonicalURL
+                    subject
+                    author {
+                        date
+                    }
+                    committer {
+                        date
+                    }
+                    externalURLs {
+                        url
+                        serviceKind
+                    }
+                }
+            }
+        }
+    }
+`
+
 interface ReadmePreviewCardProps {
-    readmeHTML: string
-    readmeURL: string
-    location: H.Location
+    entry: TreeFields['entries'][number]
+    repoName: string
+    revision: string
     className?: string
 }
+export const ReadmePreviewCard: React.FunctionComponent<ReadmePreviewCardProps> = ({
+    entry,
+    repoName,
+    revision,
+    className,
+}) => {
+    const [readmeInfo, setReadmeInfo] = useState<null | BlobFileFields>(null)
+    const { setEditorScope } = useCodySidebar()
 
-export const ReadmePreviewCard: React.FunctionComponent<ReadmePreviewCardProps> = props => {
-    const { readmeHTML, readmeURL, location, className } = props
+    useEffect(() => {
+        const subscription = fetchBlob({
+            repoName,
+            revision,
+            filePath: entry.path,
+            disableTimeout: true,
+        }).subscribe(blob => {
+            if (blob) {
+                setReadmeInfo(blob)
+            } else {
+                setReadmeInfo(null)
+            }
+        })
+        return () => subscription.unsubscribe()
+    }, [repoName, revision, entry.path])
 
-    const renderedFileRef = useRef<HTMLDivElement>(null)
-    const { bottom } = useElementObscuredArea(renderedFileRef)
+    useEffect(() => {
+        if (readmeInfo) {
+            setEditorScope(
+                new FileContentEditor({ filePath: entry.path, repoName, revision, content: readmeInfo.content })
+            )
+        }
+
+        return () => {
+            if (readmeInfo) {
+                setEditorScope(new NoopEditor())
+            }
+        }
+    }, [repoName, revision, entry.path, readmeInfo, setEditorScope])
 
     return (
-        <section className={className}>
-            <RenderedFile
-                key={readmeHTML}
-                ref={renderedFileRef}
-                location={location}
-                dangerousInnerHTML={readmeHTML}
-                className={styles.readme}
-            />
+        <section className={classNames('mb-4', className)}>
+            {readmeInfo ? (
+                <RenderedReadmeFile blob={readmeInfo} entryUrl={entry.url} />
+            ) : (
+                <div className={classNames('text-muted', styles.readmeLoading)}>
+                    <LoadingSpinner />
+                </div>
+            )}
+        </section>
+    )
+}
+
+interface RenderedReadmeFileProps {
+    blob: BlobFileFields
+    entryUrl: string
+}
+const RenderedReadmeFile: React.FC<RenderedReadmeFileProps> = ({ blob, entryUrl }) => {
+    const renderedFileRef = useRef<HTMLDivElement>(null)
+    const { bottom } = useElementObscuredArea(renderedFileRef)
+    return (
+        <>
+            {blob.richHTML ? (
+                <RenderedFile ref={renderedFileRef} dangerousInnerHTML={blob.richHTML} className={styles.readme} />
+            ) : (
+                <div ref={renderedFileRef} className={styles.readme}>
+                    <H2 className={styles.readmePreHeader}>{basename(entryUrl)}</H2>
+                    <pre className={styles.readmePre}>{blob.content}</pre>
+                </div>
+            )}
             {bottom > 0 && (
                 <>
                     <div className={styles.readmeFader} />
-                    <Link to={readmeURL} className={styles.readmeMoreLink}>
+                    <Link to={entryUrl} className={styles.readmeMoreLink}>
                         View full README
                     </Link>
                 </>
             )}
-        </section>
+        </>
     )
 }
 
@@ -62,240 +149,107 @@ export interface DiffStat {
 }
 
 export interface FilePanelProps {
-    entries: Pick<TreeFields['entries'][number], 'name' | 'url' | 'isDirectory' | 'path'>[]
-    diffStats?: DiffStat[]
+    entries: TreeFields['entries']
+    historyEntries?: TreeHistoryFields[]
     className?: string
 }
 
-export const FilesCard: FC<FilePanelProps> = props => {
-    const { entries, diffStats, className } = props
-
-    const [sortColumn, setSortColumn] = useState<{
-        column: 'Files' | 'Activity'
-        direction: 'asc' | 'desc'
-    }>({ column: 'Files', direction: 'asc' })
-
-    const diffStatsByPath: { [path: string]: DiffStat } = {}
-    let maxLinesChanged = 1
-    if (diffStats) {
-        for (const diffStat of diffStats) {
-            if (diffStat.added + diffStat.deleted > maxLinesChanged) {
-                maxLinesChanged = diffStat.added + diffStat.deleted
+export const FilesCard: FC<FilePanelProps> = ({ entries, historyEntries, className }) => {
+    const settings = useSettings()
+    const preferAbsoluteTimestamps = Boolean(settings?.['history.preferAbsoluteTimestamps'])
+    const hasHistoryEntries = historyEntries && historyEntries.length > 0
+    const fileHistoryByPath = useMemo(() => {
+        const fileHistoryByPath: Record<string, TreeHistoryFields['history']['nodes'][number]['commit']> = {}
+        for (const entry of historyEntries || []) {
+            if (entry.history.nodes.length > 0) {
+                fileHistoryByPath[entry.path] = entry.history.nodes[0].commit
             }
-            diffStatsByPath[diffStat.path] = diffStat
         }
-    }
-
-    let sortedEntries = [...entries]
-    const { column, direction } = sortColumn
-    switch (column) {
-        case 'Files':
-            if (direction === 'desc') {
-                sortedEntries.reverse()
-            }
-            break
-        case 'Activity':
-            sortedEntries = [...entries]
-            if (diffStats) {
-                sortedEntries.sort((entry1, entry2) => {
-                    const stats1: DiffStat = diffStatsByPath[entry1.name]
-                    const stats2: DiffStat = diffStatsByPath[entry2.name]
-                    let difference =
-                        (stats2 ? stats2.added + stats2.deleted : 0) - (stats1 ? stats1.added + stats1.deleted : 0)
-                    if (direction === 'desc') {
-                        difference *= -1
-                    }
-                    return difference
-                })
-            }
-            break
-    }
-
-    const sortCallback = useCallback(
-        (column: 'Files' | 'Activity'): void => {
-            if (sortColumn.column === column && sortColumn.direction === 'asc') {
-                setSortColumn({ column, direction: 'desc' })
-            } else {
-                setSortColumn({ column, direction: 'asc' })
-            }
-        },
-        [sortColumn]
-    )
-    const clickFiles = useCallback(() => sortCallback('Files'), [sortCallback])
-    const keydownFiles = useCallback(
-        ({ key }: React.KeyboardEvent<HTMLDivElement>) => key === 'Enter' && sortCallback('Files'),
-        [sortCallback]
-    )
-    const clickActivity = useCallback(() => sortCallback('Activity'), [sortCallback])
-    const keydownActivity = useCallback(
-        ({ key }: React.KeyboardEvent<HTMLDivElement>) => key === 'Enter' && sortCallback('Activity'),
-        [sortCallback]
-    )
-
-    interface Datum {
-        name: 'deleted' | 'added'
-        value: number
-        className: string
-    }
-
-    const getDatumValue = useCallback((datum: Datum) => datum.value, [])
-    const getDatumName = useCallback((datum: Datum) => datum.name, [])
-    const getDatumClassName = useCallback((datum: Datum) => datum.className, [])
+        return fileHistoryByPath
+    }, [historyEntries])
 
     return (
-        <Card className={className}>
-            <CardHeader className={styles.cardColHeaderWrapper}>
-                <div className="container-fluid px-2">
-                    <div className="row">
-                        <div
-                            role="button"
-                            tabIndex={0}
-                            onClick={clickFiles}
-                            onKeyDown={keydownFiles}
-                            className={classNames('d-flex flex-row align-items-start col-9 px-2', styles.cardColHeader)}
-                        >
-                            Files
-                            <div className="flex-shrink-1 d-flex flex-column">
-                                <Icon
-                                    aria-label="Sort ascending"
-                                    svgPath={mdiMenuUp}
-                                    className={classNames(
-                                        styles.sortDscIcon,
-                                        sortColumn.column === 'Files' &&
-                                            sortColumn.direction === 'desc' &&
-                                            styles.sortSelectedIcon
-                                    )}
-                                />
-                                <Icon
-                                    aria-label="Sort descending"
-                                    svgPath={mdiMenuDown}
-                                    className={classNames(
-                                        styles.sortAscIcon,
-                                        sortColumn.column === 'Files' &&
-                                            sortColumn.direction === 'asc' &&
-                                            styles.sortSelectedIcon
-                                    )}
-                                />
-                            </div>
-                        </div>
-                        <div
-                            title="1 month activity"
-                            role="button"
-                            tabIndex={0}
-                            onClick={clickActivity}
-                            onKeyDown={keydownActivity}
-                            className={classNames(
-                                'd-flex flex-row-reverse align-items-start col-3 px-2 text-right',
-                                styles.cardColHeader
-                            )}
-                        >
-                            <div className="flex-shrink-1 d-flex flex-column">
-                                <Icon
-                                    aria-label="Sort ascending"
-                                    svgPath={mdiMenuUp}
-                                    className={classNames(
-                                        styles.sortDscIcon,
-                                        sortColumn.column === 'Activity' &&
-                                            sortColumn.direction === 'desc' &&
-                                            styles.sortSelectedIcon
-                                    )}
-                                />
-                                <Icon
-                                    aria-label="Sort descending"
-                                    svgPath={mdiMenuDown}
-                                    className={classNames(
-                                        styles.sortAscIcon,
-                                        sortColumn.column === 'Activity' &&
-                                            sortColumn.direction === 'asc' &&
-                                            styles.sortSelectedIcon
-                                    )}
-                                />
-                            </div>
-                            Recent activity
-                        </div>
-                    </div>
-                </div>
-            </CardHeader>
-            <div className="container-fluid">
-                {sortedEntries.map(entry => (
-                    <div key={entry.name} className={classNames('row', styles.fileItem)}>
-                        <div className="list-group list-group-flush px-2 py-1 col-9">
+        <Card as="table" className={classNames(className, styles.files)}>
+            <thead>
+                <CardHeader as="tr">
+                    <th className={styles.fileNameColumn}>File</th>
+                    {hasHistoryEntries && (
+                        <>
+                            <th>Last commit message</th>
+                            <th
+                                className={classNames(
+                                    styles.commitDateColumn,
+                                    preferAbsoluteTimestamps && styles.absolute
+                                )}
+                            >
+                                Last commit date
+                            </th>
+                        </>
+                    )}
+                </CardHeader>
+            </thead>
+            <tbody>
+                {entries.map(entry => (
+                    <tr key={entry.name}>
+                        <td className={styles.fileName}>
                             <LinkOrSpan
                                 to={entry.url}
                                 className={classNames(
                                     'test-page-file-decorable',
-                                    styles.treeEntry,
                                     entry.isDirectory && 'font-weight-bold',
                                     `test-tree-entry-${entry.isDirectory ? 'directory' : 'file'}`
                                 )}
                                 title={entry.path}
                                 data-testid="tree-entry"
                             >
-                                <div
-                                    className={classNames(
-                                        'd-flex align-items-center justify-content-between test-file-decorable-name overflow-hidden'
-                                    )}
-                                >
-                                    <span>
-                                        <Icon
-                                            className="mr-1"
-                                            svgPath={entry.isDirectory ? mdiFolderOutline : mdiFileDocumentOutline}
-                                            aria-hidden={true}
-                                        />
-                                        {entry.name}
-                                        {entry.isDirectory && '/'}
-                                    </span>
-                                </div>
+                                {entry.__typename === 'GitBlob' ? (
+                                    <LanguageIcon
+                                        language={entry.languages.at(0) ?? ''}
+                                        fileNameOrExtensions={entry.name}
+                                        className="mr-1"
+                                    />
+                                ) : (
+                                    <Icon
+                                        svgPath={entry.isDirectory ? mdiFolderOutline : mdiFileDocumentOutline}
+                                        className="mr-1"
+                                        aria-hidden={true}
+                                    />
+                                )}
+                                {entry.name}
+                                {entry.isDirectory && '/'}
                             </LinkOrSpan>
-                        </div>
-                        <div className="list-group list-group-flush px-2 py-1 col-3">
-                            {diffStatsByPath[entry.name] && (
-                                <Tooltip
-                                    placement="topEnd"
-                                    content={`${Intl.NumberFormat('en', {
-                                        notation: 'compact',
-                                    }).format(diffStatsByPath[entry.name].added)} lines added,\n${Intl.NumberFormat(
-                                        'en',
-                                        {
-                                            notation: 'compact',
-                                        }
-                                    ).format(diffStatsByPath[entry.name].deleted)} lines removed in the past 30 days`}
-                                >
-                                    <div className={styles.meterContainer}>
-                                        <ParentSize>
-                                            {({ width }) => (
-                                                <StackedMeter
-                                                    width={width}
-                                                    height={10}
-                                                    viewMinMax={[0, maxLinesChanged]}
-                                                    data={[
-                                                        {
-                                                            name: 'deleted',
-                                                            value: diffStatsByPath[entry.name].deleted,
-                                                            className: styles.diffStatDeleted,
-                                                        },
-                                                        {
-                                                            name: 'added',
-                                                            value: diffStatsByPath[entry.name].added,
-                                                            className: styles.diffStatAdded,
-                                                        },
-                                                    ]}
-                                                    getDatumValue={getDatumValue}
-                                                    getDatumName={getDatumName}
-                                                    getDatumClassName={getDatumClassName}
-                                                    minBarWidth={10}
-                                                    className={styles.barSvg}
-                                                    rightToLeft={true}
-                                                />
-                                            )}
-                                        </ParentSize>
-                                    </div>
-                                </Tooltip>
-                            )}
-                        </div>
-                    </div>
+                        </td>
+                        {fileHistoryByPath[entry.path] && (
+                            <>
+                                <td className={styles.commitMessage}>
+                                    <span
+                                        title={fileHistoryByPath[entry.path].subject}
+                                        data-testid="git-commit-message-with-links"
+                                    >
+                                        <CommitMessageWithLinks
+                                            to={fileHistoryByPath[entry.path].canonicalURL}
+                                            message={fileHistoryByPath[entry.path].subject}
+                                            className="text-muted"
+                                            externalURLs={fileHistoryByPath[entry.path].externalURLs}
+                                        />
+                                    </span>
+                                </td>
+                                <td className={classNames(styles.commitDate, 'text-muted')}>
+                                    <Timestamp
+                                        noAbout={true}
+                                        preferAbsolute={preferAbsoluteTimestamps}
+                                        date={getCommitDate(fileHistoryByPath[entry.path])}
+                                    />
+                                </td>
+                            </>
+                        )}
+                    </tr>
                 ))}
-            </div>
+            </tbody>
         </Card>
     )
+}
+
+function getCommitDate(commit: { author: { date: string }; committer?: { date: string } | null }): string {
+    return commit.committer ? commit.committer.date : commit.author.date
 }

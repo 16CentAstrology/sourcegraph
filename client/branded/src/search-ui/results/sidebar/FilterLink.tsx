@@ -4,10 +4,10 @@ import classNames from 'classnames'
 
 import { pluralize } from '@sourcegraph/common'
 import { displayRepoName } from '@sourcegraph/shared/src/components/RepoLink'
-import { Settings } from '@sourcegraph/shared/src/schema/settings.schema'
+import type { Settings } from '@sourcegraph/shared/src/schema/settings.schema'
 import { FilterType } from '@sourcegraph/shared/src/search/query/filters'
-import { Filter } from '@sourcegraph/shared/src/search/stream'
-import { isSettingsValid, SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
+import type { Filter } from '@sourcegraph/shared/src/search/stream'
+import { isSettingsValid, type SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
 import { Button, Tooltip } from '@sourcegraph/wildcard'
 
 import { SyntaxHighlightedSearchQuery, CodeHostIcon } from '../../components'
@@ -22,9 +22,9 @@ export interface FilterLinkProps {
     value: string
     count?: number
     limitHit?: boolean
-    kind?: string
+    kind?: Filter['kind']
     labelConverter?: (label: string) => JSX.Element
-    onFilterChosen: (value: string, kind?: string) => void
+    onFilterChosen: (value: string, kind?: Filter['kind']) => void
 }
 
 export const FilterLink: React.FunctionComponent<React.PropsWithChildren<FilterLinkProps>> = ({
@@ -67,7 +67,7 @@ export const FilterLink: React.FunctionComponent<React.PropsWithChildren<FilterL
 
 export const getRepoFilterLinks = (
     filters: Filter[] | undefined,
-    onFilterChosen: (value: string, kind?: string) => void
+    onFilterChosen: (value: string, kind?: Filter['kind']) => void
 ): React.ReactElement[] => {
     function repoLabelConverter(label: string): JSX.Element {
         const Icon = CodeHostIcon({
@@ -103,7 +103,7 @@ export const getRepoFilterLinks = (
 export const getDynamicFilterLinks = (
     filters: Filter[] | undefined,
     kinds: Filter['kind'][],
-    onFilterChosen: (value: string, kind?: string) => void,
+    onFilterChosen: (value: string, kind?: Filter['kind']) => void,
     ariaLabelTransform: (label: string, value: string) => string = label => `${label}`,
     labelTransform: (label: string, value: string) => string = label => `${label}`
 ): React.ReactElement[] =>

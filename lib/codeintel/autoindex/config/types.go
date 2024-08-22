@@ -2,12 +2,11 @@ package config
 
 import "strings"
 
-type IndexConfiguration struct {
-	SharedSteps []DockerStep `json:"shared_steps" yaml:"shared_steps"`
-	IndexJobs   []IndexJob   `json:"index_jobs" yaml:"index_jobs"`
+type AutoIndexJobSpecList struct {
+	JobSpecs []AutoIndexJobSpec `json:"index_jobs" yaml:"index_jobs"`
 }
 
-type IndexJob struct {
+type AutoIndexJobSpec struct {
 	Steps            []DockerStep `json:"steps" yaml:"steps"`
 	LocalSteps       []string     `json:"local_steps" yaml:"local_steps"`
 	Root             string       `json:"root" yaml:"root"`
@@ -17,15 +16,15 @@ type IndexJob struct {
 	RequestedEnvVars []string     `json:"requestedEnvVars" yaml:"requestedEnvVars"`
 }
 
-func (j IndexJob) GetRoot() string {
+func (j AutoIndexJobSpec) GetRoot() string {
 	return j.Root
 }
 
-// getIndexer Name removes the prefix "sourcegraph/"" and the suffix "@sha256:..."
+// GetIndexerName removes the prefix "sourcegraph/"" and the suffix "@sha256:..."
 // from the indexer name.
 // Example:
 // sourcegraph/lsif-go@sha256:... => lsif-go
-func (j IndexJob) GetIndexerName() string {
+func (j AutoIndexJobSpec) GetIndexerName() string {
 	return extractIndexerName(j.Indexer)
 }
 
@@ -33,28 +32,6 @@ type DockerStep struct {
 	Root     string   `json:"root" yaml:"root"`
 	Image    string   `json:"image" yaml:"image"`
 	Commands []string `json:"commands" yaml:"commands"`
-}
-
-type HintConfidence int
-
-const (
-	HintConfidenceUnknown HintConfidence = iota
-	HintConfidenceLanguageSupport
-	HintConfidenceProjectStructureSupported
-)
-
-type IndexJobHint struct {
-	Root           string
-	Indexer        string
-	HintConfidence HintConfidence
-}
-
-func (j IndexJobHint) GetRoot() string {
-	return j.Root
-}
-
-func (j IndexJobHint) GetIndexerName() string {
-	return extractIndexerName(j.Indexer)
 }
 
 // extractIndexerName Name removes the prefix "sourcegraph/"" and the suffix "@sha256:..."

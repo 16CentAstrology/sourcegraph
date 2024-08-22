@@ -1,16 +1,22 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
     "module": "commonjs",
     "sourceRoot": "src",
     "rootDir": ".",
     "outDir": "./out",
-    "baseUrl": "./src",
-    "paths": {
-      "*": ["../common/src/types/*"],
-    },
   },
-  "references": [{ "path": "../template-parser" }],
-  "include": ["./src/**/*", "./*.ts"],
+  "references": [
+    {
+      "path": "../extension-api",
+    },
+    {
+      "path": "../extension-api-types",
+    },
+    {
+      "path": "../template-parser",
+    },
+  ],
+  "include": ["src"],
 }

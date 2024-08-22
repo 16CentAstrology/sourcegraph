@@ -1,30 +1,29 @@
 import * as os from 'os'
 import * as path from 'path'
 
-import realPercySnapshot from '@percy/puppeteer'
 import delay from 'delay'
 import expect from 'expect'
 import * as jsonc from 'jsonc-parser'
 import { escapeRegExp } from 'lodash'
 import { readFile } from 'mz/fs'
 import puppeteer, {
-    PageEventObject,
-    Page,
-    Serializable,
-    LaunchOptions,
-    ConsoleMessage,
-    Target,
-    BrowserLaunchArgumentOptions,
-    BrowserConnectOptions,
+    type BrowserConnectOptions,
+    type BrowserLaunchArgumentOptions,
+    type ConsoleMessage,
+    type LaunchOptions,
+    type Page,
+    type PageEventObject,
+    type Serializable,
+    type Target,
 } from 'puppeteer'
-import { from, fromEvent, merge, Subscription } from 'rxjs'
-import { filter, map, concatAll, mergeMap, mergeAll, takeUntil } from 'rxjs/operators'
+import { Subscription, from, fromEvent, merge } from 'rxjs'
+import { concatAll, filter, map, mergeAll, mergeMap, takeUntil } from 'rxjs/operators'
 import { Key } from 'ts-key-enum'
 
 import { isDefined, logger } from '@sourcegraph/common'
-import { dataOrThrowErrors, gql, GraphQLResult } from '@sourcegraph/http-client'
+import { dataOrThrowErrors, gql, type GraphQLResult } from '@sourcegraph/http-client'
 
-import {
+import type {
     ExternalServiceKind,
     ExternalServicesForTestsResult,
     OverwriteSettingsForTestsResult,
@@ -33,11 +32,11 @@ import {
     UpdateSiteConfigurationForTestsResult,
     UserSettingsForTestsResult,
 } from '../graphql-operations'
-import { Settings } from '../settings/settings'
+import type { Settings } from '../settings/settings'
 
 import { getConfig } from './config'
 import { formatPuppeteerConsoleMessage } from './console'
-import { readEnvironmentBoolean, retry } from './utils'
+import { retry } from './utils'
 
 /**
  * Returns a Promise for the next emission of the given event on the given Puppeteer page.
@@ -45,9 +44,16 @@ import { readEnvironmentBoolean, retry } from './utils'
 export const oncePageEvent = <E extends keyof PageEventObject>(page: Page, eventName: E): Promise<PageEventObject[E]> =>
     new Promise(resolve => page.once(eventName, resolve))
 
-export const percySnapshot = readEnvironmentBoolean({ variable: 'PERCY_ON', defaultValue: false })
-    ? realPercySnapshot
-    : () => Promise.resolve()
+export const extractStyles = (page: puppeteer.Page): Promise<string> =>
+    page.evaluate(() =>
+        Array.from(document.styleSheets).reduce(
+            (styleSheetRules, styleSheet) =>
+                styleSheetRules.concat(
+                    Array.from(styleSheet.cssRules).reduce((rules, rule) => rules.concat(rule.cssText), '')
+                ),
+            ''
+        )
+    )
 
 export const BROWSER_EXTENSION_DEV_ID = 'bmfbcejdknlknpncfpeloejonjoledha'
 
@@ -118,9 +124,17 @@ function findElementRegexpStrings(
 }
 
 function findElementMatchingRegexps(tag: string, regexps: string[]): HTMLElement | null {
-    for (const regexpString of regexps) {
-        const regexp = new RegExp(regexpString)
-        for (const element of document.querySelectorAll<HTMLElement>(tag)) {
+    // This method is invoked via puppeteer.Page.eval* and runs in the browser context. This method
+    // must not use anything outside its own scope such as variables or functions. Therefore this
+    // method must be written in legacy-compatible JavaScript.
+    const elements = document.querySelectorAll<HTMLElement>(tag)
+
+    // eslint-disable-next-line @typescript-eslint/prefer-for-of
+    for (let regexI = 0; regexI < regexps.length; regexI++) {
+        const regexp = new RegExp(regexps[regexI])
+        // eslint-disable-next-line @typescript-eslint/prefer-for-of
+        for (let elementI = 0; elementI < elements.length; elementI++) {
+            const element = elements[elementI]
             if (!element.offsetParent) {
                 // Ignore hidden elements
                 continue
@@ -141,10 +155,7 @@ function getDebugExpressionFromRegexp(tag: string, regexp: string): string {
 
 // Console logs with these keywords will be removed from the console output.
 const MUTE_CONSOLE_KEYWORDS = [
-    '[webpack-dev-server]',
     'Download the React DevTools',
-    '[HMR]',
-    '[WDS]',
     'Warning: componentWillReceiveProps has been renamed',
     'Download the Apollo DevTools',
     'Compiled in DEBUG mode',
@@ -226,6 +237,11 @@ export class Driver {
          */
         await this.page.goto(this.sourcegraphBaseUrl)
 
+        // Skip setup wizard
+        await this.page.evaluate(() => {
+            localStorage.setItem('setup.skipped', 'true')
+        })
+
         /**
          * In case a user is not authenticated, and site-init is NOT required, one redirect happens:
          * 1. Redirect to /sign-in?returnTo=%2F
@@ -247,7 +263,6 @@ export class Driver {
              */
             if (error.message.includes('waiting for selector `.test-signin-form` failed')) {
                 logger.log('Failed to use the signin form. Trying the signup form...')
-
                 await this.page.waitForSelector('.test-signup-form')
                 if (email) {
                     await this.page.type('input[name=email]', email)
@@ -344,12 +359,14 @@ export class Driver {
         // Pasting does not work on macOS. See:  https://github.com/GoogleChrome/puppeteer/issues/1313
         method = os.platform() === 'darwin' ? 'type' : method
         switch (method) {
-            case 'type':
+            case 'type': {
                 await this.page.keyboard.type(text)
                 break
-            case 'paste':
+            }
+            case 'paste': {
                 await this.paste(text)
                 break
+            }
         }
     }
 
@@ -475,9 +492,7 @@ export class Driver {
     }
 
     public async paste(value: string): Promise<void> {
-        await this.page.evaluate(async (value: string) => {
-            await navigator.clipboard.writeText(value)
-        }, value)
+        await this.page.evaluate((value: string) => navigator.clipboard.writeText(value), value)
         const modifier = os.platform() === 'darwin' ? Key.Meta : Key.Control
         await this.page.keyboard.down(modifier)
         await this.page.keyboard.press('v')
@@ -685,7 +700,6 @@ export class Driver {
     /**
      * Finds the first HTML element matching the text using the regular expressions returned in
      * {@link findElementRegexpStrings}.
-     *
      * @param options specifies additional parameters for finding the element. If you want to wait
      * until the element appears, specify the `wait` field (which can contain additional inner
      * options for how long to wait).
@@ -811,7 +825,7 @@ export async function createDriverForTest(options?: Partial<DriverOptions>): Pro
 
     // Chrome
     args.push(`--window-size=${config.windowWidth},${config.windowHeight}`)
-    if (process.getuid() === 0) {
+    if (process.getuid?.() === 0) {
         // TODO don't run as root in CI
         logger.warn('Running as root, disabling sandbox')
         args.push('--no-sandbox', '--disable-setuid-sandbox')

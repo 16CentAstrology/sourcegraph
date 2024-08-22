@@ -2,7 +2,6 @@
 
 .root {
     align-self: stretch;
-    margin-top: 3rem;
 
     > .panels {
         display: flex;
@@ -189,4 +188,9 @@
     @media (--xs-breakpoint-down) {
         margin-top: 0.75rem;
     }
+}
+
+.query-examples-container {
+    display: flex;
+    justify-content: center;
 }

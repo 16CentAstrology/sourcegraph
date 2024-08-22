@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +20,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
-	"github.com/sourcegraph/sourcegraph/schema"
 )
 
 func TestPrepareZip(t *testing.T) {
@@ -34,7 +32,7 @@ func TestPrepareZip(t *testing.T) {
 	var gotRepo api.RepoName
 	var gotCommit api.CommitID
 	var fetchZipCalled int64
-	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID) (io.ReadCloser, error) {
+	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
 		<-returnFetch
 		atomic.AddInt64(&fetchZipCalled, 1)
 		gotRepo = repo
@@ -45,16 +43,16 @@ func TestPrepareZip(t *testing.T) {
 	// Fetch same commit in parallel to ensure single-flighting works
 	startPrepareZip := make(chan struct{})
 	prepareZipErr := make(chan error)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			<-startPrepareZip
-			_, err := s.PrepareZip(context.Background(), wantRepo, wantCommit)
+			_, err := s.PrepareZip(context.Background(), wantRepo, wantCommit, nil)
 			prepareZipErr <- err
 		}()
 	}
 	close(startPrepareZip)
 	close(returnFetch)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		err := <-prepareZipErr
 		if err != nil {
 			t.Fatal("expected PrepareZip to succeed:", err)
@@ -71,7 +69,7 @@ func TestPrepareZip(t *testing.T) {
 	// Wait for item to appear on disk cache, then test again to ensure we
 	// use the disk cache.
 	onDisk := false
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		files, _ := os.ReadDir(s.Path)
 		if len(files) != 0 {
 			onDisk = true
@@ -82,7 +80,7 @@ func TestPrepareZip(t *testing.T) {
 	if !onDisk {
 		t.Fatal("timed out waiting for items to appear in cache at", s.Path)
 	}
-	_, err := s.PrepareZip(context.Background(), wantRepo, wantCommit)
+	_, err := s.PrepareZip(context.Background(), wantRepo, wantCommit, nil)
 	if err != nil {
 		t.Fatal("expected PrepareZip to succeed:", err)
 	}
@@ -91,10 +89,10 @@ func TestPrepareZip(t *testing.T) {
 func TestPrepareZip_fetchTarFail(t *testing.T) {
 	fetchErr := errors.New("test")
 	s := tmpStore(t)
-	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID) (io.ReadCloser, error) {
+	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
 		return nil, fetchErr
 	}
-	_, err := s.PrepareZip(context.Background(), "foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	_, err := s.PrepareZip(context.Background(), "foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", nil)
 	if !errors.Is(err, fetchErr) {
 		t.Fatalf("expected PrepareZip to fail with %v, failed with %v", fetchErr, err)
 	}
@@ -103,12 +101,12 @@ func TestPrepareZip_fetchTarFail(t *testing.T) {
 func TestPrepareZip_fetchTarReaderErr(t *testing.T) {
 	fetchErr := errors.New("test")
 	s := tmpStore(t)
-	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID) (io.ReadCloser, error) {
+	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
 		r, w := io.Pipe()
 		w.CloseWithError(fetchErr)
 		return r, nil
 	}
-	_, err := s.PrepareZip(context.Background(), "foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	_, err := s.PrepareZip(context.Background(), "foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", nil)
 	if !errors.Is(err, fetchErr) {
 		t.Fatalf("expected PrepareZip to fail with %v, failed with %v", fetchErr, err)
 	}
@@ -116,7 +114,7 @@ func TestPrepareZip_fetchTarReaderErr(t *testing.T) {
 
 func TestPrepareZip_errHeader(t *testing.T) {
 	s := tmpStore(t)
-	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID) (io.ReadCloser, error) {
+	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
 		buf := new(bytes.Buffer)
 		w := tar.NewWriter(buf)
 		w.Flush()
@@ -127,7 +125,7 @@ func TestPrepareZip_errHeader(t *testing.T) {
 		}
 		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
 	}
-	_, err := s.PrepareZip(context.Background(), "foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	_, err := s.PrepareZip(context.Background(), "foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", nil)
 	if have, want := errors.Cause(err).Error(), tar.ErrHeader.Error(); have != want {
 		t.Fatalf("expected PrepareZip to fail with tar.ErrHeader, failed with %v", err)
 	}
@@ -137,24 +135,22 @@ func TestPrepareZip_errHeader(t *testing.T) {
 }
 
 func TestSearchLargeFiles(t *testing.T) {
-	filter := newSearchableFilter(&schema.SiteConfiguration{
-		SearchLargeFiles: []string{
-			"foo",
-			"foo.*",
-			"foo_*",
-			"*.foo",
-			"bar.baz",
-			"**/*.bam",
-			"qu?.foo",
-			"!qux.*",
-			"**/quu?.foo",
-			"!**/quux.foo",
-			"!quuux.foo",
-			"quuu?.foo",
-			"\\!foo.baz",
-			"!!foo.bam",
-			"\\!!baz.foo",
-		},
+	filter := newSearchableFilter([]string{
+		"foo",
+		"foo.*",
+		"foo_*",
+		"*.foo",
+		"bar.baz",
+		"**/*.bam",
+		"qu?.foo",
+		"!qux.*",
+		"**/quu?.foo",
+		"!**/quux.foo",
+		"!quuux.foo",
+		"quuu?.foo",
+		"\\!foo.baz",
+		"!!foo.bam",
+		"\\!!baz.foo",
 	})
 	tests := []struct {
 		name   string
@@ -213,7 +209,7 @@ func TestSymlink(t *testing.T) {
 	}
 	zw := zip.NewWriter(f)
 
-	filter := newSearchableFilter(&schema.SiteConfiguration{})
+	filter := newSearchableFilter([]string{})
 	filter.CommitIgnore = func(hdr *tar.Header) bool {
 		return false
 	}
@@ -299,9 +295,13 @@ func tarArchive(dir string) (*tar.Reader, error) {
 func tmpStore(t *testing.T) *Store {
 	d := t.TempDir()
 	return &Store{
-		Path: d,
-		Log:  logtest.Scoped(t),
-
+		FilterTar: func(ctx context.Context, repo api.RepoName, commit api.CommitID) (FilterFunc, error) {
+			return func(hdr *tar.Header) bool {
+				return false
+			}, nil
+		},
+		Path:           d,
+		Logger:         logtest.Scoped(t),
 		ObservationCtx: observation.TestContextTB(t),
 	}
 }
@@ -314,13 +314,4 @@ func emptyTar(t *testing.T) io.ReadCloser {
 		t.Fatal(err)
 	}
 	return io.NopCloser(bytes.NewReader(buf.Bytes()))
-}
-
-func TestIsNetOpError(t *testing.T) {
-	if !isNetOpError(&net.OpError{}) {
-		t.Fatal("should be net.OpError")
-	}
-	if isNetOpError(errors.New("hi")) {
-		t.Fatal("should not be net.OpError")
-	}
 }

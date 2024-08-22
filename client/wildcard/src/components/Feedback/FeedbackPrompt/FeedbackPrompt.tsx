@@ -1,4 +1,4 @@
-import React, { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import React, { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 
 import { mdiClose, mdiCheck } from '@mdi/js'
 import classNames from 'classnames'
@@ -31,6 +31,7 @@ interface FeedbackPromptContentProps extends FeedbackPromptAuthenticatedUserProp
     /** Boolean for displaying the Join Research link */
     productResearchEnabled?: boolean
     onSubmit: FeedbackPromptSubmitEventHandler
+    initialValue?: string
 }
 const LOCAL_STORAGE_KEY_TEXT = 'feedbackPromptText'
 
@@ -39,8 +40,9 @@ const FeedbackPromptContent: React.FunctionComponent<React.PropsWithChildren<Fee
     productResearchEnabled,
     onSubmit,
     authenticatedUser,
+    initialValue,
 }) => {
-    const [text, setText] = useLocalStorage<string>(LOCAL_STORAGE_KEY_TEXT, '')
+    const [text, setText] = useLocalStorage<string>(LOCAL_STORAGE_KEY_TEXT, initialValue || '')
     const textAreaReference = useRef<HTMLInputElement>(null)
     const handleTextChange = useCallback(
         (event: React.ChangeEvent<HTMLInputElement>) => setText(event.target.value),
@@ -87,7 +89,7 @@ const FeedbackPromptContent: React.FunctionComponent<React.PropsWithChildren<Fee
                     <Icon inline={false} svgPath={mdiCheck} className={styles.successTick} aria-label="Success" />
                     <H3>We‘ve received your feedback!</H3>
                     <Text className="d-inline">
-                        Thank you for your help.
+                        Thank you.
                         {productResearchEnabled && authenticatedUser && (
                             <>
                                 {' '}
@@ -134,6 +136,12 @@ const FeedbackPromptContent: React.FunctionComponent<React.PropsWithChildren<Fee
                             prefix="Error submitting feedback"
                         />
                     )}
+                    <Text className="d-flex align-items-center justify-content-between mt-2">
+                        <span>
+                            By submitting your feedback, you agree to the{' '}
+                            <Link to="https://sourcegraph.com/terms/privacy">Sourcegraph Privacy Policy</Link>.
+                        </span>
+                    </Text>
                     <Button
                         disabled={!text || submitting}
                         role="menuitem"
@@ -166,6 +174,7 @@ interface FeedbackPromptProps extends FeedbackPromptContentProps {
     modal?: boolean
     modalLabelId?: string
     children?: React.FunctionComponent<React.PropsWithChildren<FeedbackPromptTriggerProps>> | ReactNode
+    initialValue?: string
 }
 
 export const FeedbackPrompt: React.FunctionComponent<FeedbackPromptProps> = ({
@@ -178,6 +187,7 @@ export const FeedbackPrompt: React.FunctionComponent<FeedbackPromptProps> = ({
     modalLabelId = 'sourcegraph-feedback-modal',
     productResearchEnabled,
     authenticatedUser,
+    initialValue,
 }) => {
     const [isOpen, setIsOpen] = useState(() => !!openByDefault)
     const ChildrenComponent = typeof children === 'function' && children
@@ -198,6 +208,7 @@ export const FeedbackPrompt: React.FunctionComponent<FeedbackPromptProps> = ({
             productResearchEnabled={productResearchEnabled}
             onClose={handleClosePrompt}
             authenticatedUser={authenticatedUser}
+            initialValue={initialValue}
         />
     )
 

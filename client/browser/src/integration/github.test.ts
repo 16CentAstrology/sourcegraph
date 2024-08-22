@@ -1,13 +1,15 @@
 import assert from 'assert'
 
+import { afterEach, beforeEach, describe, it } from 'mocha'
+
 import type { ExtensionContext } from '@sourcegraph/shared/src/codeintel/legacy-extensions/api'
-import { Settings } from '@sourcegraph/shared/src/settings/settings'
-import { createDriverForTest, Driver } from '@sourcegraph/shared/src/testing/driver'
+import type { Settings } from '@sourcegraph/shared/src/settings/settings'
+import { createDriverForTest, type Driver } from '@sourcegraph/shared/src/testing/driver'
 import { setupExtensionMocking, simpleHoverProvider } from '@sourcegraph/shared/src/testing/integration/mockExtension'
 import { afterEachSaveScreenshotIfFailed } from '@sourcegraph/shared/src/testing/screenshotReporter'
 import { readEnvironmentBoolean, readEnvironmentString, retry } from '@sourcegraph/shared/src/testing/utils'
 
-import { BrowserIntegrationTestContext, createBrowserIntegrationTestContext } from './context'
+import { type BrowserIntegrationTestContext, createBrowserIntegrationTestContext } from './context'
 import { closeInstallPageTab } from './shared'
 
 describe('GitHub', () => {
@@ -50,8 +52,8 @@ describe('GitHub', () => {
         })
 
         testContext.overrideGraphQL({
-            ViewerConfiguration: () => ({
-                viewerConfiguration: {
+            ViewerSettings: () => ({
+                viewerSettings: {
                     subjects: [],
                     merged: { contents: '', messages: [] },
                 },
@@ -102,11 +104,6 @@ describe('GitHub', () => {
                     siteAdmin: false,
                 },
             }),
-            EnableLegacyExtensions: () => ({
-                site: {
-                    enableLegacyExtensions: true,
-                },
-            }),
         })
 
         // Ensure that the same assets are requested in all environments.
@@ -155,17 +152,14 @@ describe('GitHub', () => {
     // it('shows hover tooltips when hovering a token and respects "Enable single click to go to definition" setting', async () => {
     //     mockUrls(['https://github.com/*path/find-definition'])
 
-    //     const { mockExtension, Extensions, extensionSettings } = setupExtensionMocking({
-    //         pollyServer: testContext.server,
-    //         sourcegraphBaseUrl: driver.sourcegraphBaseUrl,
-    //     })
+    //     const { mockExtension, Extensions, extensionSettings } = setupExtensionMocking()
 
     //     const userSettings: Settings = {
     //         extensions: extensionSettings,
     //     }
     //     testContext.overrideGraphQL({
-    //         ViewerConfiguration: () => ({
-    //             viewerConfiguration: {
+    //         ViewerSettings: () => ({
+    //             viewerSettings: {
     //                 subjects: [
     //                     {
     //                         __typename: 'User',
@@ -291,8 +285,6 @@ describe('GitHub', () => {
     //         },
     //     })
 
-    //     await percySnapshot(driver.page, 'Browser extension: GitHub - blob view with code intel popup')
-
     //     // 2. Check that token click does not do anything by default
     //     await token.click()
     //     await driver.page.waitForTimeout(1000)
@@ -316,23 +308,21 @@ describe('GitHub', () => {
     // })
 
     describe('Pull request pages', () => {
-        describe('Files Changed view', () => {
+        // TODO(sqs): skipped because these have not been reimplemented after the extension API deprecation
+        describe.skip('Files Changed view', () => {
             // For each pull request test, set up a mock extension that verifies that the correct
             // file and revision info reach extensions.
             beforeEach(() => {
                 mockUrls(['https://github.com/*path/find-definition'])
 
-                const { mockExtension, Extensions, extensionSettings } = setupExtensionMocking({
-                    pollyServer: testContext.server,
-                    sourcegraphBaseUrl: driver.sourcegraphBaseUrl,
-                })
+                const { mockExtension, extensionSettings } = setupExtensionMocking()
 
                 const userSettings: Settings = {
                     extensions: extensionSettings,
                 }
                 testContext.overrideGraphQL({
-                    ViewerConfiguration: () => ({
-                        viewerConfiguration: {
+                    ViewerSettings: () => ({
+                        viewerSettings: {
                             subjects: [
                                 {
                                     __typename: 'User',
@@ -350,7 +340,6 @@ describe('GitHub', () => {
                             merged: { contents: JSON.stringify(userSettings), messages: [] },
                         },
                     }),
-                    Extensions,
                     ResolveRev: ({ revision }) => ({
                         repository: {
                             mirrorInfo: { cloned: true },
@@ -639,7 +628,8 @@ describe('GitHub', () => {
             })
         })
 
-        describe('Commit view', () => {
+        // TODO(sqs): skipped because these have not been reimplemented after the extension API deprecation
+        describe.skip('Commit view', () => {
             beforeEach(() => {
                 mockUrls([
                     'https://github.com/*path/find-definition',
@@ -647,17 +637,14 @@ describe('GitHub', () => {
                     'https://github.com/commits/badges',
                 ])
 
-                const { mockExtension, Extensions, extensionSettings } = setupExtensionMocking({
-                    pollyServer: testContext.server,
-                    sourcegraphBaseUrl: driver.sourcegraphBaseUrl,
-                })
+                const { mockExtension, extensionSettings } = setupExtensionMocking()
 
                 const userSettings: Settings = {
                     extensions: extensionSettings,
                 }
                 testContext.overrideGraphQL({
-                    ViewerConfiguration: () => ({
-                        viewerConfiguration: {
+                    ViewerSettings: () => ({
+                        viewerSettings: {
                             subjects: [
                                 {
                                     __typename: 'User',
@@ -691,7 +678,6 @@ describe('GitHub', () => {
                             },
                         },
                     }),
-                    Extensions,
                 })
 
                 // Serve a mock extension with a simple hover provider

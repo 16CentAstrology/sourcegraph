@@ -6,7 +6,6 @@ import (
 
 	"github.com/sourcegraph/log"
 
-	"github.com/sourcegraph/sourcegraph/internal/honey"
 	"github.com/sourcegraph/sourcegraph/internal/metrics"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 )
@@ -16,7 +15,7 @@ type operations struct {
 }
 
 func newOperations(observationCtx *observation.Context) *operations {
-	metrics := metrics.NewREDMetrics(
+	redMetrics := metrics.NewREDMetrics(
 		observationCtx.Registerer,
 		"database_batch",
 		metrics.WithLabels("op"),
@@ -27,7 +26,7 @@ func newOperations(observationCtx *observation.Context) *operations {
 		return observationCtx.Operation(observation.Op{
 			Name:              fmt.Sprintf("database.batch.%s", name),
 			MetricLabelValues: []string{name},
-			Metrics:           metrics,
+			Metrics:           redMetrics,
 		})
 	}
 
@@ -43,10 +42,7 @@ var (
 
 func getOperations(logger log.Logger) *operations {
 	opsOnce.Do(func() {
-		observationCtx := observation.NewContext(logger, observation.Honeycomb(&honey.Dataset{
-			Name:       "database-batch",
-			SampleRate: 5,
-		}))
+		observationCtx := observation.NewContext(logger)
 
 		ops = newOperations(observationCtx)
 	})

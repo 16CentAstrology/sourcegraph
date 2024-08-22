@@ -4,13 +4,15 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"os/exec"
 
+	"github.com/urfave/cli/v2"
+
+	"github.com/sourcegraph/sourcegraph/dev/sg/internal/category"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/secrets"
 	"github.com/sourcegraph/sourcegraph/dev/sg/internal/std"
-	"github.com/sourcegraph/sourcegraph/dev/sg/internal/usershell"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 	"github.com/sourcegraph/sourcegraph/lib/output"
-	"github.com/urfave/cli/v2"
 )
 
 type srcInstance struct {
@@ -27,7 +29,7 @@ var srcInstanceCommand = &cli.Command{
 	Name:      "src-instance",
 	UsageText: "sg src-instance [command]",
 	Usage:     "Interact with Sourcegraph instances that 'sg src' will use",
-	Category:  CategoryDev,
+	Category:  category.Dev,
 	Subcommands: []*cli.Command{
 		{
 			Name:      "register",
@@ -85,7 +87,7 @@ var srcInstanceCommand = &cli.Command{
 				name := cmd.Args().First()
 				instance, ok := sc.Instances[name]
 				if !ok {
-					std.Out.WriteFailuref("Instance not found, register one with 'sg src register-instance'")
+					std.Out.WriteFailuref("Instance not found, register one with 'sg src-instance register'")
 					return errors.New("instance not found")
 				}
 				sc.Current = name
@@ -122,7 +124,7 @@ var srcCommand = &cli.Command{
 	Name:      "src",
 	UsageText: "sg src [src-cli args]\nsg src help # get src-cli help",
 	Usage:     "Run src-cli on a given instance defined with 'sg src-instance'",
-	Category:  CategoryDev,
+	Category:  category.Dev,
 	Action: func(cmd *cli.Context) error {
 		_, sc, err := getSrcInstances(cmd.Context)
 		if err != nil {
@@ -130,21 +132,21 @@ var srcCommand = &cli.Command{
 		}
 		instanceName := sc.Current
 		if instanceName == "" {
-			std.Out.WriteFailuref("Instance not found, register one with 'sg src register-instance'")
+			std.Out.WriteFailuref("Instance not found, register one with 'sg src-instance register'")
 			return errors.New("set an instance with sg src-instance use [instance-name]")
 		}
 		instance, ok := sc.Instances[instanceName]
 		if !ok {
-			std.Out.WriteFailuref("Instance not found, register one with 'sg src register-instance'")
+			std.Out.WriteFailuref("Instance not found, register one with 'sg src-instance register'")
 			return errors.New("instance not found")
 		}
 
-		c := usershell.Command(cmd.Context, append([]string{"src"}, cmd.Args().Slice()...)...)
-		c = c.Env(map[string]string{
-			"SRC_ACCESS_TOKEN": instance.AccessToken,
-			"SRC_ENDPOINT":     instance.Endpoint,
-		})
-		return c.Run().Stream(os.Stdout)
+		c := exec.CommandContext(cmd.Context, "src", cmd.Args().Slice()...)
+		c.Env = append(c.Environ(), "SRC_ACCESS_TOKEN="+instance.AccessToken, "SRC_ENDPOINT="+instance.Endpoint)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		c.Stdin = os.Stdin
+		return c.Run()
 	},
 }
 

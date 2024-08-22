@@ -18,14 +18,17 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbmocks"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/backend"
 	searchbackend "github.com/sourcegraph/sourcegraph/internal/search/backend"
 	"github.com/sourcegraph/sourcegraph/internal/search/client"
+	"github.com/sourcegraph/sourcegraph/internal/search/job"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
 	searchrepos "github.com/sourcegraph/sourcegraph/internal/search/repos"
 	"github.com/sourcegraph/sourcegraph/internal/search/result"
+	"github.com/sourcegraph/sourcegraph/internal/settings"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/schema"
 )
@@ -96,19 +99,19 @@ func TestSearch(t *testing.T) {
 			defer conf.Mock(nil)
 			vars := map[string]any{"query": tc.searchQuery, "version": tc.searchVersion}
 
-			MockDecodedViewerFinalSettings = &schema.Settings{}
-			defer func() { MockDecodedViewerFinalSettings = nil }()
+			settings.MockCurrentUserFinal = &schema.Settings{}
+			defer func() { settings.MockCurrentUserFinal = nil }()
 
-			repos := database.NewMockRepoStore()
+			repos := dbmocks.NewMockRepoStore()
 			repos.ListFunc.SetDefaultHook(tc.reposListMock)
 
-			ext := database.NewMockExternalServiceStore()
+			ext := dbmocks.NewMockExternalServiceStore()
 			ext.ListFunc.SetDefaultHook(tc.externalServicesListMock)
 
-			phabricator := database.NewMockPhabricatorStore()
+			phabricator := dbmocks.NewMockPhabricatorStore()
 			phabricator.GetByNameFunc.SetDefaultHook(tc.phabricatorGetRepoByNameMock)
 
-			db := database.NewMockDB()
+			db := dbmocks.NewMockDB()
 			db.ReposFunc.SetDefaultReturn(repos)
 			db.ExternalServicesFunc.SetDefaultReturn(ext)
 			db.PhabricatorFunc.SetDefaultReturn(phabricator)
@@ -116,23 +119,25 @@ func TestSearch(t *testing.T) {
 			gsClient := gitserver.NewMockClient()
 			gsClient.ResolveRevisionFunc.SetDefaultHook(tc.repoRevsMock)
 
-			sr := newSchemaResolver(db, gsClient)
-			schema, err := graphql.ParseSchema(mainSchema, sr, graphql.Tracer(&requestTracer{}))
+			sr := newSchemaResolver(db, gsClient, nil)
+			gqlSchema, err := graphql.ParseSchema(mainSchema, sr,
+				graphql.Tracer(newRequestTracer(logtest.Scoped(t), db)),
+				graphql.MaxDepth(conf.RateLimits().GraphQLMaxDepth))
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			result := schema.Exec(context.Background(), testSearchGQLQuery, "", vars)
-			if len(result.Errors) > 0 {
-				t.Fatalf("graphQL query returned errors: %+v", result.Errors)
+			response := gqlSchema.Exec(context.Background(), testSearchGQLQuery, "", vars)
+			if len(response.Errors) > 0 {
+				t.Fatalf("graphQL query returned errors: %+v", response.Errors)
 			}
-			var search struct {
+			var searchStruct struct {
 				Results Results
 			}
-			if err := json.Unmarshal(result.Data, &search); err != nil {
+			if err := json.Unmarshal(response.Data, &searchStruct); err != nil {
 				t.Fatalf("parsing JSON response: %v", err)
 			}
-			gotResults := search.Results
+			gotResults := searchStruct.Results
 			if !reflect.DeepEqual(gotResults, tc.wantResults) {
 				t.Fatalf("results = %+v, want %+v", gotResults, tc.wantResults)
 			}
@@ -292,7 +297,11 @@ func TestExactlyOneRepo(t *testing.T) {
 		t.Run("exactly one repo", func(t *testing.T) {
 			parsedFilters := make([]query.ParsedRepoFilter, len(c.repoFilters))
 			for i, repoFilter := range c.repoFilters {
-				parsedFilters[i] = query.ParseRepositoryRevisions(repoFilter)
+				parsedFilter, err := query.ParseRepositoryRevisions(repoFilter)
+				if err != nil {
+					t.Fatalf("unexpected error parsing repo filter %s", repoFilter)
+				}
+				parsedFilters[i] = parsedFilter
 			}
 
 			if got := searchrepos.ExactlyOneRepo(parsedFilters); got != c.want {
@@ -326,15 +335,15 @@ func BenchmarkSearchResults(b *testing.B) {
 	minimalRepos, zoektRepos := generateRepos(500_000)
 	zoektFileMatches := generateZoektMatches(1000)
 
-	z := zoektRPC(b, &searchbackend.FakeSearcher{
-		Repos:  zoektRepos,
-		Result: &zoekt.SearchResult{Files: zoektFileMatches},
+	z := zoektRPC(b, &searchbackend.FakeStreamer{
+		Repos:   zoektRepos,
+		Results: []*zoekt.SearchResult{{Files: zoektFileMatches}},
 	})
 
 	ctx := context.Background()
-	db := database.NewMockDB()
+	db := dbmocks.NewMockDB()
 
-	repos := database.NewMockRepoStore()
+	repos := dbmocks.NewMockRepoStore()
 	repos.ListMinimalReposFunc.SetDefaultReturn(minimalRepos, nil)
 	repos.CountFunc.SetDefaultReturn(len(minimalRepos), nil)
 	db.ReposFunc.SetDefaultReturn(repos)
@@ -342,14 +351,18 @@ func BenchmarkSearchResults(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		plan, err := query.Pipeline(query.InitLiteral(`print repo:foo index:only count:1000`))
 		if err != nil {
 			b.Fatal(err)
 		}
 		resolver := &searchResolver{
-			client: client.NewSearchClient(logtest.Scoped(b), db, z, nil),
-			db:     db,
+			client: client.Mocked(job.RuntimeClients{
+				Logger: logtest.Scoped(b),
+				DB:     db,
+				Zoekt:  z,
+			}),
+			db: db,
 			SearchInputs: &search.Inputs{
 				Plan:         plan,
 				Query:        plan.ToQ(),

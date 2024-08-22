@@ -1,4 +1,4 @@
-import { Meta, Story } from '@storybook/react'
+import type { Meta, StoryFn } from '@storybook/react'
 
 import { H1, H2, H3, Text } from '..'
 import { BrandedStory } from '../../stories/BrandedStory'
@@ -15,10 +15,7 @@ const config: Meta = {
 
     parameters: {
         component: Card,
-        chromatic: {
-            enableDarkMode: true,
-            disableSnapshot: false,
-        },
+
         design: [
             {
                 type: 'figma',
@@ -36,7 +33,7 @@ const config: Meta = {
 
 export default config
 
-export const Simple: Story = () => (
+export const Simple: StoryFn = () => (
     <>
         <H1>Cards</H1>
         <Text>
@@ -90,7 +87,7 @@ const cardItem = (
     </Card>
 )
 
-export const InteractiveCard: Story = () => (
+export const InteractiveCard: StoryFn = () => (
     <>
         <H2>Interactive Cards</H2>
         {cardItem}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
@@ -12,13 +13,24 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/sourcegraph/log/logtest"
 	"github.com/sourcegraph/zoekt"
+	zoektgrpc "github.com/sourcegraph/zoekt/cmd/zoekt-webserver/grpc/server"
+	"google.golang.org/grpc"
+
+	"github.com/sourcegraph/sourcegraph/internal/gitserver"
+	"github.com/sourcegraph/sourcegraph/internal/gitserver/gitdomain"
+
+	internalgrpc "github.com/sourcegraph/sourcegraph/internal/grpc"
+	"github.com/sourcegraph/sourcegraph/internal/grpc/defaults"
+	proto "github.com/sourcegraph/sourcegraph/internal/searcher/v1"
+
+	webproto "github.com/sourcegraph/zoekt/grpc/protos/zoekt/webserver/v1"
 	"github.com/sourcegraph/zoekt/query"
 	"github.com/sourcegraph/zoekt/web"
 
 	"github.com/sourcegraph/sourcegraph/cmd/searcher/internal/search"
-	"github.com/sourcegraph/sourcegraph/cmd/searcher/protocol"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/search/backend"
+	"github.com/sourcegraph/sourcegraph/internal/searcher/protocol"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
@@ -72,27 +84,17 @@ Hello world example in go`, typeFile},
 		delete(files, unchanged)
 	}
 
-	gitDiffOutput := strings.Join([]string{
-		"M", "changed.go",
-		"A", "added.md",
-		"D", "removed.md",
-		"", // trailing null
-	}, "\x00")
-
 	s := newStore(t, files)
 
-	// explictly remove FetchTar since we should only be using FetchTarByPath
-	s.FetchTar = nil
-
 	// Ensure we don't ask for unchanged
-	fetchTarPaths := s.FetchTarPaths
-	s.FetchTarPaths = func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
+	fetchTar := s.FetchTar
+	s.FetchTar = func(ctx context.Context, repo api.RepoName, commit api.CommitID, paths []string) (io.ReadCloser, error) {
 		for _, p := range paths {
 			if strings.Contains(p, "unchanged") {
 				return nil, errors.Errorf("should not ask for unchanged path: %s", p)
 			}
 		}
-		return fetchTarPaths(ctx, repo, commit, paths)
+		return fetchTar(ctx, repo, commit, paths)
 	}
 
 	zoektURL := newZoekt(t, &zoekt.Repository{
@@ -105,23 +107,40 @@ Hello world example in go`, typeFile},
 	}, filesIndexed)
 
 	// we expect one command against git, lets just fake it.
-	ts := httptest.NewServer(&search.Service{
-		GitDiffSymbols: func(ctx context.Context, repo api.RepoName, commitA, commitB api.CommitID) ([]byte, error) {
+	service := &search.Service{
+		GitChangedFiles: func(ctx context.Context, repo api.RepoName, commitA, commitB api.CommitID) (gitserver.ChangedFilesIterator, error) {
 			if commitA != "indexedfdeadbeefdeadbeefdeadbeefdeadbeef" {
 				return nil, errors.Errorf("expected first commit to be indexed, got: %s", commitA)
 			}
 			if commitB != "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" {
 				return nil, errors.Errorf("expected first commit to be unindexed, got: %s", commitB)
 			}
-			return []byte(gitDiffOutput), nil
+
+			return gitserver.NewChangedFilesIteratorFromSlice([]gitdomain.PathStatus{
+				{Status: gitdomain.StatusModified, Path: "changed.go"},
+				{Status: gitdomain.StatusAdded, Path: "added.md"},
+				{Status: gitdomain.StatusDeleted, Path: "removed.md"},
+				{Status: gitdomain.StatusTypeChanged, Path: "type_changed.md"},
+			}), nil
 		},
 		MaxTotalPathsLength: 100_000,
 
 		Store:   s,
 		Indexed: backend.ZoektDial(zoektURL),
-		Log:     logtest.Scoped(t),
+		Logger:  logtest.Scoped(t),
+	}
+
+	grpcServer := defaults.NewServer(logtest.Scoped(t))
+	proto.RegisterSearcherServiceServer(grpcServer, search.NewGRPCServer(service, false))
+
+	handler := internalgrpc.MultiplexHandlers(grpcServer, http.HandlerFunc(http.NotFound))
+
+	ts := httptest.NewServer(handler)
+
+	t.Cleanup(func() {
+		ts.Close()
+		grpcServer.Stop()
 	})
-	defer ts.Close()
 
 	cases := []struct {
 		Name    string
@@ -129,31 +148,83 @@ Hello world example in go`, typeFile},
 		Want    string
 	}{{
 		Name:    "all",
-		Pattern: protocol.PatternInfo{Pattern: "world"},
+		Pattern: protocol.PatternInfo{Query: &protocol.PatternNode{Value: "world"}},
 		Want: `
 added.md:1:1:
 hello world I am added
+// No newline at end of chunk
 changed.go:6:6:
 	fmt.Println("Hello world")
 unchanged.md:1:1:
 # Hello World
 unchanged.md:3:3:
 Hello world example in go
+// No newline at end of chunk
 `,
 	}, {
 		Name: "added",
 		Pattern: protocol.PatternInfo{
-			Pattern:         "world",
-			IncludePatterns: []string{"added"},
+			Query:        &protocol.PatternNode{Value: "world"},
+			IncludePaths: []string{"added"},
 		},
 		Want: `
 added.md:1:1:
 hello world I am added
+// No newline at end of chunk
+`,
+	}, {
+		Name: "example",
+		Pattern: protocol.PatternInfo{
+			Query: &protocol.PatternNode{Value: "example"},
+		},
+		Want: `
+unchanged.md:3:3:
+Hello world example in go
+// No newline at end of chunk
+`,
+	}, {
+		Name: "boolean query",
+		Pattern: protocol.PatternInfo{
+			Query: &protocol.AndNode{
+				Children: []protocol.QueryNode{
+					&protocol.OrNode{
+						Children: []protocol.QueryNode{
+							&protocol.PatternNode{Value: "w.rld", IsRegExp: true},
+							&protocol.PatternNode{Value: "package"},
+						},
+					},
+					&protocol.PatternNode{Value: "nonexistent", IsNegated: true},
+				},
+			},
+		},
+		Want: `
+added.md:1:1:
+hello world I am added
+// No newline at end of chunk
+changed.go:1:1:
+package main
+changed.go:6:6:
+	fmt.Println("Hello world")
+unchanged.md:1:1:
+# Hello World
+unchanged.md:3:3:
+Hello world example in go
+// No newline at end of chunk
+`,
+	}, {
+		Name: "negated-pattern-example",
+		Pattern: protocol.PatternInfo{
+			Query: &protocol.PatternNode{Value: "example", IsNegated: true},
+		},
+		Want: `
+added.md
+changed.go
 `,
 	}, {
 		Name: "path-include",
 		Pattern: protocol.PatternInfo{
-			IncludePatterns: []string{"^added"},
+			Query:        &protocol.PatternNode{Value: ""},
+			IncludePaths: []string{"^added"},
 		},
 		Want: `
 added.md
@@ -161,7 +232,8 @@ added.md
 	}, {
 		Name: "path-exclude-added",
 		Pattern: protocol.PatternInfo{
-			ExcludePattern: "added",
+			Query:        &protocol.PatternNode{Value: ""},
+			ExcludePaths: "added",
 		},
 		Want: `
 changed.go
@@ -170,7 +242,8 @@ unchanged.md
 	}, {
 		Name: "path-exclude-unchanged",
 		Pattern: protocol.PatternInfo{
-			ExcludePattern: "unchanged",
+			Query:        &protocol.PatternNode{Value: ""},
+			ExcludePaths: "unchanged",
 		},
 		Want: `
 added.md
@@ -179,7 +252,8 @@ changed.go
 	}, {
 		Name: "path-all",
 		Pattern: protocol.PatternInfo{
-			IncludePatterns: []string{"."},
+			Query:        &protocol.PatternNode{Value: ""},
+			IncludePaths: []string{"."},
 		},
 		Want: `
 added.md
@@ -189,7 +263,7 @@ unchanged.md
 	}, {
 		Name: "pattern-path",
 		Pattern: protocol.PatternInfo{
-			Pattern:               "go",
+			Query:                 &protocol.PatternNode{Value: "go"},
 			PatternMatchesContent: true,
 			PatternMatchesPath:    true,
 		},
@@ -197,22 +271,61 @@ unchanged.md
 changed.go
 unchanged.md:3:3:
 Hello world example in go
+// No newline at end of chunk
 `,
-	}}
+	}, {
+		Name: "negated-pattern-path",
+		Pattern: protocol.PatternInfo{
+			Query:              &protocol.PatternNode{Value: "go", IsNegated: true},
+			PatternMatchesPath: true,
+		},
+		Want: `
+added.md
+unchanged.md
+`,
+	}, {
+		Name: "lang-filters-include",
+		Pattern: protocol.PatternInfo{
+			Query:        &protocol.PatternNode{Value: ""},
+			IncludeLangs: []string{"Markdown"},
+		},
+		Want: `
+added.md
+unchanged.md
+`,
+	}, {
+		Name: "lang-filters-exclude",
+		Pattern: protocol.PatternInfo{
+			Query:        &protocol.PatternNode{Value: ""},
+			ExcludeLangs: []string{"Markdown"},
+		},
+		Want: `
+changed.go
+`,
+	}, {
+		Name: "lang-filters-with-paths",
+		Pattern: protocol.PatternInfo{
+			Query:        &protocol.PatternNode{Value: ""},
+			IncludePaths: []string{"change"},
+			ExcludeLangs: []string{"Markdown"},
+		},
+		Want: `
+changed.go
+`,
+	},
+	}
 
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			req := protocol.Request{
 				Repo:         "foo",
 				RepoID:       123,
-				URL:          "u",
 				Commit:       "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 				PatternInfo:  tc.Pattern,
 				FetchTimeout: fetchTimeoutForCI(t),
-				FeatHybrid:   true,
 			}
 
-			m, err := doSearch(ts.URL, &req)
+			m, err := doSearch(t, ts.URL, &req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -264,8 +377,10 @@ func newZoekt(t *testing.T, repo *zoekt.Repository, files map[string]struct {
 		t.Fatal(err)
 	}
 
+	streamer := &streamer{Searcher: searcher}
+
 	h, err := web.NewMux(&web.Server{
-		Searcher: &streamer{Searcher: searcher},
+		Searcher: streamer,
 		RPC:      true,
 		Top:      web.Top,
 	})
@@ -273,7 +388,13 @@ func newZoekt(t *testing.T, repo *zoekt.Repository, files map[string]struct {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(h)
+	s := grpc.NewServer()
+	grpcServer := zoektgrpc.NewServer(streamer)
+	webproto.RegisterWebserverServiceServer(s, grpcServer)
+
+	handler := internalgrpc.MultiplexHandlers(s, h)
+
+	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	return ts.Listener.Addr().String()

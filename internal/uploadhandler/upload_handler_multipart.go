@@ -8,11 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	sglog "github.com/sourcegraph/log"
 	"go.opentelemetry.io/otel/attribute"
-
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/opentracing/opentracing-go/log"
 
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -24,8 +22,8 @@ import (
 func (h *UploadHandler[T]) handleEnqueueMultipartSetup(ctx context.Context, uploadState uploadState[T], _ io.Reader) (_ any, statusCode int, err error) {
 	ctx, trace, endObservation := h.operations.handleEnqueueMultipartSetup.With(ctx, &err, observation.Args{})
 	defer func() {
-		endObservation(1, observation.Args{LogFields: []log.Field{
-			log.Int("statusCode", statusCode),
+		endObservation(1, observation.Args{Attrs: []attribute.KeyValue{
+			attribute.Int("statusCode", statusCode),
 		}})
 	}()
 
@@ -61,8 +59,8 @@ func (h *UploadHandler[T]) handleEnqueueMultipartSetup(ctx context.Context, uplo
 func (h *UploadHandler[T]) handleEnqueueMultipartUpload(ctx context.Context, uploadState uploadState[T], body io.Reader) (_ any, statusCode int, err error) {
 	ctx, trace, endObservation := h.operations.handleEnqueueMultipartUpload.With(ctx, &err, observation.Args{})
 	defer func() {
-		endObservation(1, observation.Args{LogFields: []log.Field{
-			log.Int("statusCode", statusCode),
+		endObservation(1, observation.Args{Attrs: []attribute.KeyValue{
+			attribute.Int("statusCode", statusCode),
 		}})
 	}()
 
@@ -90,8 +88,8 @@ func (h *UploadHandler[T]) handleEnqueueMultipartUpload(ctx context.Context, upl
 func (h *UploadHandler[T]) handleEnqueueMultipartFinalize(ctx context.Context, uploadState uploadState[T], _ io.Reader) (_ any, statusCode int, err error) {
 	ctx, trace, endObservation := h.operations.handleEnqueueMultipartFinalize.With(ctx, &err, observation.Args{})
 	defer func() {
-		endObservation(1, observation.Args{LogFields: []log.Field{
-			log.Int("statusCode", statusCode),
+		endObservation(1, observation.Args{Attrs: []attribute.KeyValue{
+			attribute.Int("statusCode", statusCode),
 		}})
 	}()
 
@@ -99,14 +97,8 @@ func (h *UploadHandler[T]) handleEnqueueMultipartFinalize(ctx context.Context, u
 		return nil, http.StatusBadRequest, errors.Errorf("upload is missing %d parts", uploadState.numParts-len(uploadState.uploadedParts))
 	}
 
-	tx, err := h.dbStore.Transact(ctx)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	defer func() { err = tx.Done(err) }()
-
 	sources := make([]string, 0, uploadState.numParts)
-	for partNumber := 0; partNumber < uploadState.numParts; partNumber++ {
+	for partNumber := range uploadState.numParts {
 		sources = append(sources, fmt.Sprintf("upload-%d.%d.lsif.gz", uploadState.uploadID, partNumber))
 	}
 	trace.AddEvent("TODO Domain Owner",
@@ -115,12 +107,12 @@ func (h *UploadHandler[T]) handleEnqueueMultipartFinalize(ctx context.Context, u
 
 	size, err := h.uploadStore.Compose(ctx, fmt.Sprintf("upload-%d.lsif.gz", uploadState.uploadID), sources...)
 	if err != nil {
-		h.markUploadAsFailed(context.Background(), tx, uploadState.uploadID, err)
+		h.markUploadAsFailed(context.Background(), h.dbStore, uploadState.uploadID, err)
 		return nil, http.StatusInternalServerError, err
 	}
 	trace.AddEvent("TODO Domain Owner", attribute.Int("composedObjectSize", int(size)))
 
-	if err := tx.MarkQueued(ctx, uploadState.uploadID, &size); err != nil {
+	if err := h.dbStore.MarkQueued(ctx, uploadState.uploadID, &size); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 

@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
-import { format, addMinutes, parseISO } from 'date-fns'
-import formatDistance from 'date-fns/formatDistance'
-import formatDistanceStrict from 'date-fns/formatDistanceStrict'
+import { UTCDate } from '@date-fns/utc'
+import { format, parseISO, formatDistance, formatDistanceStrict } from 'date-fns'
 
 import { Tooltip } from '@sourcegraph/wildcard'
 
@@ -12,6 +11,9 @@ interface TimestampProps {
 
     /** Omit the "about". */
     noAbout?: boolean
+
+    /** Omit the "ago". */
+    noAgo?: boolean
 
     /** Function that returns the current time (for stability in visual tests). */
     now?: () => Date
@@ -43,27 +45,32 @@ const RERENDER_INTERVAL_MSEC = 7000
 export const Timestamp: React.FunctionComponent<React.PropsWithChildren<TimestampProps>> = ({
     date,
     noAbout = false,
+    noAgo = false,
     strict = false,
     now = Date.now,
     preferAbsolute = false,
     timestampFormat,
     utc = false,
 }) => {
-    const [label, setLabel] = useState<string>(calculateLabel(date, now, strict, noAbout))
+    const [label, setLabel] = useState<string>(calculateLabel(date, now, strict, noAbout, noAgo))
     useEffect(() => {
+        // Update the label
+        setLabel(calculateLabel(date, now, strict, noAbout, noAgo))
+
+        // Refresh the label periodically
         const intervalHandle = window.setInterval(
-            () => setLabel(calculateLabel(date, now, strict, noAbout)),
+            () => setLabel(calculateLabel(date, now, strict, noAbout, noAgo)),
             RERENDER_INTERVAL_MSEC
         )
         return () => {
             window.clearInterval(intervalHandle)
         }
-    }, [date, noAbout, now, strict])
+    }, [date, noAbout, noAgo, now, strict])
 
     const tooltip = useMemo(() => {
         let parsedDate = typeof date === 'string' ? parseISO(date) : new Date(date)
         if (utc) {
-            parsedDate = addMinutes(parsedDate, parsedDate.getTimezoneOffset())
+            parsedDate = new UTCDate(date)
         }
         const dateHasTime = date.toString().includes('T')
         const defaultFormat = dateHasTime ? TimestampFormat.FULL_DATE_TIME : TimestampFormat.FULL_DATE
@@ -81,16 +88,17 @@ function calculateLabel(
     date: string | Date | number,
     now: () => Date | number,
     strict: boolean,
-    noAbout: boolean
+    noAbout: boolean,
+    noAgo: boolean
 ): string {
     let label: string
     if (strict) {
         label = formatDistanceStrict(typeof date === 'string' ? parseISO(date) : date, now(), {
-            addSuffix: true,
+            addSuffix: !noAgo,
         })
     } else {
         label = formatDistance(typeof date === 'string' ? parseISO(date) : date, now(), {
-            addSuffix: true,
+            addSuffix: !noAgo,
             includeSeconds: true,
         })
     }

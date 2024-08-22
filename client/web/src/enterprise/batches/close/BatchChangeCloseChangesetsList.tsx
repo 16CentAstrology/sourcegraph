@@ -1,23 +1,22 @@
 import React, { useCallback } from 'react'
 
-import * as H from 'history'
-import { repeatWhen, delay } from 'rxjs/operators'
+import { repeat } from 'rxjs/operators'
 
-import { ErrorLike } from '@sourcegraph/common'
+import type { ErrorLike } from '@sourcegraph/common'
 import { Container } from '@sourcegraph/wildcard'
 
-import { FilteredConnectionQueryArguments, FilteredConnection } from '../../../components/FilteredConnection'
-import { Scalars, ChangesetFields, BatchChangeChangesetsResult } from '../../../graphql-operations'
+import { type FilteredConnectionQueryArguments, FilteredConnection } from '../../../components/FilteredConnection'
+import type { Scalars, ChangesetFields, BatchChangeChangesetsResult } from '../../../graphql-operations'
 import {
     queryChangesets as _queryChangesets,
-    queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs,
+    type queryExternalChangesetWithFileDiffs as _queryExternalChangesetWithFileDiffs,
 } from '../detail/backend'
 
 import {
     BatchChangeCloseHeaderWillCloseChangesets,
     BatchChangeCloseHeaderWillKeepChangesets,
 } from './BatchChangeCloseHeader'
-import { ChangesetCloseNodeProps, ChangesetCloseNode } from './ChangesetCloseNode'
+import { type ChangesetCloseNodeProps, ChangesetCloseNode } from './ChangesetCloseNode'
 import { CloseChangesetsListEmptyElement } from './CloseChangesetsListEmptyElement'
 
 import styles from './BatchChangeCloseChangesetsList.module.scss'
@@ -25,8 +24,6 @@ import styles from './BatchChangeCloseChangesetsList.module.scss'
 interface Props {
     batchChangeID: Scalars['ID']
     viewerCanAdminister: boolean
-    history: H.History
-    location: H.Location
     willClose: boolean
     onUpdate?: (
         connection?: (BatchChangeChangesetsResult['node'] & { __typename: 'BatchChange' })['changesets'] | ErrorLike
@@ -44,8 +41,6 @@ interface Props {
 export const BatchChangeCloseChangesetsList: React.FunctionComponent<React.PropsWithChildren<Props>> = ({
     batchChangeID,
     viewerCanAdminister,
-    history,
-    location,
     willClose,
     onUpdate,
     queryChangesets = _queryChangesets,
@@ -64,7 +59,7 @@ export const BatchChangeCloseChangesetsList: React.FunctionComponent<React.Props
                 onlyPublishedByThisBatchChange: true,
                 search: null,
                 onlyArchived: false,
-            }).pipe(repeatWhen(notifier => notifier.pipe(delay(5000)))),
+            }).pipe(repeat({ delay: 5000 })),
         [batchChangeID, queryChangesets]
     )
 
@@ -80,8 +75,6 @@ export const BatchChangeCloseChangesetsList: React.FunctionComponent<React.Props
                     nodeComponent={ChangesetCloseNode}
                     nodeComponentProps={{
                         viewerCanAdminister,
-                        history,
-                        location,
                         queryExternalChangesetWithFileDiffs,
                         willClose,
                     }}
@@ -90,8 +83,6 @@ export const BatchChangeCloseChangesetsList: React.FunctionComponent<React.Props
                     defaultFirst={15}
                     noun="open changeset"
                     pluralNoun="open changesets"
-                    history={history}
-                    location={location}
                     useURLQuery={true}
                     listClassName={styles.batchChangeCloseChangesetsListGrid}
                     headComponent={

@@ -2,7 +2,8 @@ import React, { useState } from 'react'
 
 import classNames from 'classnames'
 
-import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
+import { TelemetryV2Props } from '@sourcegraph/shared/src/telemetry'
+import type { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { ParentSize, ErrorAlert } from '@sourcegraph/wildcard'
 
 import {
@@ -12,20 +13,20 @@ import {
     InsightCardHeader,
     InsightCardLoading,
 } from '../../../../../components'
-import { LangStatsInsight } from '../../../../../core'
+import type { LangStatsInsight } from '../../../../../core'
 import { LivePreviewStatus, useLivePreviewLangStatsInsight } from '../../../../../core/hooks/live-preview-insight'
 import { getTrackingTypeByInsightType, useCodeInsightViewPings } from '../../../../../pings'
 import { StandaloneInsightContextMenu } from '../context-menu/StandaloneInsightContextMenu'
 
 import styles from './StandaloneLangStatsInsight.module.scss'
 
-interface StandaloneLangStatsInsightProps extends TelemetryProps {
+interface StandaloneLangStatsInsightProps extends TelemetryProps, TelemetryV2Props {
     insight: LangStatsInsight
     className?: string
 }
 
 export function StandaloneLangStatsInsight(props: StandaloneLangStatsInsightProps): React.ReactElement {
-    const { insight, telemetryService, className } = props
+    const { insight, telemetryService, telemetryRecorder, className } = props
 
     const { state } = useLivePreviewLangStatsInsight(insight)
 
@@ -34,6 +35,7 @@ export function StandaloneLangStatsInsight(props: StandaloneLangStatsInsightProp
 
     const { trackDatumClicks, trackMouseLeave, trackMouseEnter } = useCodeInsightViewPings({
         telemetryService,
+        telemetryRecorder,
         insightType: getTrackingTypeByInsightType(insight.type),
     })
 

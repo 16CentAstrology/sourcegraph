@@ -1,6 +1,6 @@
 import { isMacPlatform } from '@sourcegraph/common'
 
-import { ModifierKey, Key } from './react-shortcuts/keys'
+import type { ModifierKey, Key } from './react-shortcuts/keys'
 import { getModKey } from './react-shortcuts/ShortcutManager'
 
 /**
@@ -26,17 +26,21 @@ export interface Keybinding {
     ordered: Key[]
 }
 
+const isMacOS = isMacPlatform()
+
 const KEY_TO_NAME: { [P in Key | ModifierKey | string]?: string } = {
-    Meta: isMacPlatform() ? '⌘' : 'Cmd',
-    Shift: isMacPlatform() ? '⇧' : 'Shift',
-    Control: isMacPlatform() ? '^' : 'Ctrl',
+    Meta: isMacOS ? '⌘' : 'Cmd',
+    Shift: isMacOS ? '⇧' : 'Shift',
+    Control: isMacOS ? '^' : 'Ctrl',
     '†': 't',
     ArrowUp: '↑',
     ArrowDown: '↓',
+    Enter: isMacOS ? 'Return' : 'Enter',
+    Backspace: isMacOS ? '⌫' : 'Backspace',
 }
 KEY_TO_NAME.Mod = KEY_TO_NAME[getModKey()]
 
-const keySeparator = isMacPlatform() ? ' ' : '+'
+const keySeparator = isMacOS ? ' ' : '+'
 
 /**
  * Returns the platform specific sequence of name/symbol for the provided key

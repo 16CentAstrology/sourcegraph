@@ -11,17 +11,18 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/inconshreveable/log15"
+	"github.com/inconshreveable/log15" //nolint:logging // TODO move all logging to sourcegraph/log
+	"github.com/sourcegraph/conc/pool"
 	"github.com/sourcegraph/go-diff/diff"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/highlight"
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/gosyntect"
+	"github.com/sourcegraph/sourcegraph/internal/gqlutil"
 	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"github.com/sourcegraph/sourcegraph/lib/pointers"
 )
 
 type RepositoryComparisonInput struct {
@@ -47,7 +48,7 @@ type RepositoryComparisonInterface interface {
 type FileDiffConnection interface {
 	Nodes(ctx context.Context) ([]FileDiff, error)
 	TotalCount(ctx context.Context) (*int32, error)
-	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
+	PageInfo(ctx context.Context) (*gqlutil.PageInfo, error)
 	DiffStat(ctx context.Context) (*DiffStat, error)
 	RawDiff(ctx context.Context) (string, error)
 }
@@ -64,17 +65,8 @@ type FileDiff interface {
 }
 
 func NewRepositoryComparison(ctx context.Context, db database.DB, client gitserver.Client, r *RepositoryResolver, args *RepositoryComparisonInput) (*RepositoryComparisonResolver, error) {
-	var baseRevspec, headRevspec string
-	if args.Base == nil {
-		baseRevspec = "HEAD"
-	} else {
-		baseRevspec = *args.Base
-	}
-	if args.Head == nil {
-		headRevspec = "HEAD"
-	} else {
-		headRevspec = *args.Head
-	}
+	baseRevspec := pointers.Deref(args.Base, "HEAD")
+	headRevspec := pointers.Deref(args.Head, "HEAD")
 
 	getCommit := func(ctx context.Context, repo api.RepoName, revspec string) (*GitCommitResolver, error) {
 		if revspec == gitserver.DevNullSHA {
@@ -82,7 +74,7 @@ func NewRepositoryComparison(ctx context.Context, db database.DB, client gitserv
 		}
 
 		opt := gitserver.ResolveRevisionOptions{
-			NoEnsureRevision: !args.FetchMissing,
+			EnsureRevision: args.FetchMissing,
 		}
 
 		// Call ResolveRevision to trigger fetches from remote (in case base/head commits don't
@@ -100,23 +92,29 @@ func NewRepositoryComparison(ctx context.Context, db database.DB, client gitserv
 		return nil, err
 	}
 
-	// Find the common merge-base for the diff. That's the revision the diff applies to,
-	// not the baseRevspec.
-	mergeBaseCommit, err := client.MergeBase(ctx, r.RepoName(), api.CommitID(baseRevspec), api.CommitID(headRevspec))
+	var base *GitCommitResolver
+	rangeType := ".."
+	if baseRevspec != gitserver.DevNullSHA {
+		rangeType = "..."
+		// Find the common merge-base for the diff. That's the revision the diff applies to,
+		// not the baseRevspec.
+		mergeBaseCommit, err := client.MergeBase(ctx, r.RepoName(), baseRevspec, headRevspec)
+		if err != nil {
+			return nil, err
+		}
 
-	// If possible, use the merge-base as the base commit, as the diff will only be guaranteed to be
-	// applicable to the file from that revision.
-	commitString := strings.TrimSpace(string(mergeBaseCommit))
-	rangeType := "..."
-	if err != nil {
-		// Fallback option which should work even if there is no merge base.
-		commitString = baseRevspec
-		rangeType = ".."
-	}
-
-	base, err := getCommit(ctx, r.RepoName(), commitString)
-	if err != nil {
-		return nil, err
+		// If possible, use the merge-base as the base commit, as the diff will only be guaranteed to be
+		// applicable to the file from that revision.
+		commitString := string(mergeBaseCommit)
+		if commitString == "" {
+			// Fallback option which should work even if there is no merge base.
+			commitString = baseRevspec
+			rangeType = ".."
+		}
+		base, err = getCommit(ctx, r.RepoName(), commitString)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &RepositoryComparisonResolver{
@@ -170,7 +168,7 @@ func (r *RepositoryComparisonResolver) Range() *gitRevisionRange {
 
 // RepositoryComparisonCommitsArgs is a set of arguments for listing commits on the RepositoryComparisonResolver
 type RepositoryComparisonCommitsArgs struct {
-	graphqlutil.ConnectionArgs
+	gqlutil.ConnectionArgs
 	Path *string
 }
 
@@ -201,8 +199,12 @@ func (r *RepositoryComparisonResolver) FileDiffs(ctx context.Context, args *File
 
 // repositoryComparisonNewFile is the default NewFileFunc used by
 // RepositoryComparisonResolver to produce the new file in a FileDiffResolver.
-func repositoryComparisonNewFile(db database.DB, r *FileDiffResolver) FileResolver {
-	return NewGitTreeEntryResolver(db, r.gitserverClient, r.Head, CreateFileInfo(r.FileDiff.NewName, false))
+func repositoryComparisonNewFile(db database.DB, r *fileDiffResolver) FileResolver {
+	opts := GitTreeEntryResolverOpts{
+		Commit: r.Head,
+		Stat:   CreateFileInfo(r.FileDiff.NewName, false),
+	}
+	return NewGitTreeEntryResolver(db, r.gitserverClient, opts)
 }
 
 // computeRepositoryComparisonDiff returns a ComputeDiffFunc for the given
@@ -237,14 +239,10 @@ func computeRepositoryComparisonDiff(cmp *RepositoryComparisonResolver) ComputeD
 				base = string(cmp.base.OID())
 			}
 
-			var paths []string
-			if args.Paths != nil {
-				paths = *args.Paths
-			}
+			paths := pointers.Deref(args.Paths, nil)
 
 			var iter *gitserver.DiffFileIterator
-			iter, err = cmp.gitserverClient.Diff(ctx, authz.DefaultSubRepoPermsChecker, gitserver.DiffOptions{
-				Repo:      cmp.repo.RepoName(),
+			iter, err = cmp.gitserverClient.Diff(ctx, cmp.repo.RepoName(), gitserver.DiffOptions{
 				Base:      base,
 				Head:      string(cmp.head.OID()),
 				RangeType: cmp.rangeType,
@@ -295,7 +293,7 @@ type ComputeDiffFunc func(ctx context.Context, args *FileDiffsConnectionArgs) ([
 
 // NewFileFunc is a function that returns the "new" file in a FileDiff as a
 // FileResolver.
-type NewFileFunc func(db database.DB, r *FileDiffResolver) FileResolver
+type NewFileFunc func(db database.DB, r *fileDiffResolver) FileResolver
 
 func NewFileDiffConnectionResolver(
 	db database.DB,
@@ -341,7 +339,7 @@ func (r *fileDiffConnectionResolver) Nodes(ctx context.Context) ([]FileDiff, err
 
 	resolvers := make([]FileDiff, len(fileDiffs))
 	for i, fileDiff := range fileDiffs {
-		resolvers[i] = &FileDiffResolver{
+		resolvers[i] = &fileDiffResolver{
 			db:              r.db,
 			gitserverClient: r.gitserverClient,
 			newFile:         r.newFile,
@@ -365,19 +363,19 @@ func (r *fileDiffConnectionResolver) TotalCount(ctx context.Context) (*int32, er
 	return nil, nil // total count is not available
 }
 
-func (r *fileDiffConnectionResolver) PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error) {
+func (r *fileDiffConnectionResolver) PageInfo(ctx context.Context) (*gqlutil.PageInfo, error) {
 	_, afterIdx, hasNextPage, err := r.compute(ctx, r.args)
 	if err != nil {
 		return nil, err
 	}
 	if !hasNextPage {
-		return graphqlutil.HasNextPage(hasNextPage), nil
+		return gqlutil.HasNextPage(hasNextPage), nil
 	}
 	next := afterIdx
 	if r.args.First != nil {
 		next += *r.args.First
 	}
-	return graphqlutil.NextPageCursor(strconv.Itoa(int(next))), nil
+	return gqlutil.NextPageCursor(strconv.Itoa(int(next))), nil
 }
 
 func (r *fileDiffConnectionResolver) DiffStat(ctx context.Context) (*DiffStat, error) {
@@ -403,7 +401,7 @@ func (r *fileDiffConnectionResolver) RawDiff(ctx context.Context) (string, error
 	return string(b), err
 }
 
-type FileDiffResolver struct {
+type fileDiffResolver struct {
 	FileDiff *diff.FileDiff
 	Base     *GitCommitResolver
 	Head     *GitCommitResolver
@@ -413,10 +411,10 @@ type FileDiffResolver struct {
 	newFile         NewFileFunc
 }
 
-func (r *FileDiffResolver) OldPath() *string { return diffPathOrNull(r.FileDiff.OrigName) }
-func (r *FileDiffResolver) NewPath() *string { return diffPathOrNull(r.FileDiff.NewName) }
+func (r *fileDiffResolver) OldPath() *string { return diffPathOrNull(r.FileDiff.OrigName) }
+func (r *fileDiffResolver) NewPath() *string { return diffPathOrNull(r.FileDiff.NewName) }
 
-func (r *FileDiffResolver) Hunks() []*DiffHunk {
+func (r *fileDiffResolver) Hunks() []*DiffHunk {
 	highlighter := &fileDiffHighlighter{
 		oldFile: r.OldFile(),
 		newFile: r.NewFile(),
@@ -428,33 +426,37 @@ func (r *FileDiffResolver) Hunks() []*DiffHunk {
 	return hunks
 }
 
-func (r *FileDiffResolver) Stat() *DiffStat {
+func (r *fileDiffResolver) Stat() *DiffStat {
 	stat := r.FileDiff.Stat()
 	return NewDiffStat(stat)
 }
 
-func (r *FileDiffResolver) OldFile() FileResolver {
+func (r *fileDiffResolver) OldFile() FileResolver {
 	if diffPathOrNull(r.FileDiff.OrigName) == nil {
 		return nil
 	}
-	return NewGitTreeEntryResolver(r.db, r.gitserverClient, r.Base, CreateFileInfo(r.FileDiff.OrigName, false))
+	opts := GitTreeEntryResolverOpts{
+		Commit: r.Base,
+		Stat:   CreateFileInfo(r.FileDiff.OrigName, false),
+	}
+	return NewGitTreeEntryResolver(r.db, r.gitserverClient, opts)
 }
 
-func (r *FileDiffResolver) NewFile() FileResolver {
+func (r *fileDiffResolver) NewFile() FileResolver {
 	if diffPathOrNull(r.FileDiff.NewName) == nil {
 		return nil
 	}
 	return r.newFile(r.db, r)
 }
 
-func (r *FileDiffResolver) MostRelevantFile() FileResolver {
+func (r *fileDiffResolver) MostRelevantFile() FileResolver {
 	if newFile := r.NewFile(); newFile != nil {
 		return newFile
 	}
 	return r.OldFile()
 }
 
-func (r *FileDiffResolver) InternalID() string {
+func (r *fileDiffResolver) InternalID() string {
 	b := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s", len(r.FileDiff.OrigName), r.FileDiff.OrigName, r.FileDiff.NewName)))
 	return hex.EncodeToString(b[:])[:32]
 }
@@ -490,7 +492,10 @@ func (r *fileDiffHighlighter) Highlight(ctx context.Context, args *HighlightArgs
 			if file == nil {
 				return nil, nil
 			}
-			content, err := file.Content(ctx)
+			content, err := file.Content(ctx, &GitTreeContentPageArgs{
+				StartLine: args.StartLine,
+				EndLine:   args.EndLine,
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -512,11 +517,16 @@ func (r *fileDiffHighlighter) Highlight(ctx context.Context, args *HighlightArgs
 			}
 			return lines, err
 		}
-		r.highlightedBase, r.highlightErr = highlightFile(ctx, r.oldFile)
-		if r.highlightErr != nil {
-			return
-		}
-		r.highlightedHead, r.highlightErr = highlightFile(ctx, r.newFile)
+		p := pool.New().WithErrors()
+		p.Go(func() (err error) {
+			r.highlightedBase, err = highlightFile(ctx, r.oldFile)
+			return err
+		})
+		p.Go(func() (err error) {
+			r.highlightedHead, err = highlightFile(ctx, r.newFile)
+			return err
+		})
+		r.highlightErr = p.Wait()
 	})
 	return r.highlightedBase, r.highlightedHead, r.highlightAborted, r.highlightErr
 }

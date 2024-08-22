@@ -1,17 +1,13 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "module": "esnext",
+    "module": "commonjs",
     "sourceRoot": "src",
-    "baseUrl": ".",
-    "paths": {
-      "*": ["src/types/*", "*"],
-    },
     "rootDir": ".",
     "outDir": "./out",
   },
-  "references": [{ "path": "../common" }, { "path": "../testing" }],
-  "include": ["**/*", ".*"],
+  "references": [{ "path": "../testing" }],
+  "include": ["src"],
   "exclude": ["../../node_modules", "./node_modules", "./out"],
 }

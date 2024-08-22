@@ -1,10 +1,10 @@
-import { ApolloClient } from '@apollo/client'
-import { from, Observable } from 'rxjs'
+import type { ApolloClient } from '@apollo/client'
+import { from, type Observable } from 'rxjs'
 import { map } from 'rxjs/operators'
 
 import { getDocumentNode, gql } from '@sourcegraph/http-client'
 
-import {
+import type {
     CodeIntelligenceConfigurationPoliciesResult,
     CodeIntelligenceConfigurationPoliciesVariables,
     CodeIntelligenceConfigurationPolicyFields,
@@ -23,17 +23,19 @@ export const POLICIES_CONFIGURATION = gql`
         $repository: ID
         $query: String
         $forDataRetention: Boolean
-        $forIndexing: Boolean
+        $forPreciseIndexing: Boolean
         $first: Int
         $after: String
+        $protected: Boolean
     ) {
         codeIntelligenceConfigurationPolicies(
             repository: $repository
             query: $query
             forDataRetention: $forDataRetention
-            forIndexing: $forIndexing
+            forPreciseIndexing: $forPreciseIndexing
             first: $first
             after: $after
+            protected: $protected
         ) {
             nodes {
                 ...CodeIntelligenceConfigurationPolicyFields
@@ -55,8 +57,9 @@ export const queryPolicies = (
         first,
         query,
         forDataRetention,
-        forIndexing,
+        forPreciseIndexing,
         after,
+        protected: varProtected,
     }: Partial<CodeIntelligenceConfigurationPoliciesVariables>,
     client: ApolloClient<object>
 ): Observable<PolicyConnection> => {
@@ -64,9 +67,10 @@ export const queryPolicies = (
         repository: repository ?? null,
         query: query ?? null,
         forDataRetention: forDataRetention ?? null,
-        forIndexing: forIndexing ?? null,
+        forPreciseIndexing: forPreciseIndexing ?? null,
         first: first ?? null,
         after: after ?? null,
+        protected: varProtected ?? null,
     }
 
     return from(

@@ -1,17 +1,10 @@
 import { InMemoryCache } from '@apollo/client'
 
-import { TypedTypePolicies } from '../graphql-operations'
+import type { TypedTypePolicies } from '../graphql-operations'
 
 // Defines how the Apollo cache interacts with our GraphQL schema.
 // See https://www.apollographql.com/docs/react/caching/cache-configuration/#typepolicy-fields
 const typePolicies: TypedTypePolicies = {
-    ExtensionRegistry: {
-        // Replace existing `ExtensionRegistry` with the incoming value.
-        // Required because of the missing `id` on the `ExtensionRegistry` field.
-        merge(existing, incoming) {
-            return incoming
-        },
-    },
     Person: {
         // Replace existing `Person` with the incoming value.
         // Required because of the missing `id` on the `Person` field.
@@ -26,6 +19,9 @@ const typePolicies: TypedTypePolicies = {
                 // We always want to merge responses from this field as it will be used through very different queries.
                 merge: true,
             },
+            site: {
+                merge: true,
+            },
         },
     },
 }
@@ -37,6 +33,10 @@ export const generateCache = (): InMemoryCache =>
             BatchSpecWorkspace: ['VisibleBatchSpecWorkspace', 'HiddenBatchSpecWorkspace'],
             ChangesetSpec: ['VisibleChangesetSpec', 'HiddenChangesetSpec'],
             Changeset: ['ExternalChangeset', 'HiddenExternalChangeset'],
+            TeamMember: ['User'],
+            Owner: ['Person', 'Team'],
+            TreeEntry: ['GitBlob', 'GitTree'],
+            File2: ['GitBlob', 'VirtualFile'],
         },
     })
 

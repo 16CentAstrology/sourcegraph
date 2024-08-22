@@ -11,11 +11,11 @@ type Notebooks struct {
 	DateRange string
 	Grouping  string
 	DB        database.DB
-	Cache     bool
+	Cache     KeyValue
 }
 
 func (s *Notebooks) Creations() (*AnalyticsFetcher, error) {
-	nodesQuery, summaryQuery, err := makeEventLogsQueries(s.Ctx, s.DB, s.Cache, s.DateRange, s.Grouping, []string{"SearchNotebookCreated"})
+	nodesQuery, summaryQuery, err := makeEventLogsQueries(s.DateRange, s.Grouping, []string{"SearchNotebookCreated"})
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (s *Notebooks) Creations() (*AnalyticsFetcher, error) {
 }
 
 func (s *Notebooks) Views() (*AnalyticsFetcher, error) {
-	nodesQuery, summaryQuery, err := makeEventLogsQueries(s.Ctx, s.DB, s.Cache, s.DateRange, s.Grouping, []string{"SearchNotebookPageViewed"})
+	nodesQuery, summaryQuery, err := makeEventLogsQueries(s.DateRange, s.Grouping, []string{"SearchNotebookPageViewed"})
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (s *Notebooks) Views() (*AnalyticsFetcher, error) {
 }
 
 func (s *Notebooks) BlockRuns() (*AnalyticsFetcher, error) {
-	nodesQuery, summaryQuery, err := makeEventLogsQueries(s.Ctx, s.DB, s.Cache, s.DateRange, s.Grouping, []string{
+	nodesQuery, summaryQuery, err := makeEventLogsQueries(s.DateRange, s.Grouping, []string{
 		"SearchNotebookRunAllBlocks",
 		"SearchNotebookRunBlock",
 	})
